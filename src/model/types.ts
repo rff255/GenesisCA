@@ -382,13 +382,22 @@ export interface SpriteAsset {
 }
 
 /** Grid layout of a sprite sheet — how to slice one image into animation frames
- *  (row-major, left-to-right then top-to-bottom). */
+ *  (row-major, left-to-right then top-to-bottom). See `spriteSheet.ts` for the
+ *  cell geometry + the frame-selection rules every consumer derives from. */
 export interface SpriteSheetSpec {
   /** Number of columns and rows of cells in the sheet. */
   cols: number;
   rows: number;
-  /** Number of frames to take (row-major). Absent → cols*rows (all cells). */
+  /** Number of frames to take (row-major). Absent → cols*rows (all cells).
+   *  IGNORED when `frames` is present (an explicit list already says how many). */
   count?: number;
+  /** FRAME SELECTION — an ORDERED list of grid-cell indices (row-major, in the
+   *  `0 .. cols*rows-1` index space) that ARE the animation, in that order.
+   *  Real sheets hold several unrelated things, so the frames are a SELECTION
+   *  over the cells rather than "the first N of them"; the order is the user's,
+   *  and DUPLICATES are allowed (`[0,1,2,1]` is a ping-pong cycle).
+   *  ABSENT ⇒ the historical row-major `count` behaviour, byte-for-byte. */
+  frames?: number[];
   /** Pixel offset from the top-left of the image to the first cell. */
   marginX?: number;
   marginY?: number;

@@ -19,6 +19,9 @@
  * background removal for traditional sprites).
  */
 
+import { sheetFrameRects } from '../model/spriteSheet';
+import type { SpriteSheetSpec } from '../model/types';
+
 /** A decoded sprite — one `ImageBitmap` per animation frame + per-frame durations. */
 export interface DecodedSprite {
   frames: ImageBitmap[];
@@ -34,8 +37,10 @@ export interface SpriteDecodeSpec {
   id: string;
   dataUrl: string;
   mimeType: string;
+  /** IMAGE SEQUENCE — one data URL per frame. NB distinct from `sheet.frames`,
+   *  which is a list of CELL INDICES within the single sheet image. */
   frames?: string[];
-  sheet?: { cols: number; rows: number; count?: number; marginX?: number; marginY?: number; spacingX?: number; spacingY?: number };
+  sheet?: SpriteSheetSpec;
   removeBgColor?: string;
   removeBgTolerance?: number;
 }
@@ -90,22 +95,17 @@ function makeCanvas(w: number, h: number): { ctx: CanvasRenderingContext2D | Off
   return { ctx: c.getContext('2d')!, canvas: c };
 }
 
-/** Slice one sheet bitmap into `cols*rows` (or `count`) row-major frames. */
+/** Slice one sheet bitmap into the animation frames.
+ *
+ *  The GEOMETRY and the frame SELECTION both come from `spriteSheet.ts` (the one
+ *  place either is defined), so the editor's grid overlay and this decode can
+ *  never disagree about which pixels a frame is. Absent `sheet.frames` ⇒ the
+ *  historical row-major `count` list, so a pre-selection sheet slices identically.
+ *  Duplicated indices decode into separate bitmaps (a ping-pong cycle). */
 async function sliceSheet(bmp: ImageBitmap, sheet: NonNullable<SpriteDecodeSpec['sheet']>): Promise<ImageBitmap[]> {
-  const cols = Math.max(1, Math.floor(sheet.cols || 1));
-  const rows = Math.max(1, Math.floor(sheet.rows || 1));
-  const mx = sheet.marginX || 0, my = sheet.marginY || 0;
-  const sx = sheet.spacingX || 0, sy = sheet.spacingY || 0;
-  // Derive the cell size from the image minus margins/spacing.
-  const cw = Math.max(1, Math.floor((bmp.width - mx - (cols - 1) * sx) / cols));
-  const ch = Math.max(1, Math.floor((bmp.height - my - (rows - 1) * sy) / rows));
-  const total = Math.min(cols * rows, sheet.count && sheet.count > 0 ? Math.floor(sheet.count) : cols * rows);
   const out: ImageBitmap[] = [];
-  for (let n = 0; n < total; n++) {
-    const r = Math.floor(n / cols), c = n % cols;
-    const x = mx + c * (cw + sx);
-    const y = my + r * (ch + sy);
-    out.push(await createImageBitmap(bmp, x, y, cw, ch));
+  for (const r of sheetFrameRects(sheet, bmp.width, bmp.height)) {
+    out.push(await createImageBitmap(bmp, r.x, r.y, r.w, r.h));
   }
   return out;
 }
@@ -192,10 +192,15 @@ export async function decodeSprite(dataUrl: string, mimeType: string): Promise<D
   return decodeSpriteAsset({ id: '', dataUrl, mimeType });
 }
 
-/** Stable signature of the decode-relevant fields — re-decode only when it changes. */
-function decodeKey(s: SpriteDecodeSpec): string {
+/** Stable signature of the decode-relevant fields — re-decode only when it changes.
+ *  `sheet` is serialised WHOLESALE, so every gridding field (including the frame
+ *  SELECTION) is captured: editing the selection re-decodes, which is what makes
+ *  the new frame set flow to the CPU overlay, the 3D atlas and the worker's 2D
+ *  atlas through the registry's existing `onReady`. */
+export function spriteDecodeKey(s: SpriteDecodeSpec): string {
   return JSON.stringify([s.dataUrl, s.frames ?? null, s.sheet ?? null, s.removeBgColor ?? null, s.removeBgTolerance ?? null, s.mimeType]);
 }
+const decodeKey = spriteDecodeKey;
 
 /**
  * Holds decoded sprites keyed by id, re-decoding only when a sprite's decode
