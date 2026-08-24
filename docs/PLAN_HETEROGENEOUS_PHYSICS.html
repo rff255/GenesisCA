@@ -1,0 +1,651 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Heterogeneous Agent Physics — illustrated plan</title>
+<style>
+  :root{
+    --bg:#0c0d10; --panel:#15171c; --panel2:#1b1e25; --line:#2a2f3a;
+    --ink:#e6e8ee; --dim:#9aa3b2; --mute:#6d7684;
+    --accent:#e8a13a; --accent-soft:rgba(232,161,58,.14);
+    --ok:#5bc98c; --bad:#e06c6c; --info:#4cc9f0; --purple:#a98bdc;
+    --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font:14px/1.62 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+    padding:38px 22px 90px}
+  .wrap{max-width:1120px;margin:0 auto}
+  h1{font-size:1.85rem;margin:0 0 4px;letter-spacing:-.02em}
+  h2{font-size:1.16rem;margin:52px 0 14px;padding-bottom:8px;border-bottom:1px solid var(--line);
+     color:var(--accent);letter-spacing:.01em}
+  h3{font-size:.95rem;margin:26px 0 10px;color:var(--ink)}
+  p{margin:10px 0}
+  .lede{color:var(--dim);font-size:1.02rem;max-width:80ch;margin-bottom:6px}
+  code,.mono{font-family:var(--mono);font-size:.86em}
+  code{background:#000;border:1px solid var(--line);padding:1px 5px;border-radius:4px;color:#cfd6e4}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:18px 20px;margin:16px 0}
+  .card.tight{padding:14px 16px}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+  .grid3{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}
+  @media(max-width:860px){.grid2,.grid3{grid-template-columns:1fr}}
+  /* grid/flex children default to min-width:auto, which lets wide content push the
+     track — and therefore the page — wider. Pin it so the scroll boxes below win. */
+  .grid2>*,.grid3>*{min-width:0}
+  .tag{display:inline-block;font-size:.64rem;text-transform:uppercase;letter-spacing:.09em;
+    padding:2px 8px;border-radius:99px;border:1px solid var(--line);color:var(--dim);vertical-align:2px}
+  .tag.ok{color:var(--ok);border-color:rgba(91,201,140,.4);background:rgba(91,201,140,.09)}
+  .tag.bad{color:var(--bad);border-color:rgba(224,108,108,.4);background:rgba(224,108,108,.09)}
+  .tag.acc{color:var(--accent);border-color:rgba(232,161,58,.45);background:var(--accent-soft)}
+  .tag.info{color:var(--info);border-color:rgba(76,201,240,.4);background:rgba(76,201,240,.09)}
+  table{border-collapse:collapse;width:100%;font-size:.855rem;margin:12px 0}
+  /* Wide content must scroll inside its own box — the page body never scrolls sideways. */
+  @media(max-width:760px){ table{display:block;overflow-x:auto} }
+  th,td{border:1px solid var(--line);padding:8px 10px;text-align:left;vertical-align:top}
+  th{background:var(--panel2);color:var(--dim);font-weight:600;font-size:.76rem;
+     text-transform:uppercase;letter-spacing:.05em}
+  td.num{text-align:center;white-space:nowrap}
+  .yes{color:var(--ok);font-weight:600}.no{color:var(--bad);font-weight:600}
+  .warn{border-left:3px solid var(--accent);background:var(--accent-soft);padding:12px 16px;border-radius:0 8px 8px 0;margin:16px 0}
+  .danger{border-left:3px solid var(--bad);background:rgba(224,108,108,.09);padding:12px 16px;border-radius:0 8px 8px 0;margin:16px 0}
+  .good{border-left:3px solid var(--ok);background:rgba(91,201,140,.08);padding:12px 16px;border-radius:0 8px 8px 0;margin:16px 0}
+  .cap{color:var(--mute);font-size:.76rem;margin-top:8px;font-style:italic}
+  ul{margin:8px 0;padding-left:20px}li{margin:5px 0}
+  svg{display:block;max-width:100%;height:auto}
+  /* ---- UI mock ---- */
+  .mock{background:#101216;border:1px solid var(--line);border-radius:8px;padding:0;overflow:hidden;
+        font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif}
+  .mock-h{background:#181b21;border-bottom:1px solid var(--line);padding:7px 12px;
+          font-size:.66rem;text-transform:uppercase;letter-spacing:.09em;color:var(--dim)}
+  /* The mock rows and the matrix have a real minimum width — scroll them here rather
+     than letting either push the page sideways. */
+  .mock-b{padding:12px 14px;overflow-x:auto}
+  .sect{font-size:.6rem;text-transform:uppercase;letter-spacing:.1em;color:#8a93a3;margin:12px 0 7px}
+  .sect:first-child{margin-top:0}
+  .row{display:flex;align-items:center;gap:8px;margin:6px 0;font-size:.79rem}
+  .row .lbl{color:var(--dim);min-width:132px;flex:0 0 132px}
+  .sel{background:#0a0b0e;border:1px solid #333a47;border-radius:4px;padding:3px 8px;color:var(--ink);
+       font-size:.76rem;min-width:104px;display:inline-flex;align-items:center;justify-content:space-between;gap:8px}
+  .sel::after{content:'▾';color:#66707f;font-size:.62rem}
+  .sel.acc{border-color:rgba(232,161,58,.5);color:var(--accent)}
+  .btn{background:#232833;border:1px solid #3a4250;border-radius:4px;padding:3px 9px;font-size:.72rem;color:#c9d1de}
+  .btn.acc{background:var(--accent-soft);border-color:rgba(232,161,58,.5);color:var(--accent)}
+  .hint{color:var(--mute);font-size:.68rem;margin:2px 0 0 140px}
+  .newrow{background:rgba(232,161,58,.055);margin-left:-14px;margin-right:-14px;padding:4px 14px;
+          border-left:2px solid var(--accent)}
+  .dimrow{opacity:.42}
+  /* ---- matrix ---- */
+  .mx{border-collapse:collapse;font-family:var(--mono);font-size:.7rem;margin:0}
+  .mx td,.mx th{border:1px solid #222731;padding:0;text-align:center;width:42px;height:26px;
+                font-weight:400;color:#dfe4ee}
+  .mx th{background:transparent;border:none;color:var(--dim);font-size:.66rem;
+         text-transform:none;letter-spacing:0;padding:2px 5px;width:auto}
+  .legend{display:flex;gap:14px;flex-wrap:wrap;font-size:.72rem;color:var(--dim);margin-top:10px;align-items:center}
+  .sw{width:13px;height:13px;border-radius:3px;display:inline-block;vertical-align:-2px;margin-right:5px}
+  .phase{display:flex;gap:14px;align-items:flex-start;padding:14px 0;border-bottom:1px solid var(--line)}
+  .phase:last-child{border-bottom:none}
+  .pid{flex:0 0 46px;font-family:var(--mono);font-size:1.02rem;color:var(--accent);font-weight:700;padding-top:1px}
+  .pbody{flex:1}
+  .pttl{font-weight:600;margin-bottom:3px}
+  kbd{font-family:var(--mono);font-size:.76em;background:#0a0b0e;border:1px solid #333a47;
+      border-bottom-width:2px;border-radius:3px;padding:1px 5px;color:#cfd6e4}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>Heterogeneous Agent Physics</h1>
+<p class="lede">Per-agent participation and per-pair interaction classes for the agent engine —
+illustrated plan. Companion to
+<code>docs/IMPACT_MAP_HETEROGENEOUS_PHYSICS.md</code>. <strong>Design only; nothing is implemented.</strong></p>
+<p><span class="tag acc">design</span> <span class="tag">no code</span> <span class="tag info">3 user asks</span></p>
+
+
+<!-- ============================================================ -->
+<h2>1 · Where we are today</h2>
+
+<p>Every engine physics knob is a <strong>single scalar on the model</strong>. The force pass reads only
+<code>x</code>, <code>y</code>, <code>z</code> and <code>radius</code> for a neighbour — there is no per-agent
+hook of any kind to consult.</p>
+
+<div class="card">
+<svg viewBox="0 0 1040 250" role="img" aria-label="Today's fused pair loop: model-global scalars flow into one force law applied identically to every pair">
+  <defs>
+    <marker id="a1" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto">
+      <path d="M0,0 L9,4.5 L0,9 z" fill="#6d7684"/></marker>
+    <marker id="a2" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto">
+      <path d="M0,0 L9,4.5 L0,9 z" fill="#e8a13a"/></marker>
+  </defs>
+  <!-- config -->
+  <rect x="14" y="30" width="212" height="186" rx="9" fill="#15171c" stroke="#2a2f3a"/>
+  <text x="30" y="54" fill="#9aa3b2" font-size="11" font-family="ui-monospace,monospace" letter-spacing="1">CenterBasedConfig</text>
+  <text x="30" y="58" fill="#2a2f3a" font-size="11">&#8203;</text>
+  <line x1="30" y1="62" x2="210" y2="62" stroke="#2a2f3a"/>
+  <g font-size="11.5" font-family="ui-monospace,monospace" fill="#e6e8ee">
+    <text x="30" y="82">repulsionStiffness</text><text x="196" y="82" fill="#e8a13a" text-anchor="end">2.0</text>
+    <text x="30" y="102">adhesionStiffness</text><text x="196" y="102" fill="#e8a13a" text-anchor="end">0.0</text>
+    <text x="30" y="122">interactionRange</text><text x="196" y="122" fill="#e8a13a" text-anchor="end">1.5</text>
+    <text x="30" y="142">chargeStrength</text><text x="196" y="142" fill="#e8a13a" text-anchor="end">-3</text>
+    <text x="30" y="162">collision</text><text x="196" y="162" fill="#e8a13a" text-anchor="end">'soft'</text>
+    <text x="30" y="182">motion</text><text x="196" y="182" fill="#e8a13a" text-anchor="end">'force'</text>
+    <text x="30" y="202">growthRate</text><text x="196" y="202" fill="#e8a13a" text-anchor="end">0.02</text>
+  </g>
+  <text x="120" y="236" fill="#6d7684" font-size="10.5" text-anchor="middle">ONE value each · whole model</text>
+
+  <path d="M232,120 L296,120" stroke="#e8a13a" stroke-width="1.6" fill="none" marker-end="url(#a2)"/>
+
+  <!-- loop -->
+  <rect x="302" y="30" width="330" height="186" rx="9" fill="#1b1e25" stroke="#2a2f3a"/>
+  <text x="318" y="54" fill="#4cc9f0" font-size="11.5" font-family="ui-monospace,monospace">the fused pair loop</text>
+  <line x1="318" y1="62" x2="616" y2="62" stroke="#2a2f3a"/>
+  <g font-size="11" font-family="ui-monospace,monospace" fill="#c3cad8">
+    <text x="318" y="84">for i in agents:</text>
+    <text x="332" y="102">for j in stencil(i):</text>
+    <text x="346" y="120" fill="#6d7684">dx,dy,dz   ← x[j] y[j] z[j]</text>
+    <text x="346" y="138" fill="#6d7684">sij        ← r[i] + r[j]</text>
+    <text x="346" y="160" fill="#e6e8ee">F = μ · (d − sij)</text>
+    <text x="346" y="182" fill="#e06c6c">↑ μ is the SAME for every pair</text>
+  </g>
+  <text x="467" y="207" fill="#6d7684" font-size="10.5" text-anchor="middle">reads only x/y/z + radius for j</text>
+
+  <path d="M638,120 L702,120" stroke="#6d7684" stroke-width="1.6" fill="none" marker-end="url(#a1)"/>
+
+  <!-- agents -->
+  <rect x="708" y="30" width="318" height="186" rx="9" fill="#15171c" stroke="#2a2f3a"/>
+  <text x="724" y="54" fill="#9aa3b2" font-size="11" font-family="ui-monospace,monospace">every agent, identically</text>
+  <g>
+    <circle cx="778" cy="120" r="21" fill="#4cc9f0" opacity=".85"/>
+    <circle cx="848" cy="102" r="21" fill="#e8a13a" opacity=".85"/>
+    <circle cx="852" cy="168" r="21" fill="#a98bdc" opacity=".85"/>
+    <circle cx="928" cy="130" r="21" fill="#5bc98c" opacity=".85"/>
+    <line x1="799" y1="114" x2="827" y2="106" stroke="#e06c6c" stroke-width="2.4"/>
+    <line x1="795" y1="137" x2="833" y2="158" stroke="#e06c6c" stroke-width="2.4"/>
+    <line x1="869" y1="112" x2="907" y2="124" stroke="#e06c6c" stroke-width="2.4"/>
+    <line x1="871" y1="160" x2="909" y2="141" stroke="#e06c6c" stroke-width="2.4"/>
+  </g>
+  <text x="867" y="207" fill="#e06c6c" font-size="10.5" text-anchor="middle">same μ, same range, same rules — no exceptions</text>
+</svg>
+<p class="cap">Verified: <code>sim.worker.ts</code>:2647–2673 / 2844–2870 · <code>agentWasm/compile.ts</code>:4928–5017 ·
+<code>agentWebgpu/forcePass.ts</code>:259–286.</p>
+</div>
+
+<h3>Two things that already ARE heterogeneous</h3>
+<div class="grid2">
+  <div class="card tight"><span class="tag ok">works today</span>
+    <p style="margin-top:9px"><strong>Bond springs are per-pair.</strong> <code>bondRestLength</code> and
+    <code>bondStiffness</code> are per-<em>slot</em> arrays, and Form Bond exposes both as wired inputs
+    (<code>0 ⇒ default</code>). So <code>Table Lookup[myClass][theirClass] → Form Bond.stiffness</code>
+    already works — but only <em>at formation time</em>.</p></div>
+  <div class="card tight"><span class="tag ok">works today</span>
+    <p style="margin-top:9px"><strong>Contact distance is per-pair</strong>, because
+    <code>sij = rᵢ + rⱼ</code>. Bigger agents push apart from further away. <span class="no">Not</span> an
+    opt-out though: at <code>rᵢ = 0</code> you still get pushed by <code>rⱼ</code>.</p></div>
+</div>
+
+<div class="danger">
+<strong>A dormant design, found in the tree.</strong>
+<code>CenterBasedConfig.bondSpringMatrixId</code> already exists — documented verbatim as
+<em>“<code>lookupTable</code> model-attribute id giving per-type-pair bond stiffness λ + rest length L”</em>,
+with its neighbours calling themselves <em>“used when no spring matrix is set.”</em>
+A repo-wide grep finds <strong>exactly one hit: the declaration itself.</strong>
+The per-pair spring matrix was designed and never implemented. Ask #1 revives it.
+</div>
+
+
+<!-- ============================================================ -->
+<h2>2 · The answer to ask #2</h2>
+
+<p><strong>Yes — you must turn the engine force off model-wide and rebuild it in nodes.</strong>
+Particle Life is exactly that model. Here is what it costs.</p>
+
+<div class="card">
+<svg viewBox="0 0 1040 300" role="img" aria-label="Particle Life re-authors the per-pair force as thirteen nodes evaluated per neighbour">
+  <defs>
+    <marker id="b1" markerWidth="8" markerHeight="8" refX="7.4" refY="4" orient="auto">
+      <path d="M0,0 L8,4 L0,8 z" fill="#4a5261"/></marker>
+  </defs>
+  <text x="20" y="24" fill="#9aa3b2" font-size="11.5" font-family="ui-monospace,monospace">Particle Life · behaviour graph · the per-pair force</text>
+
+  <rect x="20" y="40" width="1000" height="1" fill="#2a2f3a"/>
+
+  <!-- engine off -->
+  <rect x="20" y="56" width="228" height="132" rx="8" fill="#15171c" stroke="#e06c6c" stroke-opacity=".38"/>
+  <text x="34" y="78" fill="#e06c6c" font-size="10.5" letter-spacing="1">ENGINE PHYSICS — OFF</text>
+  <g font-size="11" font-family="ui-monospace,monospace" fill="#8a93a3">
+    <text x="34" y="100">collision: 'off'</text>
+    <text x="34" y="118">bonds: 'off'</text>
+    <text x="34" y="136">repulsionStiffness: 0</text>
+    <text x="34" y="154">useBondingPhysics: false</text>
+    <text x="34" y="172">maxBonds: 0</text>
+  </g>
+
+  <!-- chain -->
+  <g font-size="9.6" font-family="ui-monospace,monospace">
+    <g>
+      <rect x="272" y="56" width="112" height="30" rx="5" fill="#1b1e25" stroke="#2a2f3a"/>
+      <text x="328" y="75" fill="#c3cad8" text-anchor="middle">Get Nearby Agents</text>
+      <rect x="272" y="96" width="112" height="30" rx="5" fill="#1b1e25" stroke="#2a2f3a"/>
+      <text x="328" y="115" fill="#c3cad8" text-anchor="middle">For Each In Array</text>
+    </g>
+    <path d="M384,111 L414,111" stroke="#4a5261" stroke-width="1.4" marker-end="url(#b1)"/>
+    <rect x="420" y="52" width="586" height="152" rx="8" fill="#101216" stroke="#e8a13a" stroke-opacity=".35"/>
+    <text x="434" y="72" fill="#e8a13a" font-size="10.5" letter-spacing="1">13 NODES · RE-EVALUATED PER NEIGHBOUR</text>
+    <g fill="#c3cad8">
+      <rect x="434" y="84" width="104" height="26" rx="4" fill="#1b1e25" stroke="#2a2f3a"/><text x="486" y="101" text-anchor="middle">Get Agent Offset</text>
+      <rect x="546" y="84" width="128" height="26" rx="4" fill="#1b1e25" stroke="#2a2f3a"/><text x="610" y="101" text-anchor="middle">Get Agent Attribute</text>
+      <rect x="682" y="84" width="104" height="26" rx="4" fill="#232833" stroke="#a98bdc" stroke-opacity=".5"/><text x="734" y="101" text-anchor="middle" fill="#a98bdc">Table ×3</text>
+      <rect x="794" y="84" width="96" height="26" rx="4" fill="#1b1e25" stroke="#2a2f3a"/><text x="842" y="101" text-anchor="middle">Compare ×2</text>
+      <rect x="898" y="84" width="96" height="26" rx="4" fill="#1b1e25" stroke="#2a2f3a"/><text x="946" y="101" text-anchor="middle">Expr ×2</text>
+      <rect x="434" y="120" width="112" height="26" rx="4" fill="#1b1e25" stroke="#2a2f3a"/><text x="490" y="137" text-anchor="middle">Value Switch ×2</text>
+      <rect x="554" y="120" width="128" height="26" rx="4" fill="#1b1e25" stroke="#2a2f3a"/><text x="618" y="137" text-anchor="middle">Expr project ×2</text>
+      <rect x="690" y="120" width="96" height="26" rx="4" fill="#232833" stroke="#5bc98c" stroke-opacity=".5"/><text x="738" y="137" text-anchor="middle" fill="#5bc98c">Apply Force</text>
+    </g>
+    <text x="434" y="170" fill="#6d7684" font-size="10.2">17 nodes / 35 edges for the force block — ≈46% of the model’s entire node budget</text>
+    <text x="434" y="188" fill="#e06c6c" font-size="10.2">…and the engine still walks the same neighbours again for its own bookkeeping</text>
+  </g>
+
+  <!-- cost -->
+  <rect x="20" y="216" width="1000" height="64" rx="8" fill="#15171c" stroke="#2a2f3a"/>
+  <text x="36" y="238" fill="#9aa3b2" font-size="11">Measured posture</text>
+  <g font-size="11" font-family="ui-monospace,monospace" fill="#c3cad8">
+    <text x="36" y="262">per-pair physics = <tspan fill="#e8a13a">&gt;99%</tspan> of a generation   ·   cost ∝ N × density × radius²   ·   50k @600² → <tspan fill="#e8a13a">~1123 ms/gen</tspan> (JS)</text>
+  </g>
+  <text x="1004" y="262" fill="#6d7684" font-size="10" text-anchor="end">PERF_REVIEW_AGENT_ENGINE.md</text>
+</svg>
+</div>
+
+<div class="warn">
+<strong>The two corrections to “you’d have to do it manually”:</strong>
+(1) <strong>bond springs are the exception</strong> — already per-pair;
+(2) <strong>it is not free</strong> — 13 nodes per neighbour per agent per step, a duplicated neighbour
+walk, and the body runs <em>twice per unordered pair</em> because a graph loop has no symmetry.
+</div>
+
+
+<!-- ============================================================ -->
+<h2>3 · The proposal — one hook, two modes</h2>
+
+<div class="good">
+<strong>The spine.</strong> Every engine pair-force coefficient becomes
+<code>scalar × m<sub>ij</sub></code>, where <code>m<sub>ij</sub></code> is resolved from agent i’s and
+agent j’s own values. <strong>Absent modulator ⇒ <code>m = 1</code> ⇒ byte-identical.</strong>
+</div>
+
+<div class="card">
+<svg viewBox="0 0 1040 292" role="img" aria-label="The pair modulator: two resolution modes feeding one multiply in the pair loop">
+  <defs>
+    <marker id="c1" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto">
+      <path d="M0,0 L9,4.5 L0,9 z" fill="#e8a13a"/></marker>
+  </defs>
+
+  <!-- mode A -->
+  <rect x="16" y="24" width="330" height="112" rx="9" fill="#15171c" stroke="#5bc98c" stroke-opacity=".38"/>
+  <text x="32" y="46" fill="#5bc98c" font-size="11" letter-spacing="1">MODE 1 · agentScale</text>
+  <g font-size="11" font-family="ui-monospace,monospace" fill="#c3cad8">
+    <text x="32" y="70">value<tspan baseline-shift="sub" font-size="8">i</tspan> = attr[i]   value<tspan baseline-shift="sub" font-size="8">j</tspan> = attr[j]</text>
+    <text x="32" y="92" fill="#e6e8ee">m = value<tspan baseline-shift="sub" font-size="8">i</tspan> × value<tspan baseline-shift="sub" font-size="8">j</tspan></text>
+    <text x="32" y="116" fill="#6d7684">product (default) · min · mean</text>
+  </g>
+
+  <!-- mode B -->
+  <rect x="16" y="152" width="330" height="112" rx="9" fill="#15171c" stroke="#a98bdc" stroke-opacity=".38"/>
+  <text x="32" y="174" fill="#a98bdc" font-size="11" letter-spacing="1">MODE 2 · classMatrix</text>
+  <g font-size="11" font-family="ui-monospace,monospace" fill="#c3cad8">
+    <text x="32" y="198">c<tspan baseline-shift="sub" font-size="8">i</tspan> = class[i]   c<tspan baseline-shift="sub" font-size="8">j</tspan> = class[j]</text>
+    <text x="32" y="220" fill="#e6e8ee">m = M[c<tspan baseline-shift="sub" font-size="8">i</tspan>][c<tspan baseline-shift="sub" font-size="8">j</tspan>]</text>
+    <text x="32" y="244" fill="#6d7684">an ordinary K×K lookupTable</text>
+  </g>
+
+  <path d="M352,80  C392,80 392,140 424,144" stroke="#e8a13a" stroke-width="1.6" fill="none" marker-end="url(#c1)"/>
+  <path d="M352,208 C392,208 392,152 424,148" stroke="#e8a13a" stroke-width="1.6" fill="none" marker-end="url(#c1)"/>
+
+  <!-- the loop -->
+  <rect x="432" y="24" width="386" height="240" rx="9" fill="#1b1e25" stroke="#e8a13a" stroke-opacity=".45"/>
+  <text x="450" y="48" fill="#e8a13a" font-size="11.5" font-family="ui-monospace,monospace">the SAME fused pair loop</text>
+  <line x1="450" y1="56" x2="800" y2="56" stroke="#2a2f3a"/>
+  <g font-size="11" font-family="ui-monospace,monospace" fill="#c3cad8">
+    <text x="450" y="80">for i in agents:</text>
+    <text x="464" y="98" fill="#5bc98c">mi = attr[i]        ← hoisted, once per agent</text>
+    <text x="464" y="120">for j in stencil(i):</text>
+    <text x="478" y="138" fill="#6d7684">dx,dy,dz  ← x[j] y[j] z[j]</text>
+    <text x="478" y="156" fill="#6d7684">sij       ← r[i] + r[j]</text>
+    <text x="478" y="176" fill="#5bc98c">mj        ← attr[j]   ← the ONE new read</text>
+    <text x="478" y="198" fill="#e6e8ee">F = μ · <tspan fill="#e8a13a">m(mi,mj)</tspan> · (d − sij)</text>
+    <text x="478" y="220" fill="#e8a13a">↑ the ONE new multiply</text>
+  </g>
+  <text x="625" y="250" fill="#6d7684" font-size="10.4" text-anchor="middle">m = 1 ⇒ emitted code is verbatim today’s</text>
+
+  <!-- outcome -->
+  <rect x="828" y="24" width="196" height="240" rx="9" fill="#15171c" stroke="#2a2f3a"/>
+  <text x="844" y="46" fill="#9aa3b2" font-size="11">heterogeneous</text>
+  <g>
+    <circle cx="884" cy="98" r="19" fill="#4cc9f0" opacity=".85"/>
+    <circle cx="962" cy="86" r="19" fill="#4cc9f0" opacity=".85"/>
+    <circle cx="890" cy="176" r="19" fill="#e8a13a" opacity=".85"/>
+    <circle cx="968" cy="188" r="19" fill="#e8a13a" opacity=".3"/>
+    <circle cx="968" cy="188" r="19" fill="none" stroke="#e8a13a" stroke-dasharray="3 3" opacity=".8"/>
+    <line x1="903" y1="94" x2="943" y2="89" stroke="#e06c6c" stroke-width="3"/>
+    <line x1="900" y1="119" x2="884" y2="157" stroke="#5bc98c" stroke-width="1.4" stroke-dasharray="3 3"/>
+    <line x1="909" y1="177" x2="949" y2="185" stroke="#4a5261" stroke-width="1.4" stroke-dasharray="2 4"/>
+  </g>
+  <g font-size="9.6" fill="#6d7684">
+    <text x="844" y="222">— strong repel (same class)</text>
+    <text x="844" y="238" fill="#5bc98c">— weak (cross class)</text>
+    <text x="844" y="254">— ghost (scale 0): passes through</text>
+  </g>
+</svg>
+</div>
+
+<div class="grid3">
+  <div class="card tight"><span class="tag acc">the collapse</span>
+    <p style="margin-top:9px"><code>agentScale</code> over a <strong>bool</strong> attribute with
+    <code>product</code> <em>is</em> the participation mask: <code>1×1=1</code>, anything else
+    <code>0</code>. So “mask” and “strength” are <strong>one mechanism</strong> — and one phase closes
+    ask #2.</p></div>
+  <div class="card tight"><span class="tag acc">no new editor</span>
+    <p style="margin-top:9px">A class matrix is an ordinary <code>lookupTable</code> model attribute with
+    both axes bound to a tag agent attribute — <em>exactly what Particle Life already declares.</em> It
+    inherits the shipped matrix editor, Randomize and the rename cascades.</p></div>
+  <div class="card tight"><span class="tag acc">multiplicative</span>
+    <p style="margin-top:9px">Not replacing. <code>1.0</code> is the byte-identical no-op, the global
+    slider stays meaningful, and a matrix entry in <code>[-1,1]</code> flips repulsion into attraction
+    — Particle Life semantics for free.</p></div>
+</div>
+
+
+<!-- ============================================================ -->
+<h2>4 · Proposed config surface</h2>
+
+<div class="grid2">
+<div>
+  <div class="mock">
+    <div class="mock-h">Properties › Bond-Graph Agents</div>
+    <div class="mock-b">
+      <div class="sect">Forces</div>
+      <div class="row dimrow"><span class="lbl">Collision</span><span class="sel">Soft-sphere</span></div>
+      <div class="row dimrow"><span class="lbl">Repulsion μ_R</span><span class="sel">2.0</span></div>
+      <div class="row dimrow"><span class="lbl">Charge</span><span class="sel">On</span></div>
+
+      <div class="sect" style="color:var(--accent)">Per-pair physics <span style="font-size:.86em;opacity:.7">— new</span></div>
+
+      <div class="row newrow"><span class="lbl">Interaction class</span><span class="sel acc">species</span></div>
+      <div class="hint">a tag agent attribute — indexes every class matrix</div>
+
+      <div class="row newrow"><span class="lbl">Repulsion μ_R</span><span class="sel acc">Class matrix</span>
+        <span class="sel">repulsionMx</span><span class="btn acc">Edit matrix</span></div>
+
+      <div class="row newrow"><span class="lbl">Adhesion μ_A</span><span class="sel">Uniform</span></div>
+
+      <div class="row newrow"><span class="lbl">Charge k</span><span class="sel acc">Agent scale</span>
+        <span class="sel">charge</span><span class="sel">×</span></div>
+
+      <div class="row newrow"><span class="lbl">Positional</span><span class="sel acc">Agent scale</span>
+        <span class="sel">solid</span><span class="sel">×</span></div>
+      <div class="hint">a bool attribute here = “does this agent collide at all?”</div>
+
+      <div class="row newrow"><span class="lbl">Bond springs λ/L</span><span class="sel acc">Class matrix</span>
+        <span class="sel">springMx</span><span class="btn acc">Edit matrix</span></div>
+      <div class="hint">resolved at Form Bond into the per-bond slots</div>
+    </div>
+  </div>
+  <p class="cap">Each row renders only when its force is enabled (the hide-when-structurally-impossible
+  doctrine). “Uniform” is today’s behaviour and the default everywhere.</p>
+</div>
+
+<div>
+  <div class="mock">
+    <div class="mock-h">Edit matrix — repulsionMx · species × species</div>
+    <div class="mock-b">
+      <table class="mx">
+        <tr><th></th><th>red</th><th>grn</th><th>blu</th><th>cyn</th><th>mag</th><th>ylw</th></tr>
+        <tr><th>red</th>
+          <td style="background:#7a2b2b">1.0</td><td style="background:#4a2430">.35</td>
+          <td style="background:#1f3a4e">-.4</td><td style="background:#25304a">-.2</td>
+          <td style="background:#5c2a2c">.62</td><td style="background:#14171d">0</td></tr>
+        <tr><th>grn</th>
+          <td style="background:#1c3d52">-.5</td><td style="background:#7a2b2b">1.0</td>
+          <td style="background:#5c2a2c">.6</td><td style="background:#14171d">0</td>
+          <td style="background:#2b3446">-.15</td><td style="background:#42262f">.3</td></tr>
+        <tr><th>blu</th>
+          <td style="background:#5c2a2c">.6</td><td style="background:#1a3e56">-.55</td>
+          <td style="background:#7a2b2b">1.0</td><td style="background:#42262f">.3</td>
+          <td style="background:#14171d">0</td><td style="background:#20384a">-.35</td></tr>
+        <tr><th>cyn</th>
+          <td style="background:#14171d">0</td><td style="background:#42262f">.28</td>
+          <td style="background:#22374a">-.3</td><td style="background:#7a2b2b">1.0</td>
+          <td style="background:#5c2a2c">.58</td><td style="background:#1e3b50">-.45</td></tr>
+        <tr><th>mag</th>
+          <td style="background:#2b3446">-.18</td><td style="background:#14171d">0</td>
+          <td style="background:#4a2430">.4</td><td style="background:#1c3d52">-.5</td>
+          <td style="background:#7a2b2b">1.0</td><td style="background:#5c2a2c">.55</td></tr>
+        <tr><th>ylw</th>
+          <td style="background:#4a2430">.38</td><td style="background:#20384a">-.36</td>
+          <td style="background:#14171d">0</td><td style="background:#5c2a2c">.6</td>
+          <td style="background:#25304a">-.22</td><td style="background:#7a2b2b">1.0</td></tr>
+      </table>
+      <div class="legend">
+        <span><span class="sw" style="background:#1a3e56"></span>attract</span>
+        <span><span class="sw" style="background:#14171d"></span>none</span>
+        <span><span class="sw" style="background:#7a2b2b"></span>repel</span>
+        <span style="margin-left:auto"><span class="btn">Randomize</span> <span class="btn">Symmetrize</span></span>
+      </div>
+    </div>
+  </div>
+  <p class="cap">Not a new widget — this is the shipped <code>LookupTableEditor</code> matrix-play view
+  (drag-to-adjust, multi-select, fill patterns, seeded Randomize) pointed at a table the
+  <em>engine</em> now reads. Row = “force ON this class”, column = “FROM that class”; asymmetric on
+  purpose.</p>
+</div>
+</div>
+
+
+<!-- ============================================================ -->
+<h2>5 · Cost across all three targets</h2>
+
+<table>
+<tr><th style="width:20%">&nbsp;</th><th>(a) mask</th><th>(b) class matrix</th><th>(c) agent scale</th><th>(d) doctrine</th></tr>
+<tr><td><strong>New per-agent SoA field</strong></td><td class="num">none</td><td class="num">none</td><td class="num">none</td><td class="num">—</td></tr>
+<tr><td><strong>New WASM ABI params</strong></td><td class="num yes">0</td><td class="num yes">0</td><td class="num yes">0</td><td class="num">—</td></tr>
+<tr><td><strong>New WGSL bindings</strong></td><td class="num yes">0</td><td class="num bad">1 <span style="color:var(--mute);font-weight:400">(× 2 BGLs)</span></td><td class="num yes">0</td><td class="num">—</td></tr>
+<tr><td><strong><code>ForceControl</code> slots</strong> <span style="color:var(--mute)">(3 free)</span></td><td class="num">1</td><td class="num">1–2</td><td class="num">1</td><td class="num">—</td></tr>
+<tr><td><strong>Added work per pair</strong></td><td class="num">1 load + 1 test</td><td class="num">1 load + 2 int + 1 table load + 1 mul</td><td class="num">1 load + 1 mul</td><td class="num">0</td></tr>
+<tr><td><strong>Est. pair-body cost</strong></td><td class="num" style="color:var(--ok)">+5–10 %</td><td class="num" style="color:var(--accent)">+15–25 %</td><td class="num" style="color:var(--ok)">+5–10 %</td><td class="num">0</td></tr>
+<tr><td><strong>Cost when unused</strong></td><td class="num yes">zero</td><td class="num yes">zero</td><td class="num yes">zero</td><td class="num yes">zero</td></tr>
+<tr><td><strong>GPU residency</strong></td><td class="num yes">unaffected</td><td class="num yes">unaffected</td><td class="num yes">unaffected</td><td class="num">—</td></tr>
+<tr><td><strong>Answers ask #1</strong></td><td class="num">partly</td><td class="num yes">yes</td><td class="num">partly</td><td class="num no">no</td></tr>
+<tr><td><strong>Answers ask #2</strong></td><td class="num yes">yes</td><td class="num yes">yes</td><td class="num yes">yes</td><td class="num no">no</td></tr>
+</table>
+
+<div class="warn">
+<strong>These are ESTIMATES</strong>, derived from the op-count of the existing ~20-op pair body against
+the documented “&gt;99 % of a generation” measurement. Nothing new was measured. The gate for every
+phase is a measured A/B with <code>scripts/bench-agent-engine.mjs</code> — plus
+<strong>zero regression with the modulator off</strong>.
+</div>
+
+<h3>Why the WGSL cost is 0 for modes 1 &amp; 3 but 1 binding for mode 2</h3>
+<div class="card">
+<svg viewBox="0 0 1040 210" role="img" aria-label="Agent attribute runs live inside agentF32 which the force pass already binds; lookup tables live in auxF32 which only the behaviour shader binds">
+  <rect x="16" y="30" width="300" height="160" rx="9" fill="#15171c" stroke="#2a2f3a"/>
+  <text x="32" y="52" fill="#9aa3b2" font-size="11" font-family="ui-monospace,monospace">agentF32 — @binding(0)</text>
+  <g font-size="10.6" font-family="ui-monospace,monospace">
+    <rect x="32" y="64" width="268" height="20" rx="3" fill="#1b1e25" stroke="#2a2f3a"/><text x="42" y="78" fill="#8a93a3">x · y · z · radius · vx · vy …</text>
+    <rect x="32" y="90" width="268" height="20" rx="3" fill="#1b1e25" stroke="#2a2f3a"/><text x="42" y="104" fill="#8a93a3">forceX · forceY · xNext · age …</text>
+    <rect x="32" y="116" width="268" height="22" rx="3" fill="#232833" stroke="#5bc98c" stroke-opacity=".55"/><text x="42" y="131" fill="#5bc98c">agent attribute runs ← the class/scale</text>
+  </g>
+  <text x="32" y="162" fill="#5bc98c" font-size="10.6">already bound to the force pass</text>
+  <text x="32" y="180" fill="#5bc98c" font-size="10.6">⇒ 0 new bindings</text>
+
+  <rect x="356" y="30" width="300" height="160" rx="9" fill="#15171c" stroke="#2a2f3a"/>
+  <text x="372" y="52" fill="#9aa3b2" font-size="11" font-family="ui-monospace,monospace">auxF32 — @binding(9)</text>
+  <g font-size="10.6" font-family="ui-monospace,monospace">
+    <rect x="372" y="64" width="268" height="20" rx="3" fill="#1b1e25" stroke="#2a2f3a"/><text x="382" y="78" fill="#8a93a3">model attribute slots</text>
+    <rect x="372" y="90" width="268" height="22" rx="3" fill="#232833" stroke="#a98bdc" stroke-opacity=".55"/><text x="382" y="105" fill="#a98bdc">lookup tables ← the class matrix</text>
+  </g>
+  <text x="372" y="140" fill="#e06c6c" font-size="10.6">bound to the BEHAVIOUR shader only</text>
+  <text x="372" y="158" fill="#e06c6c" font-size="10.6">⇒ needs @binding(9) on the force pass…</text>
+  <text x="372" y="176" fill="#e8a13a" font-size="10.6">…in BOTH force BGLs (per-gen + B1 mirror)</text>
+
+  <rect x="696" y="30" width="328" height="160" rx="9" fill="#1b1e25" stroke="#e8a13a" stroke-opacity=".38"/>
+  <text x="712" y="52" fill="#e8a13a" font-size="11" letter-spacing="1">WASM &amp; JS — both free</text>
+  <g font-size="10.6" font-family="ui-monospace,monospace" fill="#c3cad8">
+    <text x="712" y="76">WASM: one linear memory. emitForcePass</text>
+    <text x="712" y="93">already receives the whole layout, so</text>
+    <text x="712" y="110">attrOffset[id] AND lookupTableOffset[id]</text>
+    <text x="712" y="127">are addressable — no signature change.</text>
+    <text x="712" y="152">JS: the loop runs in the worker with the</text>
+    <text x="712" y="169">store and the tables already in scope.</text>
+  </g>
+</svg>
+</div>
+
+
+<!-- ============================================================ -->
+<h2>6 · ⚠ The ordering hazard</h2>
+
+<div class="danger">
+The code already states the invariant this feature would break — verbatim, in
+<code>agentWebgpuRuntime.ts</code>:1636:
+<br><em>“the force pass touches only geometry/velocity, <strong>never a user attribute</strong>, so its
+position here is immaterial.”</em>
+</div>
+
+<div class="card">
+<svg viewBox="0 0 1040 244" role="img" aria-label="On JS and WASM the attribute swap precedes the force pass; on WebGPU the commit follows it, so a class attribute written this generation would be read on CPU but not GPU">
+  <defs>
+    <marker id="d1" markerWidth="8" markerHeight="8" refX="7.4" refY="4" orient="auto">
+      <path d="M0,0 L8,4 L0,8 z" fill="#4a5261"/></marker>
+  </defs>
+
+  <text x="20" y="26" fill="#5bc98c" font-size="11.5" letter-spacing="1">JS / WASM — correct</text>
+  <g font-size="10.4" font-family="ui-monospace,monospace">
+    <rect x="20" y="38" width="150" height="34" rx="5" fill="#1b1e25" stroke="#2a2f3a"/><text x="95" y="59" fill="#c3cad8" text-anchor="middle">behaviour</text>
+    <path d="M172,55 L196,55" stroke="#4a5261" stroke-width="1.4" marker-end="url(#d1)"/>
+    <rect x="202" y="38" width="176" height="34" rx="5" fill="#232833" stroke="#5bc98c" stroke-opacity=".55"/><text x="290" y="59" fill="#5bc98c" text-anchor="middle">swapAgentAttrs :2542</text>
+    <path d="M380,55 L404,55" stroke="#4a5261" stroke-width="1.4" marker-end="url(#d1)"/>
+    <rect x="410" y="38" width="176" height="34" rx="5" fill="#1b1e25" stroke="#e8a13a" stroke-opacity=".5"/><text x="498" y="59" fill="#e8a13a" text-anchor="middle">force loop :2558</text>
+  </g>
+  <text x="612" y="60" fill="#5bc98c" font-size="10.8">reads the value written THIS generation ✓</text>
+
+  <line x1="20" y1="98" x2="1020" y2="98" stroke="#2a2f3a"/>
+
+  <text x="20" y="126" fill="#e06c6c" font-size="11.5" letter-spacing="1">WebGPU — one generation stale</text>
+  <g font-size="10.4" font-family="ui-monospace,monospace">
+    <rect x="20" y="138" width="150" height="34" rx="5" fill="#1b1e25" stroke="#2a2f3a"/><text x="95" y="159" fill="#c3cad8" text-anchor="middle">behaviour</text>
+    <path d="M172,155 L196,155" stroke="#4a5261" stroke-width="1.4" marker-end="url(#d1)"/>
+    <rect x="202" y="138" width="176" height="34" rx="5" fill="#1b1e25" stroke="#e8a13a" stroke-opacity=".5"/><text x="290" y="159" fill="#e8a13a" text-anchor="middle">force pass</text>
+    <path d="M380,155 L404,155" stroke="#4a5261" stroke-width="1.4" marker-end="url(#d1)"/>
+    <rect x="410" y="138" width="176" height="34" rx="5" fill="#232833" stroke="#e06c6c" stroke-opacity=".6"/><text x="498" y="159" fill="#e06c6c" text-anchor="middle">attrCommit :1642</text>
+  </g>
+  <text x="612" y="160" fill="#e06c6c" font-size="10.8">reads the PREVIOUS generation ✗ — silent divergence</text>
+
+  <rect x="20" y="192" width="1000" height="42" rx="7" fill="rgba(91,201,140,.08)" stroke="#5bc98c" stroke-opacity=".4"/>
+  <text x="36" y="218" fill="#5bc98c" font-size="11.2">FIX — move the commit BEFORE the force pass. Free today: the two passes touch disjoint data (attributes vs positions/velocity), so reordering is invisible until this feature lands.</text>
+</svg>
+</div>
+
+<p>Two further correctness items ride along:
+<strong>the Δt clamp must take the table maximum</strong> (<code>effectiveAgentDt</code> reads the scalar
+stiffnesses only — which is already a latent too-loose <code>dt</code> for any bond formed above the
+config λ), and <strong>reach must not be modulated</strong> in these phases, or the spatial-hash bin
+edge silently truncates the stencil.</p>
+
+
+<!-- ============================================================ -->
+<h2>7 · Phases</h2>
+
+<div class="card">
+  <div class="phase">
+    <div class="pid">H0</div>
+    <div class="pbody">
+      <div class="pttl">Ordering + clamp honesty <span class="tag">fold into H1</span></div>
+      <p style="margin:2px 0;color:var(--dim)">Move the GPU attr-commit before the force pass; make
+      <code>effectiveAgentDt</code> take the max reachable stiffness. Pure correctness pre-req.</p>
+    </div>
+  </div>
+  <div class="phase">
+    <div class="pid">H1</div>
+    <div class="pbody">
+      <div class="pttl">The modulator hook · <code>agentScale</code> mode <span class="tag ok">closes ask #2</span></div>
+      <p style="margin:2px 0;color:var(--dim)">One per-agent read (i hoisted, j per pair) + one multiply,
+      on all three targets. Zero new bindings, zero new SoA fields, zero ABI params. Covers repulsion,
+      adhesion, charge and the positional projection — including the bool-attribute participation mask.</p>
+      <p style="margin:6px 0 0"><span class="tag">gate</span> byte-identity · force parity (JS↔WASM bit-exact) ·
+      bench A/B · real-GPU on both force pipelines</p>
+    </div>
+  </div>
+  <div class="phase">
+    <div class="pid">H2</div>
+    <div class="pbody">
+      <div class="pttl">The <code>classMatrix</code> mode <span class="tag ok">closes ask #1 (forces)</span></div>
+      <p style="margin:2px 0;color:var(--dim)">Widens the same hook. Free on JS/WASM; the one genuinely
+      new WebGPU surface is <code>auxF32</code> on the force shader — in <strong>both</strong> force bind-group
+      layouts, with the <code>bufAux</code> predicate widened, and the term emitted from
+      <strong>one shared helper</strong> so the canonical and mirror pipelines cannot drift.</p>
+    </div>
+  </div>
+  <div class="phase">
+    <div class="pid">H3</div>
+    <div class="pbody">
+      <div class="pttl">Implement <code>bondSpringMatrixId</code>
+        <span class="tag ok">closes ask #1 (bonds)</span> <span class="tag acc">independent — can go first</span></div>
+      <p style="margin:2px 0;color:var(--dim)">Touches <em>no pair loop</em>: resolves λ/L from a K×K table at
+      Form Bond / auto-bond time into the per-bond slots that already exist. Revives a schema field written
+      for exactly this. Lowest risk of the three.</p>
+    </div>
+  </div>
+</div>
+
+
+<!-- ============================================================ -->
+<h2>8 · Deferred &amp; rejected</h2>
+
+<table>
+<tr><th style="width:26%">Item</th><th style="width:16%">Verdict</th><th>Why</th></tr>
+<tr><td>Per-pair <strong>range / cutoff</strong></td><td><span class="tag acc">deferred — own phase</span></td>
+  <td>It alone feeds the spatial-hash bin edge. The mitigation is known and cheap (take the table max), so it is scheduling, not a blocker — but a wider bin edge multiplies the candidate count, which <em>is</em> the perf lever.</td></tr>
+<tr><td>Per-agent <strong>motion mode</strong></td><td><span class="tag bad">rejected for now</span></td>
+  <td>Needs a per-agent branch in the integrate block <em>and</em> the position commit on three targets, and collides with the “skip force + integrate + commit together” rule. <code>agentScale = 0</code> everywhere plus <code>momentum: 0</code> gets most of the way.</td></tr>
+<tr><td>Per-pair Δt / drag / momentum / maxSpeed</td><td><span class="tag bad">rejected</span></td>
+  <td>Integrator properties of a single agent, not pair quantities. (A per-<em>agent</em> maxSpeed is a separate, easy feature.)</td></tr>
+<tr><td>Per-pair growth / lifespan</td><td><span class="tag bad">rejected</span></td>
+  <td>Same reason. Growth already has a per-agent opt-out via <code>targetRadius</code>.</td></tr>
+<tr><td><code>bondTypeLabel</code> driving a live spring law</td><td><span class="tag acc">deferred</span></td>
+  <td>The per-bond class slot exists, rides the ABI, and is read by nothing but the inspector. A small step after H3 — but it moves the coefficient back into the per-bond loop, so it needs its own measurement.</td></tr>
+<tr><td>Editing a live bond’s λ / L after formation</td><td><span class="tag acc">deferred</span></td>
+  <td>Set Bond Attribute reaches user bond attributes only. Today the graph route is break + re-form, costing a generation.</td></tr>
+<tr><td>Porting Particle Life into the engine</td><td><span class="tag acc">follow-up</span></td>
+  <td>Its <code>rules</code> matrix is exactly a <code>classMatrix</code> on μ_R — but <code>attractMin</code>/<code>attractMax</code> are <em>range</em> tables, blocked on the deferred row above. Do not re-run its generator: the shipped file has deliberately drifted.</td></tr>
+<tr><td>A dedicated per-agent physics SoA field</td><td><span class="tag bad">rejected</span></td>
+  <td>Would add a field gate, five mirror sites and per-agent bytes to duplicate storage the user already declares. Reusing an attribute is <em>why</em> the WGSL cost is zero bindings.</td></tr>
+<tr><td>Non-multiplicative modulation</td><td><span class="tag bad">rejected</span></td>
+  <td>Replacement makes the global slider inert whenever a modulator is set — the enabled-but-inert control the UI doctrine forbids.</td></tr>
+<tr><td>Doctrine-only (build nothing)</td><td><span class="tag bad">rejected</span></td>
+  <td>Declines both asks and leaves per-agent engine-collision opt-out inexpressible at any price. Its one real contribution — documenting the pattern — is kept as the Help FAQ.</td></tr>
+</table>
+
+
+<!-- ============================================================ -->
+<h2>9 · Open questions for the owner</h2>
+<div class="card">
+<ol style="margin:0;padding-left:22px">
+  <li><strong>Phase order.</strong> H3 is independent, lowest-risk, and revives a field already written for
+  it. Ship it <em>first</em>, or does ask #2 (H1) come first?</li>
+  <li><strong>Default combination rule.</strong> <code>product</code> is proposed (it makes bool ⇒ mask
+  fall out). Is <code>min</code> — “the softest agent wins” — wanted for collision instead?</li>
+  <li><strong>Class attribute type.</strong> Tag-only (bounded K, the shipped axis kind), or allow an
+  integer attribute with an <code>intRange</code> axis?</li>
+  <li><strong>Should H1 modulate adhesion</strong>, or leave it alone until it gets a capability of its
+  own (it currently rides only <code>useBondingPhysics</code>)?</li>
+  <li><strong>The §6 reorder</strong> touches shipped GPU dispatch. Part of H1, or its own reviewed change?</li>
+</ol>
+</div>
+
+<p style="color:var(--mute);font-size:.78rem;margin-top:44px;border-top:1px solid var(--line);padding-top:14px">
+Every claim in this document is cited to a file and line in
+<code>docs/IMPACT_MAP_HETEROGENEOUS_PHYSICS.md</code> §0. Design only — no code was written.</p>
+
+</div>
+</body>
+</html>
