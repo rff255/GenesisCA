@@ -24,6 +24,7 @@ import { expandForceToAgents } from './forceToAgentsExpand';
 import { expandNeighbourCensus } from './censusExpand';
 import { expandPeriodicSteps } from './periodicExpand';
 import { cellUsesGeneration, agentUsesGeneration } from './generationUse';
+import { agentUsesDivisionSibling, agentUsesDivisionRequests } from './divisionUse';
 import { expandComposites } from './expandComposites';
 import { BOND_REQUEST_NODE_TYPES, bondReqSlotsForModel } from './bondRequestQueue';
 import { assignDividePartitionCodes, type DividePartitionSpec } from './dividePartition';
@@ -2543,6 +2544,13 @@ export function agentAbiShapeOf(model: CAModel): AgentAbiShape {
     // unconditional field would change EVERY agent model's emitted param string
     // and break the milestone's byte-identity gate.
     usesGeneration: agentUsesGeneration(model),
+    // D3 / D4 — the two DIVISION-only trailing blocks. Unlike `usesGeneration`
+    // these are SYMMETRICALLY gated: the worker reads the SAME flags off the
+    // init/recompile message (never recomputed there — it keeps no model), so
+    // the DEV arity assert stays exact instead of widening to `args − 2`.
+    // Both scans are division-SUBTREE-scoped supersets — see divisionUse.ts.
+    usesDivisionSibling: agentUsesDivisionSibling(model),
+    usesDivisionRequests: agentUsesDivisionRequests(model),
     // C9 / STEP 4 — the optional SoA field groups. The WORKER derives the same
     // answer from the gates SHIPPED on the init message (never recomputed there),
     // so the param list and the arg list cannot disagree.
@@ -2918,6 +2926,14 @@ export function compileAgentGraph(
     const divScratch = dv.scratchNodes.map(s => buildScratchDecl(s, model));
     const dId = divNode.id;
     const divVars = buildVariableJS(model.agentVariables || []);
+    // D3 / D4 — the two gated DIVISION blocks. Both are driven by the SAME
+    // model-level predicates that gate the ABI params (divisionUse.ts), NEVER by
+    // a flattened-edge test of their own: the alias must exist whenever the param
+    // does (a dead `const` is harmless) and must never be REFERENCED without the
+    // param (an undeclared identifier throws at runtime and nulls the division
+    // fn). The predicates are supersets of any flattening, so that holds.
+    const divUsesSibling = agentUsesDivisionSibling(model);
+    const divUsesRequests = agentUsesDivisionRequests(model);
     divisionCode = [
       `(function(${buildDivisionParams(model)}) {`,
       ...divScratch,
@@ -2925,8 +2941,17 @@ export function compileAgentGraph(
       ...divVars.preLoop,
       ...divVars.inLoopReset.map(l => l.trimStart()).map(l => '  ' + l),
       '  const colorIdx = idx * 4;', // Set Cell Looks on a daughter (s.colors)
+      // D4 — the STRUCTURAL REQUEST QUEUE cursor, the division twin of the
+      // behaviour loop's. The division fn is SINGLE-agent, so one `let` at the
+      // top of the fn is the per-"iteration" reset: each invocation (once per
+      // daughter) starts at slot 0 of ITS OWN agent's queue, which is provably
+      // empty here — daughter A's is the mother's, drained in structural step 1;
+      // daughter B's was cleared by `initAgentSlot` → `clearAgentBondRequests`.
+      ...(divUsesRequests ? ['  let _brqC = 0;'] : []),
       // value-out preamble — alias the positional params to the node's port vars.
       `  const _v${dId}_daughterIndex = __daughterIndex;`,
+      // D3 — the OTHER daughter's id (gated: absent ⇒ the pre-D3 signature).
+      ...(divUsesSibling ? [`  const _v${dId}_siblingId = __siblingId;`] : []),
       `  const _v${dId}_axisDefaultX = __axisDefaultX;`,
       `  const _v${dId}_axisDefaultY = __axisDefaultY;`,
       // axisDefaultZ (3D only) — NOT a scalar param like X/Y; it rides the

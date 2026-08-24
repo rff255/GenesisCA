@@ -68,16 +68,30 @@ function auditModel(name, model) {
     // claim that when present it really is last on BOTH sides. Comparing the raw
     // lists instead reports a false divergence for every cadence-using model — as
     // it did the moment the first one shipped (`Cubic GRA`).
+    // D3 / D4 joined it with two more DIVISION-only trailing blocks —
+    // `__siblingId` and the structural request QUEUE — appended after the 3D block
+    // and BEFORE `_generation` (which stays dead last on every kind). They are
+    // identical in 2D and 3D, so they must be stripped from BOTH ends before the
+    // prefix comparison, exactly like `_generation`; leaving them in reports a
+    // false divergence for every model that uses them.
     const TRAILING = '_generation';
-    const stripTrailing = (a) => (a[a.length - 1] === TRAILING ? a.slice(0, -1) : a);
+    const TRAILING_DIVISION = new Set(['__siblingId', '_bondFormReq', '_bondFormL', '_bondFormK', '_bondBreakReq']);
+    const isTrailingGated = (n) => n === TRAILING || TRAILING_DIVISION.has(n) || n.startsWith('_bondFormAttr_');
+    const stripTrailing = (a) => { let e = a.length; while (e > 0 && isTrailingGated(a[e - 1])) e--; return a.slice(0, e); };
     const raw2d = deriveAgentAbi(kind, { ...shape, is3d: false }).map(f => f.name);
     const raw3d = deriveAgentAbi(kind, { ...shape, is3d: true }).map(f => f.name);
     ok(raw2d.includes(TRAILING) === raw3d.includes(TRAILING)
       && (!raw2d.includes(TRAILING) || (raw2d[raw2d.length - 1] === TRAILING && raw3d[raw3d.length - 1] === TRAILING)),
       `${name} ${kind}: ${TRAILING}, when present, is LAST in both 2D and 3D`);
+    // The two gated division blocks must appear IDENTICALLY in 2D and 3D — they
+    // sit behind the z-block, so a dimension-dependent one would silently break
+    // the prefix property the strip is hiding.
+    const tail = (a) => a.slice(stripTrailing(a).length).join(',');
+    ok(tail(raw2d) === tail(raw3d),
+      `${name} ${kind}: the trailing gated block is identical in 2D and 3D ('${tail(raw2d)}' vs '${tail(raw3d)}')`);
     const names2d = stripTrailing(raw2d), names3d = stripTrailing(raw3d);
     ok(names3d.length >= names2d.length && names3d.slice(0, names2d.length).join(',') === names2d.join(','),
-      `${name} ${kind}: 2D is a strict prefix of 3D (up to the trailing ${TRAILING})`);
+      `${name} ${kind}: 2D is a strict prefix of 3D (up to the trailing gated block)`);
   }
 }
 
@@ -107,6 +121,55 @@ for (const is3d of [false, true]) {
     graphNodes: [], graphEdges: [], agentGraphNodes: [], agentGraphEdges: [], macroDefs: [],
   });
   auditModel(`synthetic ${is3d ? '3D' : '2D'}`, model);
+  n++;
+}
+
+// D3 / D4 — a synthetic pair that USES both gated division blocks, so the strip
+// above is NON-VACUOUS (no shipped model wires `siblingId` or issues a bond
+// request from a Division Event, so without this the two new checks would pass
+// on a list that never contains the fields they are about). Bond ATTRIBUTES are
+// declared too, so the queue block's per-attribute `_bondFormAttr_<id>` cells
+// are in the trailing tail as well.
+for (const is3d of [false, true]) {
+  const node = (id, nodeType, config = {}) => ({ id, type: 'caNode', position: { x: 0, y: 0 }, data: { nodeType, config } });
+  const model = migrateForHarness({
+    schemaVersion: 1,
+    properties: { name: 'syndiv', dimension: is3d ? '3d' : '2d', gridWidth: 8, gridHeight: 8, gridDepth: is3d ? 8 : 1, boundaryTreatment: 'torus' },
+    topologyMode: { gridCells: false, agents: true },
+    centerBased: {
+      enabled: true, maxAgents: 16, maxBonds: 4, bondRequestDepth: 4,
+      agentCapabilities: {
+        motion: 'force', body: true, collision: 'off', charge: 'off', bonds: 'physics', autoBond: false,
+        growth: false, division: true, lifespan: false, populationBirth: false, populationDeath: false,
+        sensing: false, orientation: false, fieldCoupling: false, appearance: true,
+      },
+    },
+    attributes: [],
+    agentAttributes: [{ id: 'energy', name: 'e', type: 'float', defaultValue: '0' }],
+    bondAttributes: [{ id: 'w', name: 'w', type: 'float', defaultValue: '0' }],
+    neighborhoods: [], mappings: [], indicators: [], variables: [], agentVariables: [],
+    graphNodes: [], graphEdges: [], macroDefs: [],
+    agentGraphNodes: [node('bs', 'behaviourStep'), node('dv', 'divisionEvent'), node('fb', 'formBond'), node('sa', 'setAttribute', { attributeId: 'energy' })],
+    agentGraphEdges: [
+      // siblingId → a by-id Set Attribute (D3), and a Form Bond in the division
+      // flow chain (D4).
+      { id: 'e1', source: 'dv', target: 'sa', sourceHandle: 'output_value_siblingId', targetHandle: 'input_value_agentId' },
+      { id: 'e2', source: 'dv', target: 'fb', sourceHandle: 'output_flow_do', targetHandle: 'input_flow_do' },
+      { id: 'e3', source: 'fb', target: 'sa', sourceHandle: 'output_flow_next', targetHandle: 'input_flow_do' },
+    ],
+  });
+  const shape = agentAbiShapeOf(model);
+  ok(shape.usesDivisionSibling === true && shape.usesDivisionRequests === true,
+    `synthetic division ${is3d ? '3D' : '2D'}: (precondition) BOTH gated blocks are on`);
+  const names = deriveAgentAbi('division', shape).map(f => f.name);
+  ok(names.includes('__siblingId') && names.includes('_bondFormReq') && names.includes('_bondFormAttr_w'),
+    `synthetic division ${is3d ? '3D' : '2D'}: the trailing blocks really are in the division ABI`);
+  // The blocks are DIVISION-only: no other kind may grow them.
+  for (const k of ['loop', 'init', 'input', 'spawner']) {
+    ok(!deriveAgentAbi(k, shape).map(f => f.name).includes('__siblingId'),
+      `synthetic division ${is3d ? '3D' : '2D'}: '${k}' does not carry __siblingId`);
+  }
+  auditModel(`synthetic division ${is3d ? '3D' : '2D'}`, model);
   n++;
 }
 

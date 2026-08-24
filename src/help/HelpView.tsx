@@ -2360,7 +2360,8 @@ export function HelpView() {
               bond?&rdquo; below &mdash; and, in a 3D model, <strong>Conserve</strong> says whether
               the daughter radii preserve area or volume. A
               <strong> Division Event</strong> root (optional) runs once per daughter so you can
-              give them different attribute values (asymmetric inheritance).</li>
+              give them different attribute values (asymmetric inheritance) &mdash; see
+              &ldquo;The Division Event: configuring the daughters&rdquo; below.</li>
             <li><strong>Kill Agent</strong> &mdash; remove an agent; all its bonds are broken
               safely. Leave <em>Agent</em> empty for apoptosis (kill yourself), or wire an id to
               <em>consume</em> a neighbour &mdash; predation. Unlike the by-id setters a wired kill
@@ -2869,6 +2870,40 @@ export function HelpView() {
             There are no separate Get/Set Area nodes: an area is <em>Get Radius</em> plus one Math
             node, and setting one is an <em>Expression</em> (<code>sqrt(A/pi)</code>) into{' '}
             <em>Set Agent Radius</em>.
+          </p>
+          <h3 className={styles.h3}>The Division Event: configuring the daughters</h3>
+          <p className={styles.p}>
+            The <strong>Division Event</strong> is the moment to shape a newborn. It runs{' '}
+            <em>once per daughter</em>, <strong>after</strong> the split has committed &mdash; so
+            both daughters exist, both are alive, both ids are known, and the graph has settled.
+            Every daughter starts with the mother&apos;s attributes <em>verbatim</em> (daughter A
+            reuses the mother&apos;s slot; daughter B is a copy), so a <em>Get Self Attribute</em>
+            here reads the inherited value and <em>Set Attribute</em> overwrites it.
+          </p>
+          <ul className={styles.list}>
+            <li><strong>Daughter #</strong> &mdash; 0 for the reused mother slot, 1 for the new one.
+              Branch on it for asymmetric inheritance (&ldquo;daughter 0 keeps 70 % of Q&rdquo;).</li>
+            <li><strong>Sibling</strong> &mdash; the <em>other</em> daughter&apos;s agent id. Wire it
+              into any by-id node and <strong>one</strong> invocation can configure{' '}
+              <em>both</em> daughters (<em>Set Attribute</em> with its <em>Agent</em> wired to
+              Sibling), or bond them to each other, or hand one a reference to the other.</li>
+            <li><strong>Form / Break / Rewire / Transfer Bond</strong> are all valid here. A bond a
+              Division Event asks for is applied <strong>in the same generation</strong>, right
+              after every division event has run &mdash; so a daughter can be bonded to a{' '}
+              <em>third party</em> the moment it is born, with no one-generation delay and no
+              intermediate state that breaks the invariant your rule preserves. Every op is still
+              all-or-nothing: if a bond cannot be formed (a full partner, a dead id), nothing is
+              touched.</li>
+            <li><strong>Area / Volume / Axis X-Y-Z</strong> &mdash; the daughter&apos;s size and the
+              axis the engine actually split along.</li>
+          </ul>
+          <p className={styles.p}>
+            <strong>Carrying context into the event.</strong> The Division Event cannot see the
+            Behaviour Step&apos;s <em>Local Variables</em> &mdash; those are per-agent, per-step
+            scratch and are gone by the time the split is applied. The bridge is an{' '}
+            <strong>agent attribute</strong>: write your context into one immediately before{' '}
+            <em>Divide Agent</em>, and <em>both</em> daughters inherit it verbatim for the event to
+            read. That is also the answer for anything cheaper to carry than to re-derive.
           </p>
           <h3 className={styles.h3}>Spawning Agents (Create &rarr; Add, in either event)</h3>
           <p className={styles.p}>

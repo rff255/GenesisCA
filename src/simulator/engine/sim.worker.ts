@@ -268,6 +268,14 @@ interface InitMsg {
    *  `DEFAULT_DIVIDE_PARTITION` (the pre-P5 geometric split). See
    *  [dividePartition.ts](../../modeler/vpl/compiler/dividePartition.ts). */
   agentDividePartitions?: DividePartitionSpec[];
+  /** D3 — the Division Event wires its `siblingId` output, so the `division` ABI
+   *  carries the trailing `__siblingId` scalar. SYMMETRICALLY gated: the worker
+   *  passes the arg only when this is set (see divisionUse.ts / agentAbi.ts). */
+  agentUsesDivisionSibling?: boolean;
+  /** D4 — the Division Event's subtree issues structural requests, so the
+   *  `division` ABI carries the request-QUEUE block AND the structural phase runs
+   *  a SECOND `drainAgentBondRequests` after the division events. */
+  agentUsesDivisionRequests?: boolean;
   /** PR5 (C-D1): true when the agent graph reads/writes the cell field
    *  (sampleField / fieldGradient / readCellsUnder / affectCellsUnder /
    *  secreteToField). Drives the WebGPU-grid field bridge: only a field model
@@ -385,7 +393,7 @@ interface PaintManualMsg {
   activeViewer: string;
 }
 interface ResetMsg { type: 'reset'; activeViewer: string; reqId?: number }
-interface RecompileMsg { type: 'recompile'; stepCode: string; initCode?: string; gridInitCode?: string; skipIsolatedEmpty?: SkipIsolatedEmptyConfig; inputColorCodes: Array<{ mappingId: string; code: string }>; outputMappingCodes: Array<{ mappingId: string; code: string }>; stopMessages?: string[]; updateMode: string; asyncScheme: string; wasmStepBytes?: Uint8Array; wasmStepError?: string; wasmExports?: string[]; viewerIds?: Record<string, number>; webgpuShaderCode?: string; webgpuShaderError?: string; webgpuEntryPoints?: WebGPUEntryPoints; webgpuLayout?: WebGPULayout; webgpuStopCheckInterval?: number; variegated?: VariegatedPayload; interactionTables?: InteractionTablePayload[]; agentBehaviourCode?: string; agentInitCode?: string; agentDivisionCode?: string; agentColorViewer?: string; agentOutputMappingCodes?: Array<{ mappingId: string; code: string }>; agentInputMappingCodes?: Array<{ mappingId: string; code: string; channels: number; spawner?: boolean }>; agentHasSprites?: boolean; agentBondReqSlots?: number; agentFieldGates?: AgentFieldGates; agentDividePartitions?: DividePartitionSpec[]; centerBased?: CenterBasedConfig; agentUsesField?: boolean; agentUsesDensity?: boolean; rulesReadComputedIndicator?: boolean; agentResidencyClean?: boolean; agentTarget?: 'js' | 'wasm' | 'webgpu'; agentWasmBytes?: Uint8Array; agentWasmViewerGuardIds?: string[]; agentLayoutExtras?: AgentLayoutExtras; agentWasmLayoutSig?: { maxHashBins: number; totalBytes: number }; agentWebgpuBehaviourShader?: string; agentWebgpuForceShader?: string; agentWebgpuMaxAgents?: number; agentWebgpuMaxHashBins?: number; agentWebgpuLayout?: AgentWebGPULayout; agentRenderLayout?: AgentWebGPULayout; agentWebgpuUsesI32Write?: boolean; agentWebgpuUsage?: { usesBondStore?: boolean; usesBondStoreWrite?: boolean; usesIndicators?: boolean; usesAux?: boolean; usesSpawn?: boolean; usesStop?: boolean; usesForceScatter?: boolean; usesGeneration?: boolean; usesSpriteWrite?: boolean }; agentWebgpuOmShaders?: AgentOMShaderInput[] }
+interface RecompileMsg { type: 'recompile'; stepCode: string; initCode?: string; gridInitCode?: string; skipIsolatedEmpty?: SkipIsolatedEmptyConfig; inputColorCodes: Array<{ mappingId: string; code: string }>; outputMappingCodes: Array<{ mappingId: string; code: string }>; stopMessages?: string[]; updateMode: string; asyncScheme: string; wasmStepBytes?: Uint8Array; wasmStepError?: string; wasmExports?: string[]; viewerIds?: Record<string, number>; webgpuShaderCode?: string; webgpuShaderError?: string; webgpuEntryPoints?: WebGPUEntryPoints; webgpuLayout?: WebGPULayout; webgpuStopCheckInterval?: number; variegated?: VariegatedPayload; interactionTables?: InteractionTablePayload[]; agentBehaviourCode?: string; agentInitCode?: string; agentDivisionCode?: string; agentColorViewer?: string; agentOutputMappingCodes?: Array<{ mappingId: string; code: string }>; agentInputMappingCodes?: Array<{ mappingId: string; code: string; channels: number; spawner?: boolean }>; agentHasSprites?: boolean; agentBondReqSlots?: number; agentFieldGates?: AgentFieldGates; agentDividePartitions?: DividePartitionSpec[]; agentUsesDivisionSibling?: boolean; agentUsesDivisionRequests?: boolean; centerBased?: CenterBasedConfig; agentUsesField?: boolean; agentUsesDensity?: boolean; rulesReadComputedIndicator?: boolean; agentResidencyClean?: boolean; agentTarget?: 'js' | 'wasm' | 'webgpu'; agentWasmBytes?: Uint8Array; agentWasmViewerGuardIds?: string[]; agentLayoutExtras?: AgentLayoutExtras; agentWasmLayoutSig?: { maxHashBins: number; totalBytes: number }; agentWebgpuBehaviourShader?: string; agentWebgpuForceShader?: string; agentWebgpuMaxAgents?: number; agentWebgpuMaxHashBins?: number; agentWebgpuLayout?: AgentWebGPULayout; agentRenderLayout?: AgentWebGPULayout; agentWebgpuUsesI32Write?: boolean; agentWebgpuUsage?: { usesBondStore?: boolean; usesBondStoreWrite?: boolean; usesIndicators?: boolean; usesAux?: boolean; usesSpawn?: boolean; usesStop?: boolean; usesForceScatter?: boolean; usesGeneration?: boolean; usesSpriteWrite?: boolean }; agentWebgpuOmShaders?: AgentOMShaderInput[] }
 interface UpdateLookupTableMsg {
   type: 'updateLookupTable';
   attrId: string;
@@ -1231,6 +1239,15 @@ let agentFieldGates: AgentFieldGates = ALL_FIELD_GATES_ON;
  *  `divideRequest` code minus 1). Empty ⇒ every division takes
  *  `DEFAULT_DIVIDE_PARTITION`, the pre-P5 geometric split. */
 let agentDividePartitions: DividePartitionSpec[] = [];
+/** D3 — does the Division Event wire its `siblingId` output? SHIPPED by the
+ *  compiler (`agentUsesDivisionSibling`), never re-derived here: the worker keeps
+ *  no model, and both ABI sides must gate on ONE answer. */
+let agentUsesDivisionSibling = false;
+/** D4 — does the Division Event's subtree issue structural requests (Form /
+ *  Break / Rewire / Transfer Bond)? SHIPPED like the flag above; it gates BOTH
+ *  the `division` ABI's queue block AND the SECOND `drainAgentBondRequests` pass
+ *  that applies what those events queued. */
+let agentUsesDivisionRequests = false;
 /** Ship per-agent velocity in the render snapshot even without sprites — set by
  *  `setAgentSnapshotVelocity` while the simulator's vision-cone display is on
  *  (the cones need a heading). Default false → the payload is byte-identical to
@@ -1793,7 +1810,12 @@ function agentAbiShapeOfStore(s: AgentStore): AgentAbiShape {
   // ALLOCATED — so the arg list can never describe a different field set than
   // the store has. (The store got them from the SHIPPED `agentFieldGates`, the
   // same record the compiler used for the param list.)
-  return { is3d: s.worldDepth > 1, agentAttrs: s.attrSpecs, fieldAttrs: fieldSpecs, hasLookupTables, bondAttrs: s.bondAttrSpecs, usesGeneration: true, gates: s.fieldGates };
+  // D3 / D4: unlike `usesGeneration`, these two are SYMMETRICALLY gated — the
+  // worker reads the SHIPPED compiler-derived flags (it keeps no model, so it
+  // cannot re-derive them) and passes the args only when the params exist. That
+  // keeps the DEV arity assert exact at `params ∈ {args − 1, args}` instead of
+  // widening it to `args − 2` for every model.
+  return { is3d: s.worldDepth > 1, agentAttrs: s.attrSpecs, fieldAttrs: fieldSpecs, hasLookupTables, bondAttrs: s.bondAttrSpecs, usesGeneration: true, usesDivisionSibling: agentUsesDivisionSibling, usesDivisionRequests: agentUsesDivisionRequests, gates: s.fieldGates };
 }
 
 /** The shared runtime values (external caches) every kind resolves from ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â pulled
@@ -1896,8 +1918,11 @@ function runDivisionEvent(events: Array<{ mother: number; a: number; b: number; 
   const s = agentStore;
   for (const ev of events) {
     try {
-      fn(...buildDivisionArgs(s, ev.a, 0, ev.axisX, ev.axisY));
-      fn(...buildDivisionArgs(s, ev.b, 1, ev.axisX, ev.axisY));
+      // D3 — each daughter is told the OTHER's slot id, so ONE event can set both
+      // daughters' attributes by id (both are ALIVE here, satisfying the strict
+      // guard the division root emits) or bond them to a third party.
+      fn(...buildDivisionArgs(s, ev.a, 0, ev.axisX, ev.axisY, ev.b));
+      fn(...buildDivisionArgs(s, ev.b, 1, ev.axisX, ev.axisY, ev.a));
     } catch (e) {
       self.postMessage({ type: 'error', message: '[agents] division event failed: ' + ((e as Error)?.message || e) });
       agentDivisionFn = null;
@@ -1916,12 +1941,12 @@ function runDivisionEvent(events: Array<{ mother: number; a: number; b: number; 
  *  `s.worldDepth > 1`, exactly when `buildDivisionParams` pushes its 3D params
  *  under `is3dModel(model)`. `is3dModel(model) ÃƒÂ¢Ã…Â¸Ã‚Âº s.worldDepth > 1` ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â edit BOTH
  *  together or every arg shifts one slot. */
-function buildDivisionArgs(s: AgentStore, idx: number, daughterIndex: number, axisX: number, axisY: number): unknown[] {
+function buildDivisionArgs(s: AgentStore, idx: number, daughterIndex: number, axisX: number, axisY: number, siblingId = -1): unknown[] {
   // The division event's w_ block ALIASES attrRead (immediate writes in the
   // sequential structural phase, which runs AFTER swapAgentAttrs) ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â the shared
   // descriptor handles that per-kind (agentAbi.ts). NO forceZ in the 3D block
   // (division reads forces, never writes them) ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â also in the descriptor.
-  const rt: AgentAbiRuntime = { ...agentAbiBaseRt(), hash: null, viewer: activeViewer, idx, daughterIndex, axisX, axisY };
+  const rt: AgentAbiRuntime = { ...agentAbiBaseRt(), hash: null, viewer: activeViewer, idx, daughterIndex, axisX, axisY, siblingId };
   return buildAgentAbiArgs('division', agentAbiShapeOfStore(s), s, rt);
 }
 
@@ -3738,7 +3763,33 @@ function runAgentStructuralPhase(): void {
   if (divideOverflow) {
     self.postMessage({ type: 'agentOverflow', message: `Agent or bond capacity reached during division (maxAgents=${s.maxAgents}, maxBonds=${s.maxBonds}). Some divisions were skipped.` });
   }
-  if (divideEvents.length > 0) runDivisionEvent(divideEvents);
+  if (divideEvents.length > 0) {
+    runDivisionEvent(divideEvents);
+    // 1d. D4 — the SECOND drain: apply the structural requests the DIVISION
+    // EVENTS just queued. It runs here, after every event and BEFORE auto-bond,
+    // because that is the only point at which both daughters exist, are alive,
+    // and the graph is settled — the whole reason Design C was adopted over
+    // staged daughter handles (Impact Map §2.3).
+    //
+    // SAFE BY CONSTRUCTION, verified in the engine rather than assumed:
+    //  • `drainAgentBondRequests` ZEROES each entry's two lanes immediately after
+    //    reading them, before decoding — so a second pass can never re-apply a
+    //    first-pass op; it sees only what the events wrote.
+    //  • Both daughters' queues were provably EMPTY when their event ran:
+    //    daughter A's is the mother's, drained in step 1; daughter B's was
+    //    cleared by `initAgentSlot` -> `clearAgentBondRequests`.
+    //  • I5 is inherited per op — formBond / breakBond / rewireBond /
+    //    transferBond are each whole-or-nothing, and the overflow bucket is
+    //    still applied by nobody.
+    // Gated on the SHIPPED usage flag so the structural phase of every model
+    // without a queue verb in its Division Event is byte-identical.
+    if (agentUsesDivisionRequests && drainAgentBondRequests(s, lambda)) {
+      // Disambiguated from the step-1 notice (Impact Map §5.7): the same
+      // sentence twice in one step reads as a bug, and the two passes have
+      // different causes and different fixes.
+      self.postMessage({ type: 'agentOverflow', message: `Bond request queue full during division events (depth ${s.bondReqSlots - 1}). Some Form / Break / Rewire Bond requests issued by the Division Event were dropped this step. Raise "Bond Requests / Agent / Step" in Model Properties > Bond-Graph Agents.` });
+    }
+  }
 
   // 2. Auto-bond by distance (opt-in, hysteresis): form a bond between any two
   //    unbonded agents within formDistanceÃƒÆ’Ã¢â‚¬â€contact; break bonds stretched past
@@ -7012,6 +7063,12 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
       agentBondReqSlots = Math.max(1, Math.floor(msg.agentBondReqSlots ?? 1));
       agentFieldGates = normalizeFieldGates(msg.agentFieldGates);
       agentDividePartitions = msg.agentDividePartitions ?? [];
+      // D3 / D4 — the SHIPPED division-ABI usage flags. Both gate the arg side
+      // exactly as the compiler gates the param side (never re-derived here: the
+      // worker keeps no model), and D4's additionally gates the SECOND
+      // `drainAgentBondRequests` pass in the structural phase.
+      agentUsesDivisionSibling = !!msg.agentUsesDivisionSibling;
+      agentUsesDivisionRequests = !!msg.agentUsesDivisionRequests;
       // PR6b-1 / PR7: resolve the agent target + stash the per-target payload
       // BEFORE initAgents (which reads agentTarget to decide whether to back the
       // store on WebAssembly.Memory). 'wasm' needs bytes; 'webgpu' needs the two
@@ -7839,6 +7896,12 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
         // P5 — the partition table rides EVERY recompile (a partition-mode edit is
         // a graph-only change, so it must not need a full reinit to take effect).
         agentDividePartitions = rc.agentDividePartitions ?? [];
+        // D3 / D4 — like the partition table, these ride EVERY recompile: wiring
+        // the Division Event's `siblingId` (or dropping a Form Bond into it) is a
+        // graph-only change that must take effect without a full reinit, and both
+        // ABI sides have to flip together or every trailing arg shifts.
+        agentUsesDivisionSibling = !!rc.agentUsesDivisionSibling;
+        agentUsesDivisionRequests = !!rc.agentUsesDivisionRequests;
         compileAgentFns(rc.agentBehaviourCode, rc.agentInitCode, rc.agentDivisionCode, rc.agentOutputMappingCodes, rc.agentInputMappingCodes);
         // PR6b-1 / PR7: re-resolve the agent target + stash the per-target payload.
         // If the WASM backing requirement changes (JS/WebGPU ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬Â WASM, since wasm

@@ -83,6 +83,21 @@ export interface AgentAbiShape {
    *  param reads `undefined` — which makes the dangerous direction structurally
    *  impossible. Appended at the VERY END of every kind, after the 3D block. */
   usesGeneration?: boolean;
+  /** D3 — the Division Event's `siblingId` scalar (the OTHER daughter's id).
+   *  `division` kind only, appended after the 3D block. **SYMMETRICALLY gated**
+   *  (Impact Map §5.3): unlike `usesGeneration`, the WORKER gates on this too,
+   *  reading the flag SHIPPED in the init/recompile message — a second
+   *  param-gated-but-always-passed field would widen the DEV arity assert's
+   *  tolerance from `args − 1` to `args − 2` and weaken it. */
+  usesDivisionSibling?: boolean;
+  /** D4 — the structural REQUEST QUEUE block on the `division` kind
+   *  (`_bondFormReq` / `_bondFormL` / `_bondFormK` / `_bondBreakReq` + one
+   *  `_bondFormAttr_<id>` per bond attribute), so Form / Break / Rewire / Transfer
+   *  Bond are usable in a Division Event. Appended after `__siblingId`, before
+   *  `_generation`. SYMMETRICALLY gated for the same reason as `usesDivisionSibling`;
+   *  the WORKER additionally uses the shipped flag to run its SECOND
+   *  `drainAgentBondRequests` pass (the one that applies what the events queued). */
+  usesDivisionRequests?: boolean;
   /** C9 / STEP 4 — which OPTIONAL per-agent SoA field groups this model allocates
    *  (`resolveAgentFieldGates(model)`). A gated-OFF group's params are DROPPED
    *  from every kind, and the compilers emit the typed default (0) for a read of
@@ -120,6 +135,9 @@ export interface AgentAbiRuntime {
   fieldArray: (id: string) => unknown;
   // --- division-event extras (leading positional args) ---
   idx?: number; daughterIndex?: number; axisX?: number; axisY?: number;
+  /** D3 — the OTHER daughter's slot id (A gets B's, B gets A's). Trailing,
+   *  gated on `usesDivisionSibling`. */
+  siblingId?: number;
   // --- init-event extras (leading host closures + trailing seed base) ---
   agentCreate?: unknown; agentAddToWorld?: unknown; seedBase?: number;
   // --- spawner-brush extras (the brush's world geometry) ---
@@ -404,6 +422,32 @@ export function deriveAgentAbi(kind: AgentAbiKind, shape: AgentAbiShape, profile
       // so 2D stays a strict PREFIX of 3D (the `audit-agent-layout` invariant).
       fields.push(F('_agentZ', 'f64[]', s => s.z));
       if (kind === 'spawner') fields.push(F('_brushZ', 'scalar', (_s, rt) => rt.brushZ ?? 0));
+    }
+  }
+
+  // --- D3 / D4: the two DIVISION-only trailing blocks, after the 3D block and
+  // BEFORE `_generation` (which stays dead last on every kind, so
+  // `audit-agent-layout`'s "the trailing field is LAST on both sides" claim and
+  // the worker's `params ∈ {args − 1, args}` tolerance both keep their shape).
+  // Both are SYMMETRICALLY gated — the worker reads the same shipped flags — so
+  // the arity assert stays exact. See AgentAbiShape's notes.
+  if (kind === 'division') {
+    // D3 — the OTHER daughter's id, so ONE Division Event invocation can
+    // configure BOTH daughters (the strict `_alive[__sa]` guard the division root
+    // emits is satisfied: both daughters are alive by the time the event runs).
+    if (shape.usesDivisionSibling) fields.push(F('__siblingId', 'scalar', (_s, rt) => rt.siblingId ?? -1));
+    // D4 — the structural REQUEST QUEUE, the SAME four lanes + per-attribute
+    // initial-value cells the `loop` kind carries (the emitters are generic over
+    // them, so no new emit anywhere). The worker drains them a SECOND time right
+    // after the division events, when both daughters exist and are alive.
+    if (shape.usesDivisionRequests) {
+      fields.push(
+        F('_bondFormReq', 'i32[]', s => s.bondFormReq),
+        F('_bondFormL', 'f64[]', s => s.bondFormL),
+        F('_bondFormK', 'f64[]', s => s.bondFormK),
+        F('_bondBreakReq', 'i32[]', s => s.bondBreakReq),
+      );
+      for (const a of bondAttrs) fields.push(F(`_bondFormAttr_${a.id}`, 'f64[]', s => s.bondFormAttrs[a.id]));
     }
   }
 

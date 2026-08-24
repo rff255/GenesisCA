@@ -9,9 +9,19 @@ import { is3dModelLike } from '../compiler/niCodec';
  *  event reads the inherited (mother's) value; Set Attribute overwrites it.
  *
  *  Outputs: `daughterIndex` (0 = the reused mother slot, 1 = the new slot),
+ *  `siblingId` (D3 — the OTHER daughter's agent id, so ONE invocation can
+ *  configure BOTH daughters by id, or bond them to a third party),
  *  `axisDefaultX`/`axisDefaultY` (the engine's chosen division axis), `myArea`
  *  (πr² — a DISC area, in 2D and 3D alike) and, in a 3D model, `myVolume`
- *  ((4/3)πr³). Singleton (one per Agents graph, like Behaviour Step). */
+ *  ((4/3)πr³). Singleton (one per Agents graph, like Behaviour Step).
+ *
+ *  D4 — the four bond verbs (Form / Break / Rewire / Transfer Bond) are valid
+ *  here: the requests they queue are drained by a SECOND structural pass right
+ *  after every division event has run, when both daughters exist and are alive.
+ *
+ *  The event cannot see the behaviour step's LOCAL VARIABLES (per-agent per-step
+ *  scratch, gone by the structural phase). Carry context in an AGENT ATTRIBUTE
+ *  written immediately before Divide Agent — both daughters inherit it verbatim. */
 export const DivisionEventNode: NodeTypeDef = {
   type: 'divisionEvent',
   label: 'Division Event',
@@ -23,6 +33,7 @@ export const DivisionEventNode: NodeTypeDef = {
   ports: [
     { id: 'do', label: 'DO', kind: 'output', category: 'flow' },
     { id: 'daughterIndex', label: 'Daughter #', kind: 'output', category: 'value', dataType: 'integer' },
+    { id: 'siblingId', label: 'Sibling', kind: 'output', category: 'value', dataType: 'integer' },
     { id: 'axisDefaultX', label: 'Axis X', kind: 'output', category: 'value', dataType: 'float' },
     { id: 'axisDefaultY', label: 'Axis Y', kind: 'output', category: 'value', dataType: 'float' },
     { id: 'axisDefaultZ', label: 'Axis Z', kind: 'output', category: 'value', dataType: 'float' },
