@@ -1,5 +1,8 @@
 import { SCHEMA_VERSION } from './schema';
-import type { CAModel, SimulationState, SerializedTypedArray, Attribute, Preset } from './types';
+import type {
+  CAModel, SimulationState, SerializedTypedArray, Attribute, Preset,
+  MacroDef, MacroFile, MacroOrigin, MacroReferenceBundle,
+} from './types';
 import { packNI, INVALID_NI } from '../modeler/vpl/compiler/niCodec';
 import { withResolvedEngine } from './engineResolution';
 
@@ -810,6 +813,94 @@ export function readPresetFile(file: File): Promise<Preset> {
     reader.onerror = () => reject(new Error('Failed to read file.'));
     reader.readAsText(file);
   });
+}
+
+// ---------------------------------------------------------------------------
+// `.gcamacro` — the macro file
+// ---------------------------------------------------------------------------
+
+/**
+ * Assemble a `.gcamacro`. Every optional key is OMITTED when it would be empty,
+ * so a macro that references nothing and nests nothing produces exactly the file
+ * this app has always written — the zero-references invariant.
+ *
+ * `nested` carries the defs the exported def's subgraph references transitively;
+ * `references` carries the model elements it names. `origin` is written only
+ * alongside one of those, since it exists purely to caption the import dialog.
+ */
+export function buildMacroFile(
+  def: MacroDef,
+  opts: { description?: string; nested?: MacroDef[]; references?: MacroReferenceBundle; origin?: MacroOrigin } = {},
+): MacroFile {
+  const file: MacroFile = {
+    schemaVersion: 1,
+    name: def.name,
+    description: opts.description ?? '',
+    macroDef: def,
+  };
+  if (opts.nested && opts.nested.length > 0) file.macroDefs = opts.nested;
+  // Inlined rather than importing `macroReferences.isBundleEmpty`: that module
+  // pulls the node registry (for reference labels), and fileOperations is on the
+  // standalone-viewer's import path.
+  const hasRefs = !!opts.references && Object.values(opts.references).some(list => list && list.length > 0);
+  if (opts.references && hasRefs) file.references = opts.references;
+  if ((file.macroDefs || file.references) && opts.origin) file.origin = opts.origin;
+  return file;
+}
+
+function isMacroDefLike(d: unknown): d is MacroDef {
+  const m = d as MacroDef | undefined;
+  return !!m && typeof m === 'object' && typeof m.id === 'string' && Array.isArray(m.nodes) && Array.isArray(m.edges);
+}
+
+/**
+ * Parse a `.gcamacro`'s text. THE ONE reader for the format.
+ *
+ * ⚠ It deliberately does NOT gate on `schemaVersion`: the format's only
+ * compatibility mechanism is "unknown keys are ignored" (which is exactly why an
+ * older build reads a file carrying `references` and imports it as it always
+ * did), and a strict version check would reject files a current build reads
+ * fine. Anything beyond `macroDef` is shape-checked and DROPPED when malformed,
+ * never allowed to throw past the two named errors below.
+ */
+export function parseMacroFile(text: string): MacroFile {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    throw new Error('Invalid .gcamacro file: not valid JSON');
+  }
+  const raw = parsed as Partial<MacroFile> | null;
+  if (!raw || typeof raw !== 'object' || !raw.macroDef || typeof raw.macroDef !== 'object') {
+    throw new Error('Invalid .gcamacro file: missing or invalid macroDef field');
+  }
+  const file: MacroFile = {
+    schemaVersion: 1,
+    name: typeof raw.name === 'string' ? raw.name : (raw.macroDef as MacroDef).name ?? 'Imported macro',
+    description: typeof raw.description === 'string' ? raw.description : '',
+    macroDef: raw.macroDef as MacroDef,
+  };
+  const nested = Array.isArray(raw.macroDefs) ? raw.macroDefs.filter(isMacroDefLike) : [];
+  if (nested.length > 0) file.macroDefs = nested;
+  if (raw.references && typeof raw.references === 'object' && !Array.isArray(raw.references)) {
+    const refs: Record<string, unknown> = {};
+    for (const [space, list] of Object.entries(raw.references as Record<string, unknown>)) {
+      if (Array.isArray(list) && list.length > 0) refs[space] = list;
+    }
+    if (Object.keys(refs).length > 0) file.references = refs as MacroReferenceBundle;
+  }
+  if (raw.origin && typeof raw.origin === 'object' && !Array.isArray(raw.origin)) file.origin = raw.origin;
+  return file;
+}
+
+export function readMacroFile(file: File): Promise<MacroFile> {
+  return file.text().then(parseMacroFile);
+}
+
+/** Write a `.gcamacro`. Via `saveTextFile` so the desktop (Tauri) build gets a
+ *  real native Save As — a bare `<a download>` writes nothing under WebView2. */
+export function downloadMacroFile(file: MacroFile, filename: string): Promise<boolean> {
+  return saveTextFile(JSON.stringify(file, null, 2), filename, 'application/json');
 }
 
 export function readStateFile(file: File): Promise<SimulationState> {
