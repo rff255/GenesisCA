@@ -11,14 +11,24 @@
  *   V'   = V + (Dv*lapV + uvv - (F+k)*V) * dt
  *
  * Each of the five equations above maps to a single `expression` node, so the
- * graph is ~31 nodes / ~37 edges (vs. ~50 / ~59 when the arithmetic was wired
- * one operator per node). The data reads and the neighbour gather+sum pairs are
- * still discrete nodes — an expression's inputs are scalars, so the Laplacian
- * sums are computed up front. Built programmatically here rather than
- * hand-typed as JSON. Re-run after any tweak: `node scripts/gen-grayscott.mjs`.
+ * step graph is 23 nodes / 28 edges (vs. 45 / 53 when the arithmetic was wired
+ * one operator per node — 24 `arithmeticOperator` nodes). The data reads and the
+ * neighbour gather+sum pairs are still discrete nodes — an expression's inputs
+ * are scalars, so the Laplacian sums are computed up front. The expressions'
+ * association order deliberately reproduces the old operator chain exactly, so
+ * the emitted arithmetic is bit-identical on every compile target.
  *
- * Re-running preserves the saved simulationState + library thumbnail from the
- * existing output file (they are added after generation, not by this script).
+ * The V viewer is a LINKED Attribute→Color mapping (V over [0, 0.4] through a
+ * magma-like 5-stop gradient) — the colour pass is synthesized by the compiler,
+ * so there is no hand-built output-mapping subgraph here.
+ *
+ * Built programmatically rather than hand-typed as JSON. Re-run after any tweak:
+ * `node scripts/gen-grayscott.mjs`.
+ *
+ * Re-running preserves the enrichment that lives in the output file but is
+ * authored in-app: the saved simulationState, the library thumbnail, the
+ * long-form ruleDescription, and each preset's id + createdAt (matched by name,
+ * so preset CONTENT stays owned by this script while the file stops churning).
  */
 import { writeFileSync, readFileSync, existsSync, mkdirSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
@@ -177,30 +187,10 @@ const seedWriteV = node('setAttribute', { attributeId: 'V', _port_value: '0.25' 
 fEdge(seedInput, 'do', seedWriteU, 'do');
 fEdge(seedInput, 'do', seedWriteV, 'do');
 
-// =============================================================================
-// E. V OUTPUT-MAPPING GRAPH — V -> black->white grayscale ramp
-// =============================================================================
-
-const vOutput     = node('outputMapping', { mappingId: 'vConc' }, 0, 22);
-const vViewerRead = node('getCellAttribute', { attributeId: 'V' }, 0, 23);
-// inMax 0.4 maps the V field's typical [0, ~0.4] working range onto the full
-// ramp; smoothstep gives the ramp a softer toe/shoulder.
-const vScale      = node('proportionMap', {
-  method: 'linear',
-  _port_inMin: '0', _port_inMax: '0.4', _port_outMin: '0', _port_outMax: '1',
-}, 1, 23);
-const vColor      = node('colorInterpolation', {
-  method: 'smoothstep',
-  _port_r1: '0', _port_g1: '0', _port_b1: '0',
-  _port_r2: '255', _port_g2: '255', _port_b2: '255',
-}, 2, 23);
-const vSetViewer  = node('setColorViewer', { mappingId: 'vConc' }, 3, 22);
-vEdge(vViewerRead, 'value', vScale, 'x');
-vEdge(vScale, 'result', vColor, 't');
-fEdge(vOutput, 'do', vSetViewer, 'do');
-vEdge(vColor, 'r', vSetViewer, 'r');
-vEdge(vColor, 'g', vSetViewer, 'g');
-vEdge(vColor, 'b', vSetViewer, 'b');
+// NB there is no V output-mapping SUBGRAPH: the `vConc` mapping is LINKED (see
+// `mappings` below), so `injectLinkedOutputMappings` synthesizes the colour pass
+// at compile time. (The hand-built version used `colorInterpolation` +
+// `setColorViewer`, both since retired from the registry.)
 
 // =============================================================================
 // B. NON-GRAPH MODEL PARTS
@@ -212,14 +202,10 @@ const properties = {
   name: 'Gray-Scott Reaction-Diffusion',
   author: 'Peter Gray & Stephen K. Scott (1983); 9-point CA form per Karl Sims',
   modelAuthor: 'Rodrigo F. Figueiredo',
-  description:
-    'A two-chemical reaction-diffusion system (Gray-Scott, 1983). Feed chemical U ' +
-    'is replenished everywhere; catalyst V consumes it autocatalytically ' +
-    '(U + 2V -> 3V) and decays. Both species diffuse via a 9-point weighted ' +
-    'Laplacian. Tuning the feed rate F and kill rate k yields spots, stripes, ' +
-    'mazes, mitosis and solitons - Turing-like self-organization from simple ' +
-    "local chemistry. Select the 'Seed' brush, paint a blob near the centre, " +
-    'then press Play. Try the parameter presets for different regimes.',
+  // Short Summary — the ONLY presentation text shown on a Models Library card.
+  // The long-form explanation lives in `properties.ruleDescription`, which is
+  // authored in-app and carried across a regenerate by the preserve tail below.
+  description: 'A two-chemical reaction-diffusion system (Gray-Scott, 1983).',
   topology: '2d-grid',
   boundaryTreatment: 'torus',
   updateMode: 'synchronous',
@@ -259,21 +245,35 @@ const attributes = [
 const neighborhoods = [
   { id: 'ortho', name: 'Orthogonal (von Neumann)',
     description: 'The 4 edge-adjacent neighbors. Weight 0.2 each in the 9-point Laplacian.',
-    coords: [[-1, 0], [1, 0], [0, -1], [0, 1]], margin: 1 },
+    coords: [[-1, 0], [1, 0], [0, -1], [0, 1]], margin: 1, includeCentralCell: false },
   { id: 'diag', name: 'Diagonal (corners)',
     description: 'The 4 corner neighbors. Weight 0.05 each in the 9-point Laplacian.',
-    coords: [[-1, -1], [-1, 1], [1, -1], [1, 1]], margin: 1 },
+    coords: [[-1, -1], [-1, 1], [1, -1], [1, 1]], margin: 1, includeCentralCell: false },
 ];
 
 const mappings = [
   { id: 'seed', name: 'Seed', isAttributeToColor: false,
     description: 'Paint to seed a reaction blob: sets U=0.5 and V=0.25 on painted cells. Painted color is ignored.',
     redDescription: 'Ignored', greenDescription: 'Ignored', blueDescription: 'Ignored' },
+  // LINKED colour pass — the compiler synthesizes `getCellAttribute(V) ->
+  // colorScale -> setCellLooks` from this config, so no output-mapping subgraph
+  // is authored above. The 5-stop gradient is the magma-like ramp tuned in-app.
   { id: 'vConc', name: 'V Concentration', isAttributeToColor: true,
     description: 'Visualizes the V field as a black -> white grayscale ramp (V in [0, 0.4]).',
-    redDescription: 'V concentration (grayscale)',
-    greenDescription: 'V concentration (grayscale)',
-    blueDescription: 'V concentration (grayscale)' },
+    redDescription: '', greenDescription: '', blueDescription: '',
+    linked: true,
+    linkedAttributeId: 'V',
+    linkedColors: {
+      gradient: [
+        { position: 0.03389830508474576, r: 0,   g: 0,   b: 4 },
+        { position: 0.25,                r: 81,  g: 18,  b: 124 },
+        { position: 0.5,                 r: 183, g: 55,  b: 121 },
+        { position: 0.8211864406779661,  r: 252, g: 137, b: 97 },
+        { position: 1,                   r: 252, g: 253, b: 191 },
+      ],
+    },
+    linkedMin: 0,
+    linkedMax: 0.4 },
 ];
 
 // Famous Gray-Scott regimes (9-point, Du=1.0, Dv=0.5, dt=1.0). F/k tuned in-browser.
@@ -313,13 +313,18 @@ const model = {
   graphEdges,
   macroDefs: [],
   presets,
+  variables: [],
 };
 
 mkdirSync(dirname(OUT), { recursive: true });
 
 // Preserve enrichment data that lives in the output file but isn't produced by
-// this script — the saved simulationState snapshot and the library thumbnail
-// are added in-app after generation, so carry them across a regenerate.
+// this script — the saved simulationState snapshot, the library thumbnail and
+// the long-form ruleDescription are authored in-app after generation, so carry
+// them across a regenerate. Preset ids + createdAt are carried too (matched by
+// NAME): the preset CONTENT stays owned by this script, but a regenerate must
+// not re-mint identifiers / timestamps the shipped file already carries.
+// NB assign ruleDescription BEFORE thumbnail so the key order matches the file.
 let preserved = '';
 if (existsSync(OUT)) {
   try {
@@ -328,10 +333,24 @@ if (existsSync(OUT)) {
       model.simulationState = prev.simulationState;
       preserved += ' +simulationState';
     }
+    if (prev.properties?.ruleDescription) {
+      model.properties.ruleDescription = prev.properties.ruleDescription;
+      preserved += ' +ruleDescription';
+    }
     if (prev.properties?.thumbnail) {
       model.properties.thumbnail = prev.properties.thumbnail;
       preserved += ' +thumbnail';
     }
+    const prevPresets = new Map((prev.presets ?? []).map((p) => [p.name, p]));
+    let keptPresets = 0;
+    for (const p of model.presets) {
+      const old = prevPresets.get(p.name);
+      if (!old) continue;
+      if (old.id) p.id = old.id;
+      if (old.createdAt != null) p.createdAt = old.createdAt;
+      keptPresets++;
+    }
+    if (keptPresets) preserved += ` +${keptPresets} preset ids`;
   } catch { /* unreadable / older format — just write a fresh file */ }
 }
 

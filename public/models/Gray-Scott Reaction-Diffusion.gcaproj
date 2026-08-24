@@ -103,7 +103,24 @@
       "id": "ortho",
       "name": "Orthogonal (von Neumann)",
       "description": "The 4 edge-adjacent neighbors. Weight 0.2 each in the 9-point Laplacian.",
-      "coords": [[-1,0], [1,0], [0,-1], [0,1]],
+      "coords": [
+        [
+          -1,
+          0
+        ],
+        [
+          1,
+          0
+        ],
+        [
+          0,
+          -1
+        ],
+        [
+          0,
+          1
+        ]
+      ],
       "margin": 1,
       "includeCentralCell": false
     },
@@ -111,7 +128,24 @@
       "id": "diag",
       "name": "Diagonal (corners)",
       "description": "The 4 corner neighbors. Weight 0.05 each in the 9-point Laplacian.",
-      "coords": [[-1,-1], [-1,1], [1,-1], [1,1]],
+      "coords": [
+        [
+          -1,
+          -1
+        ],
+        [
+          -1,
+          1
+        ],
+        [
+          1,
+          -1
+        ],
+        [
+          1,
+          1
+        ]
+      ],
       "margin": 1,
       "includeCentralCell": false
     }
@@ -176,106 +210,629 @@
   ],
   "indicators": [],
   "graphNodes": [
-    {"id":"nmp5cobla695o","type":"caNode","position":{"x":0,"y":0},"data":{"nodeType":"step","config":{}}},
-    {"id":"nmp5coblazbu7","type":"caNode","position":{"x":0,"y":180},"data":{"nodeType":"getCellAttribute","config":{"attributeId":"U"}}},
-    {"id":"nmp5coblaw6oa","type":"caNode","position":{"x":0,"y":270},"data":{"nodeType":"getCellAttribute","config":{"attributeId":"V"}}},
-    {"id":"nmp5cobla7j42","type":"caNode","position":{"x":0,"y":450},"data":{"nodeType":"getModelAttribute","config":{"attributeId":"F","isColorAttr":false}}},
-    {"id":"nmp5coblas324","type":"caNode","position":{"x":0,"y":540},"data":{"nodeType":"getModelAttribute","config":{"attributeId":"k","isColorAttr":false}}},
-    {"id":"nmp5coblaw6o3","type":"caNode","position":{"x":0,"y":630},"data":{"nodeType":"getModelAttribute","config":{"attributeId":"Du","isColorAttr":false}}},
-    {"id":"nmp5coblarn83","type":"caNode","position":{"x":0,"y":720},"data":{"nodeType":"getModelAttribute","config":{"attributeId":"Dv","isColorAttr":false}}},
-    {"id":"nmp5coblaa96m","type":"caNode","position":{"x":0,"y":810},"data":{"nodeType":"getModelAttribute","config":{"attributeId":"dt","isColorAttr":false}}},
-    {"id":"nmp5coblabzot","type":"caNode","position":{"x":0,"y":990},"data":{"nodeType":"getNeighborsAttribute","config":{"neighborhoodId":"ortho","attributeId":"U"}}},
-    {"id":"nmp5coblaqldh","type":"caNode","position":{"x":0,"y":1080},"data":{"nodeType":"getNeighborsAttribute","config":{"neighborhoodId":"diag","attributeId":"U"}}},
-    {"id":"nmp5cobla5dtz","type":"caNode","position":{"x":0,"y":1170},"data":{"nodeType":"getNeighborsAttribute","config":{"neighborhoodId":"ortho","attributeId":"V"}}},
-    {"id":"nmp5coblayy9s","type":"caNode","position":{"x":0,"y":1260},"data":{"nodeType":"getNeighborsAttribute","config":{"neighborhoodId":"diag","attributeId":"V"}}},
-    {"id":"nmp5coblay1g7","type":"caNode","position":{"x":230,"y":990},"data":{"nodeType":"aggregate","config":{"operation":"sum"}}},
-    {"id":"nmp5coblam0j8","type":"caNode","position":{"x":230,"y":1080},"data":{"nodeType":"aggregate","config":{"operation":"sum"}}},
-    {"id":"nmp5coblamopq","type":"caNode","position":{"x":230,"y":1170},"data":{"nodeType":"aggregate","config":{"operation":"sum"}}},
-    {"id":"nmp5coblayor8","type":"caNode","position":{"x":230,"y":1260},"data":{"nodeType":"aggregate","config":{"operation":"sum"}}},
-    {"id":"nmp5coblbryqd","type":"caNode","position":{"x":460,"y":990},"data":{"nodeType":"arithmeticOperator","config":{"operation":"*","_port_y":"0.2"}}},
-    {"id":"nmp5coblb3at8","type":"caNode","position":{"x":460,"y":1080},"data":{"nodeType":"arithmeticOperator","config":{"operation":"*","_port_y":"0.05"}}},
-    {"id":"nmp5coblbmkug","type":"caNode","position":{"x":690,"y":990},"data":{"nodeType":"arithmeticOperator","config":{"operation":"+"}}},
-    {"id":"nmp5coblbahds","type":"caNode","position":{"x":920,"y":990},"data":{"nodeType":"arithmeticOperator","config":{"operation":"-"}}},
-    {"id":"nmp5coblbuy4a","type":"caNode","position":{"x":460,"y":1170},"data":{"nodeType":"arithmeticOperator","config":{"operation":"*","_port_y":"0.2"}}},
-    {"id":"nmp5coblbqbcc","type":"caNode","position":{"x":460,"y":1260},"data":{"nodeType":"arithmeticOperator","config":{"operation":"*","_port_y":"0.05"}}},
-    {"id":"nmp5coblb7app","type":"caNode","position":{"x":690,"y":1170},"data":{"nodeType":"arithmeticOperator","config":{"operation":"+"}}},
-    {"id":"nmp5coblbl2vd","type":"caNode","position":{"x":920,"y":1170},"data":{"nodeType":"arithmeticOperator","config":{"operation":"-"}}},
-    {"id":"nmp5coblb0oa0","type":"caNode","position":{"x":230,"y":180},"data":{"nodeType":"arithmeticOperator","config":{"operation":"*"}}},
-    {"id":"nmp5coblbwwpd","type":"caNode","position":{"x":460,"y":180},"data":{"nodeType":"arithmeticOperator","config":{"operation":"*"}}},
-    {"id":"nmp5coblbkuk0","type":"caNode","position":{"x":1150,"y":630},"data":{"nodeType":"arithmeticOperator","config":{"operation":"*"}}},
-    {"id":"nmp5coblbfq6z","type":"caNode","position":{"x":230,"y":360},"data":{"nodeType":"arithmeticOperator","config":{"operation":"-","_port_x":"1.0"}}},
-    {"id":"nmp5coblblj3w","type":"caNode","position":{"x":460,"y":360},"data":{"nodeType":"arithmeticOperator","config":{"operation":"*"}}},
-    {"id":"nmp5coblbth0c","type":"caNode","position":{"x":1380,"y":360},"data":{"nodeType":"arithmeticOperator","config":{"operation":"-"}}},
-    {"id":"nmp5coblb2br9","type":"caNode","position":{"x":1610,"y":360},"data":{"nodeType":"arithmeticOperator","config":{"operation":"+"}}},
-    {"id":"nmp5coblb4fgv","type":"caNode","position":{"x":1840,"y":360},"data":{"nodeType":"arithmeticOperator","config":{"operation":"*"}}},
-    {"id":"nmp5coblbeliw","type":"caNode","position":{"x":2070,"y":360},"data":{"nodeType":"arithmeticOperator","config":{"operation":"+"}}},
-    {"id":"nmp5coblblaho","type":"caNode","position":{"x":230,"y":540},"data":{"nodeType":"arithmeticOperator","config":{"operation":"+"}}},
-    {"id":"nmp5coblbpi71","type":"caNode","position":{"x":1150,"y":810},"data":{"nodeType":"arithmeticOperator","config":{"operation":"*"}}},
-    {"id":"nmp5coblble7a","type":"caNode","position":{"x":460,"y":540},"data":{"nodeType":"arithmeticOperator","config":{"operation":"*"}}},
-    {"id":"nmp5coblbq62o","type":"caNode","position":{"x":1380,"y":810},"data":{"nodeType":"arithmeticOperator","config":{"operation":"+"}}},
-    {"id":"nmp5coblbw7sc","type":"caNode","position":{"x":1610,"y":810},"data":{"nodeType":"arithmeticOperator","config":{"operation":"-"}}},
-    {"id":"nmp5coblbti13","type":"caNode","position":{"x":1840,"y":810},"data":{"nodeType":"arithmeticOperator","config":{"operation":"*"}}},
-    {"id":"nmp5coblbx87b","type":"caNode","position":{"x":2070,"y":810},"data":{"nodeType":"arithmeticOperator","config":{"operation":"+"}}},
-    {"id":"nmp5coblbxvvt","type":"caNode","position":{"x":2300,"y":360},"data":{"nodeType":"setAttribute","config":{"attributeId":"U"}}},
-    {"id":"nmp5coblbtbd8","type":"caNode","position":{"x":2300,"y":810},"data":{"nodeType":"setAttribute","config":{"attributeId":"V"}}},
-    {"id":"nmp5coblbqwci","type":"caNode","position":{"x":0,"y":1620},"data":{"nodeType":"inputColor","config":{"mappingId":"seed"}}},
-    {"id":"nmp5coblbnwmj","type":"caNode","position":{"x":230,"y":1620},"data":{"nodeType":"setAttribute","config":{"attributeId":"U","_port_value":"0.5"}}},
-    {"id":"nmp5coblbwaam","type":"caNode","position":{"x":230,"y":1710},"data":{"nodeType":"setAttribute","config":{"attributeId":"V","_port_value":"0.25"}}}
+    {
+      "id": "nmt71wqt8qhxv",
+      "type": "caNode",
+      "position": {
+        "x": 0,
+        "y": 0
+      },
+      "data": {
+        "nodeType": "step",
+        "config": {}
+      }
+    },
+    {
+      "id": "nmt71wqt8n045",
+      "type": "caNode",
+      "position": {
+        "x": 0,
+        "y": 180
+      },
+      "data": {
+        "nodeType": "getCellAttribute",
+        "config": {
+          "attributeId": "U"
+        }
+      }
+    },
+    {
+      "id": "nmt71wqt8rnbw",
+      "type": "caNode",
+      "position": {
+        "x": 0,
+        "y": 270
+      },
+      "data": {
+        "nodeType": "getCellAttribute",
+        "config": {
+          "attributeId": "V"
+        }
+      }
+    },
+    {
+      "id": "nmt71wqt8bh05",
+      "type": "caNode",
+      "position": {
+        "x": 0,
+        "y": 450
+      },
+      "data": {
+        "nodeType": "getModelAttribute",
+        "config": {
+          "attributeId": "F",
+          "isColorAttr": false
+        }
+      }
+    },
+    {
+      "id": "nmt71wqt8e51w",
+      "type": "caNode",
+      "position": {
+        "x": 0,
+        "y": 540
+      },
+      "data": {
+        "nodeType": "getModelAttribute",
+        "config": {
+          "attributeId": "k",
+          "isColorAttr": false
+        }
+      }
+    },
+    {
+      "id": "nmt71wqt8xrzy",
+      "type": "caNode",
+      "position": {
+        "x": 0,
+        "y": 630
+      },
+      "data": {
+        "nodeType": "getModelAttribute",
+        "config": {
+          "attributeId": "Du",
+          "isColorAttr": false
+        }
+      }
+    },
+    {
+      "id": "nmt71wqt8wrgh",
+      "type": "caNode",
+      "position": {
+        "x": 0,
+        "y": 720
+      },
+      "data": {
+        "nodeType": "getModelAttribute",
+        "config": {
+          "attributeId": "Dv",
+          "isColorAttr": false
+        }
+      }
+    },
+    {
+      "id": "nmt71wqt8k8xp",
+      "type": "caNode",
+      "position": {
+        "x": 0,
+        "y": 810
+      },
+      "data": {
+        "nodeType": "getModelAttribute",
+        "config": {
+          "attributeId": "dt",
+          "isColorAttr": false
+        }
+      }
+    },
+    {
+      "id": "nmt71wqt8tgul",
+      "type": "caNode",
+      "position": {
+        "x": 0,
+        "y": 990
+      },
+      "data": {
+        "nodeType": "getNeighborsAttribute",
+        "config": {
+          "neighborhoodId": "ortho",
+          "attributeId": "U"
+        }
+      }
+    },
+    {
+      "id": "nmt71wqt8i9br",
+      "type": "caNode",
+      "position": {
+        "x": 0,
+        "y": 1080
+      },
+      "data": {
+        "nodeType": "getNeighborsAttribute",
+        "config": {
+          "neighborhoodId": "diag",
+          "attributeId": "U"
+        }
+      }
+    },
+    {
+      "id": "nmt71wqt8vk76",
+      "type": "caNode",
+      "position": {
+        "x": 0,
+        "y": 1170
+      },
+      "data": {
+        "nodeType": "getNeighborsAttribute",
+        "config": {
+          "neighborhoodId": "ortho",
+          "attributeId": "V"
+        }
+      }
+    },
+    {
+      "id": "nmt71wqt80gej",
+      "type": "caNode",
+      "position": {
+        "x": 0,
+        "y": 1260
+      },
+      "data": {
+        "nodeType": "getNeighborsAttribute",
+        "config": {
+          "neighborhoodId": "diag",
+          "attributeId": "V"
+        }
+      }
+    },
+    {
+      "id": "nmt71wqt8tcq8",
+      "type": "caNode",
+      "position": {
+        "x": 230,
+        "y": 990
+      },
+      "data": {
+        "nodeType": "aggregate",
+        "config": {
+          "operation": "sum"
+        }
+      }
+    },
+    {
+      "id": "nmt71wqt8zjpp",
+      "type": "caNode",
+      "position": {
+        "x": 230,
+        "y": 1080
+      },
+      "data": {
+        "nodeType": "aggregate",
+        "config": {
+          "operation": "sum"
+        }
+      }
+    },
+    {
+      "id": "nmt71wqt85frc",
+      "type": "caNode",
+      "position": {
+        "x": 230,
+        "y": 1170
+      },
+      "data": {
+        "nodeType": "aggregate",
+        "config": {
+          "operation": "sum"
+        }
+      }
+    },
+    {
+      "id": "nmt71wqt8tfuk",
+      "type": "caNode",
+      "position": {
+        "x": 230,
+        "y": 1260
+      },
+      "data": {
+        "nodeType": "aggregate",
+        "config": {
+          "operation": "sum"
+        }
+      }
+    },
+    {
+      "id": "nmt71wqt8hwnk",
+      "type": "caNode",
+      "position": {
+        "x": 460,
+        "y": 990
+      },
+      "data": {
+        "nodeType": "expression",
+        "config": {
+          "expression": "0.2*orthoSum + 0.05*diagSum - u",
+          "visibleCount": 3,
+          "_varName_a": "orthoSum",
+          "_varName_b": "diagSum",
+          "_varName_c": "u"
+        },
+        "label": "U diffusion (∇²U)"
+      }
+    },
+    {
+      "id": "nmt71wqt8ip58",
+      "type": "caNode",
+      "position": {
+        "x": 460,
+        "y": 1170
+      },
+      "data": {
+        "nodeType": "expression",
+        "config": {
+          "expression": "0.2*orthoSum + 0.05*diagSum - v",
+          "visibleCount": 3,
+          "_varName_a": "orthoSum",
+          "_varName_b": "diagSum",
+          "_varName_c": "v"
+        },
+        "label": "V diffusion (∇²V)"
+      }
+    },
+    {
+      "id": "nmt71wqt9o1cn",
+      "type": "caNode",
+      "position": {
+        "x": 460,
+        "y": 180
+      },
+      "data": {
+        "nodeType": "expression",
+        "config": {
+          "expression": "u * (v * v)",
+          "visibleCount": 2,
+          "_varName_a": "u",
+          "_varName_b": "v"
+        },
+        "label": "Reaction (U·V²)"
+      }
+    },
+    {
+      "id": "nmt71wqt9ozzk",
+      "type": "caNode",
+      "position": {
+        "x": 690,
+        "y": 360
+      },
+      "data": {
+        "nodeType": "expression",
+        "config": {
+          "expression": "u + (Du*lapU - uvv + F*(1 - u)) * dt",
+          "visibleCount": 6,
+          "_varName_a": "u",
+          "_varName_b": "Du",
+          "_varName_c": "lapU",
+          "_varName_d": "uvv",
+          "_varName_e": "F",
+          "_varName_f": "dt"
+        },
+        "label": "U update (U′)"
+      }
+    },
+    {
+      "id": "nmt71wqt91nif",
+      "type": "caNode",
+      "position": {
+        "x": 690,
+        "y": 810
+      },
+      "data": {
+        "nodeType": "expression",
+        "config": {
+          "expression": "v + (Dv*lapV + uvv - (F + k)*v) * dt",
+          "visibleCount": 7,
+          "_varName_a": "v",
+          "_varName_b": "Dv",
+          "_varName_c": "lapV",
+          "_varName_d": "uvv",
+          "_varName_e": "F",
+          "_varName_f": "k",
+          "_varName_g": "dt"
+        },
+        "label": "V update (V′)"
+      }
+    },
+    {
+      "id": "nmt71wqt92e4y",
+      "type": "caNode",
+      "position": {
+        "x": 920,
+        "y": 360
+      },
+      "data": {
+        "nodeType": "setAttribute",
+        "config": {
+          "attributeId": "U"
+        }
+      }
+    },
+    {
+      "id": "nmt71wqt9zwb4",
+      "type": "caNode",
+      "position": {
+        "x": 920,
+        "y": 810
+      },
+      "data": {
+        "nodeType": "setAttribute",
+        "config": {
+          "attributeId": "V"
+        }
+      }
+    },
+    {
+      "id": "nmt71wqt9j8o8",
+      "type": "caNode",
+      "position": {
+        "x": 0,
+        "y": 1620
+      },
+      "data": {
+        "nodeType": "inputColor",
+        "config": {
+          "mappingId": "seed"
+        }
+      }
+    },
+    {
+      "id": "nmt71wqt9euax",
+      "type": "caNode",
+      "position": {
+        "x": 230,
+        "y": 1620
+      },
+      "data": {
+        "nodeType": "setAttribute",
+        "config": {
+          "attributeId": "U",
+          "_port_value": "0.5"
+        }
+      }
+    },
+    {
+      "id": "nmt71wqt9xj0c",
+      "type": "caNode",
+      "position": {
+        "x": 230,
+        "y": 1710
+      },
+      "data": {
+        "nodeType": "setAttribute",
+        "config": {
+          "attributeId": "V",
+          "_port_value": "0.25"
+        }
+      }
+    }
   ],
   "graphEdges": [
-    {"id":"emp5cobla7d6z","source":"nmp5coblabzot","target":"nmp5coblay1g7","sourceHandle":"output_value_values","targetHandle":"input_value_values"},
-    {"id":"emp5coblak9q5","source":"nmp5coblaqldh","target":"nmp5coblam0j8","sourceHandle":"output_value_values","targetHandle":"input_value_values"},
-    {"id":"emp5cobla9crk","source":"nmp5cobla5dtz","target":"nmp5coblamopq","sourceHandle":"output_value_values","targetHandle":"input_value_values"},
-    {"id":"emp5coblbsi11","source":"nmp5coblayy9s","target":"nmp5coblayor8","sourceHandle":"output_value_values","targetHandle":"input_value_values"},
-    {"id":"emp5coblbfqxk","source":"nmp5coblay1g7","target":"nmp5coblbryqd","sourceHandle":"output_value_result","targetHandle":"input_value_x"},
-    {"id":"emp5coblbify1","source":"nmp5coblam0j8","target":"nmp5coblb3at8","sourceHandle":"output_value_result","targetHandle":"input_value_x"},
-    {"id":"emp5coblbjfe0","source":"nmp5coblbryqd","target":"nmp5coblbmkug","sourceHandle":"output_value_result","targetHandle":"input_value_x"},
-    {"id":"emp5coblbapm0","source":"nmp5coblb3at8","target":"nmp5coblbmkug","sourceHandle":"output_value_result","targetHandle":"input_value_y"},
-    {"id":"emp5coblbtgfv","source":"nmp5coblbmkug","target":"nmp5coblbahds","sourceHandle":"output_value_result","targetHandle":"input_value_x"},
-    {"id":"emp5coblbo7xa","source":"nmp5coblazbu7","target":"nmp5coblbahds","sourceHandle":"output_value_value","targetHandle":"input_value_y"},
-    {"id":"emp5coblb8wtg","source":"nmp5coblamopq","target":"nmp5coblbuy4a","sourceHandle":"output_value_result","targetHandle":"input_value_x"},
-    {"id":"emp5coblbh9b5","source":"nmp5coblayor8","target":"nmp5coblbqbcc","sourceHandle":"output_value_result","targetHandle":"input_value_x"},
-    {"id":"emp5coblbjlya","source":"nmp5coblbuy4a","target":"nmp5coblb7app","sourceHandle":"output_value_result","targetHandle":"input_value_x"},
-    {"id":"emp5coblbocps","source":"nmp5coblbqbcc","target":"nmp5coblb7app","sourceHandle":"output_value_result","targetHandle":"input_value_y"},
-    {"id":"emp5coblbjjns","source":"nmp5coblb7app","target":"nmp5coblbl2vd","sourceHandle":"output_value_result","targetHandle":"input_value_x"},
-    {"id":"emp5coblbjsoi","source":"nmp5coblaw6oa","target":"nmp5coblbl2vd","sourceHandle":"output_value_value","targetHandle":"input_value_y"},
-    {"id":"emp5coblbf7w4","source":"nmp5coblaw6oa","target":"nmp5coblb0oa0","sourceHandle":"output_value_value","targetHandle":"input_value_x"},
-    {"id":"emp5coblbplrp","source":"nmp5coblaw6oa","target":"nmp5coblb0oa0","sourceHandle":"output_value_value","targetHandle":"input_value_y"},
-    {"id":"emp5coblbt7e5","source":"nmp5coblazbu7","target":"nmp5coblbwwpd","sourceHandle":"output_value_value","targetHandle":"input_value_x"},
-    {"id":"emp5coblbnf33","source":"nmp5coblb0oa0","target":"nmp5coblbwwpd","sourceHandle":"output_value_result","targetHandle":"input_value_y"},
-    {"id":"emp5coblbs7or","source":"nmp5coblaw6o3","target":"nmp5coblbkuk0","sourceHandle":"output_value_value","targetHandle":"input_value_x"},
-    {"id":"emp5coblb11mu","source":"nmp5coblbahds","target":"nmp5coblbkuk0","sourceHandle":"output_value_result","targetHandle":"input_value_y"},
-    {"id":"emp5coblbqr7m","source":"nmp5coblazbu7","target":"nmp5coblbfq6z","sourceHandle":"output_value_value","targetHandle":"input_value_y"},
-    {"id":"emp5coblb5ej9","source":"nmp5cobla7j42","target":"nmp5coblblj3w","sourceHandle":"output_value_value","targetHandle":"input_value_x"},
-    {"id":"emp5coblbw2oh","source":"nmp5coblbfq6z","target":"nmp5coblblj3w","sourceHandle":"output_value_result","targetHandle":"input_value_y"},
-    {"id":"emp5coblb40zm","source":"nmp5coblbkuk0","target":"nmp5coblbth0c","sourceHandle":"output_value_result","targetHandle":"input_value_x"},
-    {"id":"emp5coblbc6vb","source":"nmp5coblbwwpd","target":"nmp5coblbth0c","sourceHandle":"output_value_result","targetHandle":"input_value_y"},
-    {"id":"emp5coblbezom","source":"nmp5coblbth0c","target":"nmp5coblb2br9","sourceHandle":"output_value_result","targetHandle":"input_value_x"},
-    {"id":"emp5coblbcvmr","source":"nmp5coblblj3w","target":"nmp5coblb2br9","sourceHandle":"output_value_result","targetHandle":"input_value_y"},
-    {"id":"emp5coblb3csm","source":"nmp5coblb2br9","target":"nmp5coblb4fgv","sourceHandle":"output_value_result","targetHandle":"input_value_x"},
-    {"id":"emp5coblbbldj","source":"nmp5coblaa96m","target":"nmp5coblb4fgv","sourceHandle":"output_value_value","targetHandle":"input_value_y"},
-    {"id":"emp5coblbkli9","source":"nmp5coblazbu7","target":"nmp5coblbeliw","sourceHandle":"output_value_value","targetHandle":"input_value_x"},
-    {"id":"emp5coblblr2z","source":"nmp5coblb4fgv","target":"nmp5coblbeliw","sourceHandle":"output_value_result","targetHandle":"input_value_y"},
-    {"id":"emp5coblbc1jw","source":"nmp5cobla7j42","target":"nmp5coblblaho","sourceHandle":"output_value_value","targetHandle":"input_value_x"},
-    {"id":"emp5coblb1kmr","source":"nmp5coblas324","target":"nmp5coblblaho","sourceHandle":"output_value_value","targetHandle":"input_value_y"},
-    {"id":"emp5coblbdshc","source":"nmp5coblarn83","target":"nmp5coblbpi71","sourceHandle":"output_value_value","targetHandle":"input_value_x"},
-    {"id":"emp5coblbsycd","source":"nmp5coblbl2vd","target":"nmp5coblbpi71","sourceHandle":"output_value_result","targetHandle":"input_value_y"},
-    {"id":"emp5coblbicij","source":"nmp5coblblaho","target":"nmp5coblble7a","sourceHandle":"output_value_result","targetHandle":"input_value_x"},
-    {"id":"emp5coblbcayv","source":"nmp5coblaw6oa","target":"nmp5coblble7a","sourceHandle":"output_value_value","targetHandle":"input_value_y"},
-    {"id":"emp5coblbtrwd","source":"nmp5coblbpi71","target":"nmp5coblbq62o","sourceHandle":"output_value_result","targetHandle":"input_value_x"},
-    {"id":"emp5coblbh79a","source":"nmp5coblbwwpd","target":"nmp5coblbq62o","sourceHandle":"output_value_result","targetHandle":"input_value_y"},
-    {"id":"emp5coblb9zv2","source":"nmp5coblbq62o","target":"nmp5coblbw7sc","sourceHandle":"output_value_result","targetHandle":"input_value_x"},
-    {"id":"emp5coblbpabk","source":"nmp5coblble7a","target":"nmp5coblbw7sc","sourceHandle":"output_value_result","targetHandle":"input_value_y"},
-    {"id":"emp5coblbobx0","source":"nmp5coblbw7sc","target":"nmp5coblbti13","sourceHandle":"output_value_result","targetHandle":"input_value_x"},
-    {"id":"emp5coblb4wsm","source":"nmp5coblaa96m","target":"nmp5coblbti13","sourceHandle":"output_value_value","targetHandle":"input_value_y"},
-    {"id":"emp5coblbv730","source":"nmp5coblaw6oa","target":"nmp5coblbx87b","sourceHandle":"output_value_value","targetHandle":"input_value_x"},
-    {"id":"emp5coblbz1vq","source":"nmp5coblbti13","target":"nmp5coblbx87b","sourceHandle":"output_value_result","targetHandle":"input_value_y"},
-    {"id":"emp5coblbfr2f","source":"nmp5cobla695o","target":"nmp5coblbxvvt","sourceHandle":"output_flow_do","targetHandle":"input_flow_do"},
-    {"id":"emp5coblbud84","source":"nmp5cobla695o","target":"nmp5coblbtbd8","sourceHandle":"output_flow_do","targetHandle":"input_flow_do"},
-    {"id":"emp5coblbswlw","source":"nmp5coblbeliw","target":"nmp5coblbxvvt","sourceHandle":"output_value_result","targetHandle":"input_value_value"},
-    {"id":"emp5coblb1t7c","source":"nmp5coblbx87b","target":"nmp5coblbtbd8","sourceHandle":"output_value_result","targetHandle":"input_value_value"},
-    {"id":"emp5coblbvtrn","source":"nmp5coblbqwci","target":"nmp5coblbnwmj","sourceHandle":"output_flow_do","targetHandle":"input_flow_do"},
-    {"id":"emp5coblbncpu","source":"nmp5coblbqwci","target":"nmp5coblbwaam","sourceHandle":"output_flow_do","targetHandle":"input_flow_do"}
+    {
+      "id": "emt71wqt8tvgy",
+      "source": "nmt71wqt8tgul",
+      "target": "nmt71wqt8tcq8",
+      "sourceHandle": "output_value_values",
+      "targetHandle": "input_value_values"
+    },
+    {
+      "id": "emt71wqt8w0tf",
+      "source": "nmt71wqt8i9br",
+      "target": "nmt71wqt8zjpp",
+      "sourceHandle": "output_value_values",
+      "targetHandle": "input_value_values"
+    },
+    {
+      "id": "emt71wqt8vcfw",
+      "source": "nmt71wqt8vk76",
+      "target": "nmt71wqt85frc",
+      "sourceHandle": "output_value_values",
+      "targetHandle": "input_value_values"
+    },
+    {
+      "id": "emt71wqt8tb5w",
+      "source": "nmt71wqt80gej",
+      "target": "nmt71wqt8tfuk",
+      "sourceHandle": "output_value_values",
+      "targetHandle": "input_value_values"
+    },
+    {
+      "id": "emt71wqt8r4sp",
+      "source": "nmt71wqt8tcq8",
+      "target": "nmt71wqt8hwnk",
+      "sourceHandle": "output_value_result",
+      "targetHandle": "input_value_a"
+    },
+    {
+      "id": "emt71wqt8vpq2",
+      "source": "nmt71wqt8zjpp",
+      "target": "nmt71wqt8hwnk",
+      "sourceHandle": "output_value_result",
+      "targetHandle": "input_value_b"
+    },
+    {
+      "id": "emt71wqt8k0ro",
+      "source": "nmt71wqt8n045",
+      "target": "nmt71wqt8hwnk",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_c"
+    },
+    {
+      "id": "emt71wqt8jbmf",
+      "source": "nmt71wqt85frc",
+      "target": "nmt71wqt8ip58",
+      "sourceHandle": "output_value_result",
+      "targetHandle": "input_value_a"
+    },
+    {
+      "id": "emt71wqt8eng9",
+      "source": "nmt71wqt8tfuk",
+      "target": "nmt71wqt8ip58",
+      "sourceHandle": "output_value_result",
+      "targetHandle": "input_value_b"
+    },
+    {
+      "id": "emt71wqt9af4k",
+      "source": "nmt71wqt8rnbw",
+      "target": "nmt71wqt8ip58",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_c"
+    },
+    {
+      "id": "emt71wqt9zoyu",
+      "source": "nmt71wqt8n045",
+      "target": "nmt71wqt9o1cn",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_a"
+    },
+    {
+      "id": "emt71wqt9ek3d",
+      "source": "nmt71wqt8rnbw",
+      "target": "nmt71wqt9o1cn",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_b"
+    },
+    {
+      "id": "emt71wqt9jf9w",
+      "source": "nmt71wqt8n045",
+      "target": "nmt71wqt9ozzk",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_a"
+    },
+    {
+      "id": "emt71wqt9yw6p",
+      "source": "nmt71wqt8xrzy",
+      "target": "nmt71wqt9ozzk",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_b"
+    },
+    {
+      "id": "emt71wqt9ls3s",
+      "source": "nmt71wqt8hwnk",
+      "target": "nmt71wqt9ozzk",
+      "sourceHandle": "output_value_result",
+      "targetHandle": "input_value_c"
+    },
+    {
+      "id": "emt71wqt9zmp7",
+      "source": "nmt71wqt9o1cn",
+      "target": "nmt71wqt9ozzk",
+      "sourceHandle": "output_value_result",
+      "targetHandle": "input_value_d"
+    },
+    {
+      "id": "emt71wqt9w93u",
+      "source": "nmt71wqt8bh05",
+      "target": "nmt71wqt9ozzk",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_e"
+    },
+    {
+      "id": "emt71wqt97hso",
+      "source": "nmt71wqt8k8xp",
+      "target": "nmt71wqt9ozzk",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_f"
+    },
+    {
+      "id": "emt71wqt9ycgv",
+      "source": "nmt71wqt8rnbw",
+      "target": "nmt71wqt91nif",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_a"
+    },
+    {
+      "id": "emt71wqt926lg",
+      "source": "nmt71wqt8wrgh",
+      "target": "nmt71wqt91nif",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_b"
+    },
+    {
+      "id": "emt71wqt9gzp9",
+      "source": "nmt71wqt8ip58",
+      "target": "nmt71wqt91nif",
+      "sourceHandle": "output_value_result",
+      "targetHandle": "input_value_c"
+    },
+    {
+      "id": "emt71wqt9ue51",
+      "source": "nmt71wqt9o1cn",
+      "target": "nmt71wqt91nif",
+      "sourceHandle": "output_value_result",
+      "targetHandle": "input_value_d"
+    },
+    {
+      "id": "emt71wqt9f8j7",
+      "source": "nmt71wqt8bh05",
+      "target": "nmt71wqt91nif",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_e"
+    },
+    {
+      "id": "emt71wqt9etde",
+      "source": "nmt71wqt8e51w",
+      "target": "nmt71wqt91nif",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_f"
+    },
+    {
+      "id": "emt71wqt9ctry",
+      "source": "nmt71wqt8k8xp",
+      "target": "nmt71wqt91nif",
+      "sourceHandle": "output_value_value",
+      "targetHandle": "input_value_g"
+    },
+    {
+      "id": "emt71wqt9e42l",
+      "source": "nmt71wqt8qhxv",
+      "target": "nmt71wqt92e4y",
+      "sourceHandle": "output_flow_do",
+      "targetHandle": "input_flow_do"
+    },
+    {
+      "id": "emt71wqt9mrv6",
+      "source": "nmt71wqt8qhxv",
+      "target": "nmt71wqt9zwb4",
+      "sourceHandle": "output_flow_do",
+      "targetHandle": "input_flow_do"
+    },
+    {
+      "id": "emt71wqt95uzf",
+      "source": "nmt71wqt9ozzk",
+      "target": "nmt71wqt92e4y",
+      "sourceHandle": "output_value_result",
+      "targetHandle": "input_value_value"
+    },
+    {
+      "id": "emt71wqt92die",
+      "source": "nmt71wqt91nif",
+      "target": "nmt71wqt9zwb4",
+      "sourceHandle": "output_value_result",
+      "targetHandle": "input_value_value"
+    },
+    {
+      "id": "emt71wqt9omsk",
+      "source": "nmt71wqt9j8o8",
+      "target": "nmt71wqt9euax",
+      "sourceHandle": "output_flow_do",
+      "targetHandle": "input_flow_do"
+    },
+    {
+      "id": "emt71wqt924dx",
+      "source": "nmt71wqt9j8o8",
+      "target": "nmt71wqt9xj0c",
+      "sourceHandle": "output_flow_do",
+      "targetHandle": "input_flow_do"
+    }
   ],
   "macroDefs": [],
   "presets": [
