@@ -8,6 +8,37 @@ export interface NodeExplorerHandle {
   focusSearch: () => void;
 }
 
+/** The only node fields this panel renders: `id`, `type`, `data.nodeType`, `data.label`
+ *  (colour/description are derived from `nodeType` via the registry). */
+type ExplorerNode = { id: string; type?: string; data: Record<string, unknown>; selected?: boolean };
+
+/** Equality gate for the `useStore(state => state.nodes)` subscription.
+ *
+ *  React Flow replaces the `nodes` ARRAY (and the moved node's object) on every
+ *  pointermove of a node drag, so a bare `state.nodes` subscription re-rendered
+ *  this panel — re-filtering, re-mapping and re-rendering every row — once per
+ *  drag tick, for data a drag cannot change. Measured on the production build at
+ *  400 nodes: 7.8 → 15.0 ms median per drag tick with the panel open (mean
+ *  8.0 → 21.9 ms), i.e. the panel roughly DOUBLED the cost of dragging.
+ *
+ *  Comparing only the fields above makes a position change a no-op here (the
+ *  `x === y` fast path means an unmoved node costs one identity compare), while
+ *  a rename / add / delete / retype / reorder still returns false and re-renders.
+ *  Selection is deliberately NOT compared — the rows don't render it. */
+function sameExplorerNodes(a: ExplorerNode[], b: ExplorerNode[]): boolean {
+  if (a === b) return true;
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    const x = a[i]!, y = b[i]!;
+    if (x === y) continue;
+    if (x.id !== y.id || x.type !== y.type) return false;
+    if (x.data !== y.data && (x.data?.nodeType !== y.data?.nodeType || x.data?.label !== y.data?.label)) return false;
+  }
+  return true;
+}
+
+const selectExplorerNodes = (state: { nodes: ExplorerNode[] }) => state.nodes;
+
 export const NodeExplorer = forwardRef<NodeExplorerHandle>(function NodeExplorer(_props, ref) {
   const [search, setSearch] = useState('');
   const { fitView } = useReactFlow();
@@ -17,13 +48,7 @@ export const NodeExplorer = forwardRef<NodeExplorerHandle>(function NodeExplorer
     focusSearch: () => searchRef.current?.focus(),
   }));
 
-  const nodes = useStore(
-    useCallback(
-      (state: { nodes: Array<{ id: string; type?: string; data: Record<string, unknown>; selected?: boolean }> }) =>
-        state.nodes,
-      [],
-    ),
-  );
+  const nodes = useStore(selectExplorerNodes, sameExplorerNodes);
 
   const filtered = useMemo(() => {
     const q = search.toLowerCase();
