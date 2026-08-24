@@ -1,0 +1,489 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Plan — Macro Reference Export &amp; Import Resolution</title>
+<style>
+  :root{
+    --bg:#0c0d10; --panel:#16181d; --panel2:#1c1f26; --line:#2a2f3a;
+    --ink:#e6e8ee; --dim:#9aa2b1; --faint:#6c7484;
+    --accent:#e8a13a; --accent-soft:rgba(232,161,58,.14);
+    --ok:#4caf7d; --warn:#e0a83a; --bad:#e06666; --info:#4cc9f0; --violet:#9b7bd4;
+    --mono:ui-monospace,SFMono-Regular,"Cascadia Mono",Consolas,monospace;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font:15px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+    padding:32px 20px 80px}
+  .wrap{max-width:1080px;margin:0 auto}
+  h1{font-size:26px;margin:0 0 6px;letter-spacing:-.2px}
+  h2{font-size:19px;margin:44px 0 14px;padding-bottom:8px;border-bottom:1px solid var(--line);color:var(--accent)}
+  h3{font-size:15px;margin:26px 0 10px;color:var(--ink)}
+  p{margin:10px 0}
+  .sub{color:var(--dim);margin:0 0 26px;font-size:14px}
+  code,.mono{font-family:var(--mono);font-size:12.5px}
+  code{background:var(--panel2);border:1px solid var(--line);border-radius:4px;padding:1px 5px;color:#d8c6a0}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:18px 20px;margin:16px 0}
+  .note{border-left:3px solid var(--accent);background:var(--accent-soft);border-radius:0 8px 8px 0;padding:12px 16px;margin:16px 0;font-size:14px}
+  .bad-note{border-left:3px solid var(--bad);background:rgba(224,102,102,.10);border-radius:0 8px 8px 0;padding:12px 16px;margin:16px 0;font-size:14px}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+  @media(max-width:820px){.grid2{grid-template-columns:1fr}}
+  .tag{display:inline-block;font-size:11px;letter-spacing:.4px;text-transform:uppercase;
+    padding:2px 8px;border-radius:999px;border:1px solid var(--line);color:var(--dim);background:var(--panel2)}
+  .tag.ok{color:var(--ok);border-color:rgba(76,175,125,.4)}
+  .tag.bad{color:var(--bad);border-color:rgba(224,102,102,.4)}
+  .tag.warn{color:var(--warn);border-color:rgba(224,168,58,.4)}
+  table{border-collapse:collapse;width:100%;font-size:13.5px;margin:12px 0}
+  th,td{border:1px solid var(--line);padding:7px 10px;text-align:left;vertical-align:top}
+  th{background:var(--panel2);color:var(--dim);font-weight:600;font-size:12.5px}
+  svg{display:block;max-width:100%;height:auto;margin:6px auto}
+  /* ---- mock UI ---- */
+  .dlg{background:var(--panel);border:1px solid var(--line);border-radius:10px;
+    box-shadow:0 18px 48px rgba(0,0,0,.55);overflow:hidden;margin:14px 0}
+  .dlg-hd{padding:14px 18px;border-bottom:1px solid var(--line);background:var(--panel2)}
+  .dlg-hd .t{font-size:15px;font-weight:600}
+  .dlg-hd .s{font-size:12.5px;color:var(--faint);margin-top:3px}
+  .dlg-bd{padding:8px 18px 16px}
+  .dlg-ft{padding:12px 18px;border-top:1px solid var(--line);display:flex;justify-content:space-between;
+    align-items:center;gap:12px;background:var(--panel2)}
+  .btn{border:1px solid var(--line);background:var(--panel);color:var(--ink);border-radius:6px;
+    padding:6px 14px;font-size:13px}
+  .btn.pri{background:var(--accent);border-color:var(--accent);color:#20160a;font-weight:600}
+  .sect{font-size:11px;text-transform:uppercase;letter-spacing:.6px;color:var(--faint);
+    margin:16px 0 6px;padding-bottom:4px;border-bottom:1px solid var(--line)}
+  .row{display:grid;grid-template-columns:1fr auto;gap:12px;align-items:center;
+    padding:9px 0;border-bottom:1px solid rgba(42,47,58,.6)}
+  .row:last-child{border-bottom:none}
+  .row .nm{font-size:13.5px}
+  .row .nm b{font-weight:600}
+  .row .meta{font-size:11.5px;color:var(--faint);margin-top:2px}
+  .row .meta.sug{color:var(--info)}
+  .row .meta.warn{color:var(--warn)}
+  .row.indent{padding-left:22px;border-left:2px solid var(--line);margin-left:4px}
+  .seg{display:inline-flex;border:1px solid var(--line);border-radius:6px;overflow:hidden;font-size:12px}
+  .seg span{padding:5px 10px;color:var(--dim);border-right:1px solid var(--line);white-space:nowrap}
+  .seg span:last-child{border-right:none}
+  .seg span.on{background:var(--accent-soft);color:var(--accent);font-weight:600}
+  .seg span.on.dis{background:rgba(224,102,102,.12);color:var(--bad)}
+  .sel{background:var(--panel2);border:1px solid var(--line);border-radius:5px;padding:4px 22px 4px 8px;
+    font-size:12px;color:var(--ink);display:inline-block;position:relative}
+  .sel::after{content:"▾";position:absolute;right:7px;top:4px;color:var(--faint);font-size:10px}
+  .cb{display:inline-block;width:13px;height:13px;border:1px solid var(--faint);border-radius:3px;
+    vertical-align:-2px;margin-right:8px;position:relative}
+  .cb.on{background:var(--accent);border-color:var(--accent)}
+  .cb.on::after{content:"✓";position:absolute;left:1.5px;top:-3px;color:#20160a;font-size:11px;font-weight:700}
+  .menu{background:var(--panel);border:1px solid var(--line);border-radius:8px;
+    box-shadow:0 12px 32px rgba(0,0,0,.5);width:230px;padding:5px;font-size:13px}
+  .menu div{padding:6px 10px;border-radius:5px;color:var(--dim)}
+  .menu div.hi{background:var(--accent-soft);color:var(--accent)}
+  .phase{display:grid;grid-template-columns:74px 1fr;gap:14px;padding:14px 0;border-bottom:1px solid var(--line)}
+  .phase:last-child{border-bottom:none}
+  .phase .p{font-family:var(--mono);font-size:13px;color:var(--accent);font-weight:700}
+  ul{margin:8px 0;padding-left:20px}li{margin:4px 0}
+  .kbd{font-family:var(--mono);font-size:11.5px;color:var(--faint)}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>Macro Reference Export &amp; Import Resolution</h1>
+<p class="sub">Illustrated plan — companion to <code>docs/IMPACT_MAP_MACRO_REFERENCES.md</code>.
+A <code>.gcamacro</code> carries the model elements its nodes reference; importing it asks,
+per element: <b>Import as new · Remap to existing · Discard</b>.</p>
+
+<!-- ============================= PROBLEM ============================= -->
+<h2>1 · The problem, in one shipped file</h2>
+
+<div class="grid2">
+  <div class="card">
+    <span class="tag bad">today</span>
+    <p style="margin-top:10px"><code>public/macros/Colorize From Neighbors number.gcamacro</code></p>
+<pre class="mono" style="margin:0;color:var(--dim);font-size:12px">"nodeType": "outputMapping",
+"config": {
+  "mappingId": <span style="color:var(--bad)">"new_mapping_mo9xiuadam3"</span>
+}</pre>
+    <p style="font-size:13.5px;color:var(--dim)">An id that exists in exactly one model on
+    earth. Dropped anywhere else: an amber badge and a manual re-point.</p>
+  </div>
+  <div class="card">
+    <span class="tag ok">after</span>
+    <p style="margin-top:10px">The same file, plus:</p>
+<pre class="mono" style="margin:0;color:var(--dim);font-size:12px">"references": {
+  "mappings": [ { "id": "new_mapping_mo9…",
+                  "name": "viz", "linked": true,
+                  "linkedAttributeId": "alive", … } ],
+  "attributes": [ { "id": "alive", … } ]
+}</pre>
+    <p style="font-size:13.5px;color:var(--dim)">Import offers to create them, point them at
+    what you already have, or discard — <b>today's behaviour is the third button</b>.</p>
+  </div>
+</div>
+
+<div class="note"><b>The governing property.</b> Zero references ⇒ the file and the import path
+are unchanged. All-Discard ⇒ byte-identical to what ships. The new path is a strict superset,
+so it cannot regress the old one.</div>
+
+<!-- ============================= FLOW ============================= -->
+<h2>2 · End-to-end flow</h2>
+
+<svg viewBox="0 0 1040 300" role="img" aria-label="Export collects references and closure into the file; import plans, prompts, rewrites and dispatches once.">
+  <defs>
+    <marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0 0 L10 5 L0 10 z" fill="#6c7484"/>
+    </marker>
+    <marker id="ara" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0 0 L10 5 L0 10 z" fill="#e8a13a"/>
+    </marker>
+  </defs>
+  <style>
+    .bx{fill:#1c1f26;stroke:#2a2f3a}
+    .bxa{fill:rgba(232,161,58,.10);stroke:#e8a13a}
+    .lb{fill:#e6e8ee;font:13px sans-serif}
+    .sm{fill:#9aa2b1;font:11px ui-monospace,monospace}
+    .ttl{fill:#6c7484;font:11px sans-serif;letter-spacing:.6px}
+    .ln{stroke:#6c7484;stroke-width:1.4;fill:none;marker-end:url(#ar)}
+    .lna{stroke:#e8a13a;stroke-width:1.6;fill:none;marker-end:url(#ara)}
+  </style>
+
+  <text class="ttl" x="20" y="22">EXPORT  (model A)</text>
+  <rect class="bx" x="20" y="34" width="150" height="56" rx="7"/>
+  <text class="lb" x="34" y="58">Macro def</text>
+  <text class="sm" x="34" y="76">+ nested defs</text>
+
+  <rect class="bxa" x="196" y="34" width="176" height="56" rx="7"/>
+  <text class="lb" x="210" y="55">collectReferences</text>
+  <text class="sm" x="210" y="74">configs → ids → closure</text>
+
+  <rect class="bx" x="398" y="34" width="152" height="56" rx="7"/>
+  <text class="lb" x="412" y="55">Export dialog</text>
+  <text class="sm" x="412" y="74">per-element opt-out</text>
+
+  <rect class="bx" x="576" y="20" width="160" height="84" rx="7"/>
+  <text class="lb" x="590" y="42">.gcamacro</text>
+  <text class="sm" x="590" y="60">macroDef</text>
+  <text class="sm" x="590" y="76">macroDefs[]</text>
+  <text class="sm" x="590" y="92">references{}</text>
+
+  <line class="ln" x1="170" y1="62" x2="192" y2="62"/>
+  <line class="ln" x1="372" y1="62" x2="394" y2="62"/>
+  <line class="ln" x1="550" y1="62" x2="572" y2="62"/>
+
+  <text class="ttl" x="20" y="160">IMPORT  (model B)</text>
+  <rect class="bx" x="20" y="172" width="150" height="56" rx="7"/>
+  <text class="lb" x="34" y="194">planImport</text>
+  <text class="sm" x="34" y="212">resolve vs model B</text>
+
+  <rect class="bxa" x="196" y="172" width="176" height="56" rx="7"/>
+  <text class="lb" x="210" y="194">Resolution dialog</text>
+  <text class="sm" x="210" y="212">new / remap / discard</text>
+
+  <rect class="bx" x="398" y="172" width="152" height="56" rx="7"/>
+  <text class="lb" x="412" y="194">applyImportPlan</text>
+  <text class="sm" x="412" y="212">rewrite, mint ids</text>
+
+  <rect class="bx" x="576" y="172" width="160" height="56" rx="7"/>
+  <text class="lb" x="590" y="194">ONE dispatch</text>
+  <text class="sm" x="590" y="212">IMPORT_MACRO_BUNDLE</text>
+
+  <rect class="bx" x="762" y="172" width="150" height="56" rx="7"/>
+  <text class="lb" x="776" y="194">Model B</text>
+  <text class="sm" x="776" y="212">0 dangling refs</text>
+
+  <path class="lna" d="M656 108 L656 140 L96 140 L96 168"/>
+  <line class="ln" x1="170" y1="200" x2="192" y2="200"/>
+  <line class="ln" x1="372" y1="200" x2="394" y2="200"/>
+  <line class="ln" x1="550" y1="200" x2="572" y2="200"/>
+  <line class="ln" x1="736" y1="200" x2="758" y2="200"/>
+
+  <rect x="196" y="248" width="716" height="34" rx="6" fill="rgba(76,201,240,.08)" stroke="#2a2f3a"/>
+  <text class="sm" x="212" y="270" fill="#9aa2b1">No UNRESOLVED reference ⇒ no dialog, no elements added — the import is exactly today's.</text>
+</svg>
+
+<!-- ============================= EXPORT ============================= -->
+<h2>3 · Export — one click, with per-element opt-out</h2>
+
+<div class="grid2">
+  <div>
+    <p style="color:var(--dim);font-size:13.5px">Right-click a macro node → the existing menu item.</p>
+    <div class="menu" style="margin-top:8px">
+      <div>Rename…</div>
+      <div>Duplicate ▸</div>
+      <div>Enter Macro</div>
+      <div>Undo Macro</div>
+      <div class="hi">Export Macro…</div>
+    </div>
+  </div>
+  <div>
+    <div class="note" style="margin-top:0">
+      <b>Why the prompt is at IMPORT, not export.</b> Remapping needs the <i>target</i>
+      model, which only exists on the import side. Export stays one click; the checkbox list
+      is there for the one element that can be megabytes — a <b>sprite</b>.
+    </div>
+  </div>
+</div>
+
+<div class="dlg">
+  <div class="dlg-hd">
+    <div class="t">Export Macro — “Decide Life State”</div>
+    <div class="s">6 referenced definitions found · uncheck to leave a reference dangling on import</div>
+  </div>
+  <div class="dlg-bd">
+    <div class="sect">Cell attributes</div>
+    <div class="row"><div><span class="cb on"></span><span class="nm"><b>alive</b> · Binary</div></div><div class="mono" style="color:var(--faint);font-size:11.5px">referenced by 3 nodes</div></div>
+    <div class="row indent"><div><span class="cb on"></span><span class="nm"><b>cellType</b> · Tag (4 options)</div><div class="meta">pulled in by <i>alive</i> → sub-attribute parent</div></div><div class="mono" style="color:var(--faint);font-size:11.5px">closure</div></div>
+
+    <div class="sect">Neighborhoods</div>
+    <div class="row"><div><span class="cb on"></span><span class="nm"><b>moore</b> · 8 cells, 4 tagged</div></div><div class="mono" style="color:var(--faint);font-size:11.5px">referenced by 2 nodes</div></div>
+
+    <div class="sect">Mappings</div>
+    <div class="row"><div><span class="cb on"></span><span class="nm"><b>viz</b> · Attribute → Color, linked</div></div><div class="mono" style="color:var(--faint);font-size:11.5px">referenced by 1 node</div></div>
+
+    <div class="sect">Sprites</div>
+    <div class="row"><div><span class="cb"></span><span class="nm"><b>bird</b> · WebP, 12 frames</div><div class="meta warn">1.8 MB — unchecked, so this reference will dangle on import</div></div><div class="mono" style="color:var(--faint);font-size:11.5px">referenced by 1 node</div></div>
+
+    <div class="sect">Cannot be carried</div>
+    <div class="row"><div><span class="nm" style="color:var(--faint)"><b>steady state</b> · preset</div><div class="meta">presets export separately as <code>.gcapreset</code> — this reference will dangle</div></div><div class="mono" style="color:var(--faint);font-size:11.5px">ovLoadPreset</div></div>
+  </div>
+  <div class="dlg-ft">
+    <span class="mono" style="font-size:12px;color:var(--faint)">Reference-free template</span>
+    <span><span class="btn">Cancel</span> <span class="btn pri">Export</span></span>
+  </div>
+</div>
+
+<!-- ============================= IMPORT ============================= -->
+<h2>4 · Import — the resolution dialog</h2>
+
+<p style="color:var(--dim);font-size:14px">Rows appear <b>only for references model B does not
+already have</b>. Everything that resolves is summarised, never asked about — which is why
+re-importing a macro into the model it came from opens no dialog at all.</p>
+
+<div class="dlg">
+  <div class="dlg-hd">
+    <div class="t">Import Macro — “Decide Life State”</div>
+    <div class="s">from <b>Kelp War</b> (2D, grid + agents) · 5 of 8 references need a decision · 3 already present</div>
+  </div>
+  <div class="dlg-bd">
+
+    <div class="sect">Cell attributes</div>
+    <div class="row">
+      <div><span class="nm"><b>alive</b> · Binary</div>
+           <div class="meta sug">↔ matched by name — <b>alive</b> (Binary) in this model</div></div>
+      <div><span class="seg"><span>Import as new</span><span class="on">Remap →</span><span>Discard</span></span>
+           <span class="sel" style="margin-left:8px">alive · Binary</span></div>
+    </div>
+    <div class="row">
+      <div><span class="nm"><b>cellType</b> · Tag (4 options)</div>
+           <div class="meta warn">⚠ remap target’s options are in a different order — indices remapped by NAME; <b>“kelp”</b> has no counterpart and is left as-is</div></div>
+      <div><span class="seg"><span>Import as new</span><span class="on">Remap →</span><span>Discard</span></span>
+           <span class="sel" style="margin-left:8px">species · Tag</span></div>
+    </div>
+    <div class="row">
+      <div><span class="nm"><b>trace</b> · Decimal</div>
+           <div class="meta">no match in this model</div></div>
+      <div><span class="seg"><span class="on">Import as new</span><span>Remap →</span><span>Discard</span></span>
+           <span class="mono" style="margin-left:8px;color:var(--faint);font-size:11.5px">→ new id</span></div>
+    </div>
+
+    <div class="sect">Neighborhoods</div>
+    <div class="row">
+      <div><span class="nm"><b>moore</b> · 8 cells, tags N/E/S/W</div>
+           <div class="meta warn">⚠ remap target has no tag named <b>“NE”</b> — Get Neighbor By Tag will badge</div></div>
+      <div><span class="seg"><span>Import as new</span><span class="on">Remap →</span><span>Discard</span></span>
+           <span class="sel" style="margin-left:8px">vonNeumann</span></div>
+    </div>
+
+    <div class="sect">Bond attributes</div>
+    <div class="row">
+      <div><span class="nm"><b>strength</b> · Decimal</div>
+           <div class="meta warn">⚠ inert until <b>Properties → Bond-Graph Agents → Bonds</b> is enabled</div></div>
+      <div><span class="seg"><span class="on">Import as new</span><span>Remap →</span><span>Discard</span></span></div>
+    </div>
+
+    <div class="sect">Sprites</div>
+    <div class="row">
+      <div><span class="nm" style="color:var(--faint)"><b>bird</b></div>
+           <div class="meta">not carried by this file — the node will reference nothing</div></div>
+      <div><span class="seg"><span>Import as new</span><span>Remap →</span><span class="on dis">Discard</span></span></div>
+    </div>
+
+    <div class="sect">Already present — nothing to do</div>
+    <div class="row"><div><span class="nm" style="color:var(--faint)">viz · mapping &nbsp;·&nbsp; energy · variable &nbsp;·&nbsp; density · indicator</div></div><div class="mono" style="color:var(--ok);font-size:11.5px">resolved</div></div>
+  </div>
+  <div class="dlg-ft">
+    <span class="mono" style="font-size:12px;color:var(--faint)">2 new · 3 remapped · 1 discarded · 2 warnings</span>
+    <span><span class="btn">Cancel</span> <span class="btn pri">Import</span></span>
+  </div>
+</div>
+
+<div class="grid2">
+  <div class="card">
+    <h3 style="margin-top:0">Default per row</h3>
+    <ul style="font-size:13.5px;color:var(--dim)">
+      <li>id already in model B → <b>not a row</b> (resolved)</li>
+      <li>exact <b>name + compatible type</b> match → <b>Remap</b>, shown as a suggestion</li>
+      <li>otherwise → <b>Import as new</b></li>
+      <li><b>Discard is never a default</b> — but it is always one click, and it is today's behaviour</li>
+    </ul>
+  </div>
+  <div class="card">
+    <h3 style="margin-top:0">Warnings, never blocks</h3>
+    <ul style="font-size:13.5px;color:var(--dim)">
+      <li>Bonds / Agents / Variegation capability off → element imported, marked inert</li>
+      <li>Remap target declares different input-mapping <b>parameters</b> → stale channel edges, reported by the compile gate</li>
+      <li>Tag options / tag names / categories with no counterpart → <b>left as-is and reported</b>, never clamped</li>
+    </ul>
+  </div>
+</div>
+
+<!-- ============================= REMAP ============================= -->
+<h2>5 · What “remap” has to rewrite — three passes, not one</h2>
+
+<div class="bad-note"><b>The single sharpest edge.</b> Two of the three reference carriers are
+<i>not config values</i>. A rewrite that only walks <code>Object.entries(config)</code> looks
+perfectly healthy and silently drops a bond's initial value — no badge, no compile error, no
+console line.</div>
+
+<svg viewBox="0 0 1000 250" role="img" aria-label="Three rewrite passes: config values, config keys, and edge handles.">
+  <style>
+    .p{fill:#1c1f26;stroke:#2a2f3a}
+    .pa{fill:rgba(232,161,58,.10);stroke:#e8a13a}
+    .pb{fill:rgba(224,102,102,.10);stroke:#e06666}
+    .h{fill:#e6e8ee;font:13px sans-serif;font-weight:600}
+    .c{fill:#9aa2b1;font:11.5px ui-monospace,monospace}
+    .n{fill:#6c7484;font:11px sans-serif}
+    .old{fill:#e06666;font:11.5px ui-monospace,monospace}
+    .new{fill:#4caf7d;font:11.5px ui-monospace,monospace}
+  </style>
+
+  <rect class="p" x="14" y="20" width="310" height="200" rx="8"/>
+  <text class="h" x="32" y="46">1 · config VALUES</text>
+  <text class="n" x="32" y="66">every REFERENCE_KEYS key + attr_N</text>
+  <text class="c" x="32" y="102">config: {</text>
+  <text class="c" x="46" y="122">attributeId:</text>
+  <text class="old" x="150" y="122">"alive_a1"</text>
+  <text class="new" x="150" y="142">"alive_z9"</text>
+  <text class="c" x="32" y="162">}</text>
+  <text class="n" x="32" y="196">the pass everyone writes ✓</text>
+
+  <rect class="pa" x="340" y="20" width="310" height="200" rx="8"/>
+  <text class="h" x="358" y="46">2 · config KEYS</text>
+  <text class="n" x="358" y="66">the id is in the KEY NAME</text>
+  <text class="c" x="358" y="102">config: {</text>
+  <text class="old" x="372" y="122">_port_bondAttr_str_a1</text>
+  <text class="c" x="600" y="122">:</text>
+  <text class="new" x="372" y="142">_port_bondAttr_str_z9</text>
+  <text class="c" x="600" y="142">: "3"</text>
+  <text class="c" x="358" y="162">}</text>
+  <text class="n" x="358" y="196">bondAttrPorts.ts — Form / Rewire Bond</text>
+
+  <rect class="pb" x="666" y="20" width="320" height="200" rx="8"/>
+  <text class="h" x="684" y="46">3 · EDGE HANDLES</text>
+  <text class="n" x="684" y="66">the id is in the wire</text>
+  <text class="c" x="684" y="102">edge.targetHandle:</text>
+  <text class="old" x="684" y="128">input_value_bondAttr_str_a1</text>
+  <text class="new" x="684" y="150">input_value_bondAttr_str_z9</text>
+  <text class="n" x="684" y="190">missed ⇒ the wire lands on a port</text>
+  <text class="n" x="684" y="206">the canvas no longer draws</text>
+</svg>
+
+<h3>…and the values that are only meaningful <i>relative to</i> the remapped element</h3>
+<table>
+  <tr><th style="width:34%">carrier</th><th style="width:26%">means</th><th>rule</th></tr>
+  <tr><td class="mono">constValue · _port_value · case_N_value · _port_x/y/y2 · partTag_&lt;i&gt;</td>
+      <td>index into <code>tagOptions</code></td>
+      <td rowspan="4">build the correspondence <b>BY NAME</b>; apply where it resolves; where a name has no counterpart <b>leave the value and REPORT it</b>. Never clamp to 0, never drop.</td></tr>
+  <tr><td class="mono">tagName · tag_N_name</td><td>a neighborhood <b>tag name</b></td></tr>
+  <tr><td class="mono">category</td><td>an indicator frequency <b>category</b></td></tr>
+  <tr><td class="mono">constValue (faceLabel)</td><td>a <b>face label</b> in the palette</td></tr>
+</table>
+
+<!-- ============================= AUDIT ============================= -->
+<h2>6 · Audit — what <code>KEY_SPACE</code> does and does not know</h2>
+
+<p style="color:var(--dim);font-size:14px"><code>danglingRefs.KEY_SPACE</code> is the closest
+thing to a registry of “which config key names which id space”. Collection extends it rather
+than widening it — widening changes the <i>compile gate</i> for models that run today.</p>
+
+<table>
+  <tr><th style="width:24%">key</th><th style="width:22%">names</th><th style="width:14%">KEY_SPACE</th><th>note</th></tr>
+  <tr><td class="mono">attributeId · tagAttributeId · tableId · partitionAttributeId · neighborhoodId · mappingId · indicatorId · variableId · spriteId · attr_N</td><td>the six known spaces</td><td><span class="tag ok">✓ known</span></td><td>inherited verbatim</td></tr>
+  <tr><td class="mono">macroDefId</td><td>macro def</td><td><span class="tag bad">gap</span></td><td>rides the <code>macroDefs</code> bundle instead; <code>REMOVE_MACRO</code> has no cascade at all</td></tr>
+  <tr><td class="mono">presetId</td><td>preset</td><td><span class="tag bad">gap</span></td><td>badged; <b>never carried</b> — <code>.gcapreset</code> owns presets</td></tr>
+  <tr><td class="mono">facePaletteId</td><td>face palette</td><td><span class="tag bad">gap</span></td><td>a 7th id space, inside <code>variegatedCells</code></td></tr>
+  <tr><td class="mono">facingAttributeId</td><td>agent vector attribute</td><td><span class="tag bad">gap</span></td><td>the compiler deliberately <i>skips</i> a dangling one — do not turn that into an error</td></tr>
+  <tr><td class="mono">_port_bondAttr_&lt;id&gt;</td><td>bond attribute</td><td><span class="tag bad">gap</span></td><td><b>id in the KEY</b> — a value scan cannot see it</td></tr>
+  <tr><td class="mono">neighborhoodHintId · valueTagAttributeId</td><td>—</td><td><span class="tag warn">dead</span></td><td><code>Attribute</code> fields, never node configs — these entries can never fire</td></tr>
+</table>
+
+<div class="bad-note"><b>Pre-existing bugs found in passing, recorded not fixed:</b> a deleted
+bond attribute leaves its <b>edge</b> behind (no <code>patchAllEdges</code> in that cascade);
+the tag-reorder <code>_port_value</code> remap has asymmetric coverage across the cell / agent /
+bond paths; and <code>REMOVE_MACRO</code>, <code>DELETE_PRESET</code> and face-palette removal
+have <b>no node cascade at all</b>.</div>
+
+<!-- ============================= PHASES ============================= -->
+<h2>7 · Phases</h2>
+
+<div class="card" style="padding:6px 20px">
+  <div class="phase">
+    <div class="p">M1</div>
+    <div>
+      <b>Collection, schema, export</b> — <span class="kbd">import unchanged</span><br>
+      <span style="color:var(--dim);font-size:13.5px">Nested-def bundling (fixes a real
+      pre-existing gap: a nested macro’s def is <i>not</i> in the file today) ·
+      <code>macroReferences.ts</code> · <code>MacroFile</code> types ·
+      export dialog · harness Tier A.</span>
+      <div class="meta" style="color:var(--ok);font-size:12.5px;margin-top:6px">Files get richer;
+      an older build ignores the new fields entirely, so this phase cannot regress anything.</div>
+    </div>
+  </div>
+  <div class="phase">
+    <div class="p">M2</div>
+    <div>
+      <b>Import resolution</b> — <span class="kbd">the feature</span><br>
+      <span style="color:var(--dim);font-size:13.5px">The dialog · the three rewrite passes ·
+      the by-name index/label remap · <code>IMPORT_MACRO_BUNDLE</code> (one atomic dispatch) ·
+      harness Tiers B–E · real-UI verification · docs.</span>
+    </div>
+  </div>
+  <div class="phase">
+    <div class="p">M3</div>
+    <div>
+      <b>Reach and polish</b><br>
+      <span style="color:var(--dim);font-size:13.5px">Palette default-macro drops through the
+      same path · tag-index straggler audit · optional “also enable the required capability” ·
+      re-export the shipped macros <i>with</i> references, turning three of them from “drops
+      dangling” into “drops working”.</span>
+    </div>
+  </div>
+</div>
+
+<h3>Deferred, with reasons</h3>
+<ul style="color:var(--dim);font-size:13.5px">
+  <li><b>Cross-tab clipboard references</b> — its localStorage payload is capped at 2 MB and
+      shares the ~5 MB origin quota. Attributes are cheap; <b>sprites are not</b>. Paste keeps
+      today's badge behaviour.</li>
+  <li><b>Presets</b> — <code>.gcapreset</code> owns them.</li>
+  <li><b>Auto-enabling a capability on import</b> — far larger blast radius than an import should have.</li>
+  <li><b>Name-based auto-mapping without a prompt</b> — a name match is a <i>suggestion</i>, never a silent rewrite.</li>
+</ul>
+
+<!-- ============================= GATES ============================= -->
+<h2>8 · Gates</h2>
+<table>
+  <tr><th style="width:30%">gate</th><th>what it proves</th></tr>
+  <tr><td class="mono">check-compile-identity</td><td><b>29 models, all surfaces unchanged</b>, every phase — no compiler learns a key, a space or a shape</td></tr>
+  <tr><td class="mono">test-macro-references (new)</td><td>collection + closure · the export→import→<b>zero dangling refs</b> round trip · remap incl. keys and edge handles · discard ≡ today · idempotence · 4 source-mutation negative controls</td></tr>
+  <tr><td class="mono">tsc · npm run build</td><td>—</td></tr>
+  <tr><td class="mono">real UI (M2)</td><td>export from a real model → import into a fresh one → the simulator compiles and runs with no banner</td></tr>
+</table>
+
+<div class="note" style="margin-top:26px"><b>The single assertion that <i>is</i> the feature:</b>
+export a macro from model A, import it into an <b>empty</b> model B with everything “Import as
+new”, and <code>detectDanglingRefs()</code> returns <code>undefined</code> while
+<code>detectMissingConfig</code> reports zero issues on every node.</div>
+
+</div>
+</body>
+</html>
