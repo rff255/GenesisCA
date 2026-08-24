@@ -957,6 +957,23 @@ function compileValueNode(ctx: AgentWasmCtx, nodeId: string, portId: string): Va
           pushF64Elem(em, ctx.layout.f64['radius']!, ctx.idxLocal);
           em.op(OP_F64_MUL); em.f64Const(Math.PI); em.op(OP_F64_MUL);
         }
+        // D2 — `myVolume` = (4/3)πr³ (3D only; the port is hidden in 2D). Emitted
+        // ONLY when a consumer resolves this port, like every other case here, so
+        // a model that never wires it emits not one extra byte. The operand ORDER
+        // mirrors the JS emit (`Math.PI * 4 / 3 * r * r * r`) so the two agree bit
+        // for bit — f64 multiplication is not associative.
+        else if (portId === 'myVolume') {
+          // 2D SAFETY CATCH (the C9 `myAge` shape): the port is hidden in 2D, but
+          // a STALE edge from a model authored in 3D must resolve to the typed
+          // default on EVERY target rather than diverge — JS emits 0 there and
+          // the WGSL emitter returns 0.0.
+          if (!ctx.is3d) { em.f64Const(0); return; }
+          em.f64Const(Math.PI); em.f64Const(4); em.op(OP_F64_MUL);
+          em.f64Const(3); em.op(OP_F64_DIV);
+          pushF64Elem(em, ctx.layout.f64['radius']!, ctx.idxLocal); em.op(OP_F64_MUL);
+          pushF64Elem(em, ctx.layout.f64['radius']!, ctx.idxLocal); em.op(OP_F64_MUL);
+          pushF64Elem(em, ctx.layout.f64['radius']!, ctx.idxLocal); em.op(OP_F64_MUL);
+        }
         else if (portId === 'myAge') gatedF64Read(em, ctx.layout.f64['age'], ctx.idxLocal);
         else if (portId === 'myBondDegree') { em.localGet(ctx.idxLocal); em.i32Const(4); em.op(OP_I32_MUL); em.i32Const(ctx.layout.i32['bondCount']!); em.op(OP_I32_ADD); em.i32Load(); em.i32ToF64(); }
         else em.f64Const(0);

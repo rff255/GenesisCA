@@ -1543,6 +1543,123 @@ function dividePartitionInvariant(st) {
   return null;
 }
 
+// ---------------------------------------------------------------------------
+// D2 — DIVISION CONSERVE (area vs volume) + the 3D `myVolume` value-out.
+//
+// A SEPARATE entry from the partition one above, and deliberately so: that model
+// is 2D, where `volume` is COERCED to `area` by design (the resolver and the
+// engine both do it — "conserve r³" is meaningless on a disc), so it structurally
+// cannot pin the mode. This one is 3D.
+//
+// Three things must hold, and only the first is parity:
+//   • JS and WASM compute the SAME `myVolume` (parity — the agent attrs are
+//     compared cell-for-cell). This is the new WASM emitter case;
+//   • `myVolume` really is (4/3)πr³ of THIS agent's radius — recomputed from the
+//     store's own radius, so an emit that dropped the 4/3, or read the wrong
+//     agent, is caught even when BOTH targets do it identically (which parity
+//     cannot see). The agents are given DISTINCT radii by the setup, so a
+//     constant would not pass;
+//   • the two Divide Agent nodes — identical in every way EXCEPT `conserve` —
+//     get DIFFERENT partition codes, i.e. the mode reaches the table at all.
+// Even agents take the area node, odd agents the volume node.
+// ---------------------------------------------------------------------------
+function buildDivideConserveModel() {
+  const used = new Set();
+  const nid = (p) => { let id; do { id = p + Math.random().toString(36).slice(2, 8); } while (used.has(id)); used.add(id); return id; };
+  const aN = [], aEd = [];
+  const an = (t, c) => { const n = { id: nid('a'), type: 'caNode', position: { x: 0, y: 0 }, data: { nodeType: t, config: c } }; aN.push(n); return n; };
+  const aE = (s, sp, tt, tp, cat) => aEd.push({ id: nid('e'), source: s.id, target: tt.id, sourceHandle: `output_${cat}_${sp}`, targetHandle: `input_${cat}_${tp}` });
+
+  const bs = an('behaviourStep', {});
+  // Record this agent's volume + radius so the invariant can recompute one from
+  // the other WITHOUT re-deriving the emit.
+  const rec = an('setAttribute', { attributeId: 'vol', extraCount: 1, attr_2: 'rad' });
+  aE(bs, 'myVolume', rec, 'value', 'value');
+  aE(bs, 'myRadius', rec, 'value_2', 'value');
+  // odd(self) = self - 2*floor(self/2)
+  const gsh = an('getSelfHandle', {});
+  const half = an('arithmeticOperator', { operation: '/', _port_y: '2' });
+  const flr = an('arithmeticOperator', { operation: 'floor' });
+  const dbl = an('arithmeticOperator', { operation: '*', _port_y: '2' });
+  const odd = an('arithmeticOperator', { operation: '-' });
+  const isOdd = an('statement', { operation: '>', _port_y: '0.5' });
+  const cond = an('conditional', {});
+  // The ONLY difference between these two nodes is `conserve`.
+  const dArea = an('divideAgent', { partition: 'tension', daughterBond: 'auto', conserve: 'area', _port_asymmetry: '0.5' });
+  const dVol = an('divideAgent', { partition: 'tension', daughterBond: 'auto', conserve: 'volume', _port_asymmetry: '0.5' });
+  const markOdd = an('setAttribute', { attributeId: 'branch', _port_value: '1' });
+  const markEven = an('setAttribute', { attributeId: 'branch', _port_value: '0' });
+
+  aE(gsh, 'value', half, 'x', 'value');
+  aE(half, 'result', flr, 'x', 'value');
+  aE(flr, 'result', dbl, 'x', 'value');
+  aE(gsh, 'value', odd, 'x', 'value');
+  aE(dbl, 'result', odd, 'y', 'value');
+  aE(odd, 'result', isOdd, 'x', 'value');
+  aE(isOdd, 'result', cond, 'condition', 'value');
+  aE(bs, 'do', rec, 'do', 'flow');
+  aE(rec, 'next', cond, 'check', 'flow');
+  aE(cond, 'then', dVol, 'do', 'flow');
+  aE(dVol, 'next', markOdd, 'do', 'flow');
+  aE(cond, 'else', dArea, 'do', 'flow');
+  aE(dArea, 'next', markEven, 'do', 'flow');
+
+  return {
+    schemaVersion: 1,
+    properties: { name: 'Division Conserve Parity Test', dimension: '3d', gridWidth: 24, gridHeight: 24, gridDepth: 12, topology: '2d-grid', boundaryTreatment: 'torus', useWasm: false, useWebGPU: false },
+    topologyMode: { gridCells: false, agents: true },
+    centerBased: { enabled: true, maxAgents: 100, maxBonds: 4, worldWidth: 24, worldHeight: 24, worldDepth: 12, seedCount: 40, seedPattern: 'scatter', defaultRadius: 0.5, growthRate: 0, repulsionStiffness: 0, adhesionStiffness: 0, interactionRange: 1.5, drag: 1, timeStep: 0.1, momentum: 0, maxSpeed: 0, neighbourQueryRadius: 8, useBondingPhysics: false, autoBond: false, bondStiffness: 0, bondRestLength: 1.5, formDistance: 1.2, breakDistance: 2.0, agentTarget: 'wasm', agentUpdateMode: 'async',
+      agentCapabilities: { motion: 'force', body: true, collision: 'off', bonds: 'data', autoBond: false, growth: false, division: true, lifespan: false, populationBirth: false, populationDeath: false, sensing: false, sensingHeadingSource: 'velocity', orientation: false, fieldCoupling: false, appearance: true } },
+    attributes: [], modelAttributes: [], neighborhoods: [],
+    agentAttributes: [
+      { id: 'vol', name: 'Volume', type: 'float', defaultValue: '0' },
+      { id: 'rad', name: 'Radius', type: 'float', defaultValue: '0' },
+      { id: 'branch', name: 'Branch', type: 'integer', defaultValue: '0' },
+    ],
+    variables: [], agentVariables: [], indicators: [], mappings: [],
+    graphNodes: [], graphEdges: [], agentGraphNodes: aN, agentGraphEdges: aEd, macroDefs: [],
+  };
+}
+
+/** DISTINCT radii, so a `myVolume` emit that ignored the agent's own radius (or
+ *  dropped the 4/3) cannot pass by coincidence. Applied identically to both
+ *  stores, so parity is unaffected. */
+function setupDivideConserveStores(stores) {
+  for (const s of stores) {
+    for (let i = 0; i < s.highWater; i++) s.radius[i] = 0.25 + 0.0125 * i;
+  }
+}
+
+/** THE VALUE INVARIANT for the conserve synthetic. */
+function divideConserveInvariant(st) {
+  let areaCode = null, volCode = null;
+  for (let i = 0; i < st.highWater; i++) {
+    if (!st.alive[i]) continue;
+    const r = st.attrRead.rad[i];
+    if (!(r > 0)) return `agent ${i}: myRadius read back as ${r}`;
+    // The SAME association the JS + WASM emits use — f64 multiplication is not
+    // associative, so a re-grouped expectation would be an ULP off.
+    const want = Math.PI * 4 / 3 * r * r * r;
+    if (!Object.is(st.attrRead.vol[i], want)) {
+      return `agent ${i}: myVolume ${st.attrRead.vol[i]} !== (4/3)πr³ ${want} (r=${r})`;
+    }
+    const code = st.divideRequest[i];
+    if (code < 1) return `agent ${i}: divideRequest ${code} — no division was requested at all`;
+    if (i % 2 === 0) {
+      if (st.attrRead.branch[i] !== 0) return `agent ${i} (even) took the ODD branch`;
+      if (areaCode === null) areaCode = code; else if (areaCode !== code) return `even agents disagree: ${areaCode} vs ${code}`;
+    } else {
+      if (st.attrRead.branch[i] !== 1) return `agent ${i} (odd) did not take the odd branch`;
+      if (volCode === null) volCode = code; else if (volCode !== code) return `odd agents disagree: ${volCode} vs ${code}`;
+    }
+  }
+  if (areaCode === null || volCode === null) return 'the run never exercised both branches';
+  if (areaCode === volCode) {
+    return `the area and volume Divide Agent nodes wrote the SAME code ${areaCode} — conserve never reaches the table`;
+  }
+  return null;
+}
+
 /** Ring + chords, then BREAK a deterministic subset so the ragged bond slots have
  *  already been compacted (swap-with-last) before the behaviour ever runs. */
 function setupBondAttrStores(stores) {
@@ -2448,6 +2565,10 @@ entries.push({
 entries.push({
   name: '[synthetic] Division partition (two Divide Agent nodes, distinct codes)',
   raw: buildDividePartitionModel(), setup: setupBondAttrStores, invariant: dividePartitionInvariant,
+});
+entries.push({
+  name: '[synthetic] Division conserve (area vs volume codes + 3D myVolume)',
+  raw: buildDivideConserveModel(), setup: setupDivideConserveStores, invariant: divideConserveInvariant,
 });
 entries.push({
   name: '[synthetic] By-id targeting (Kill / Set Velocity / Set Target Radius, self + by id)',

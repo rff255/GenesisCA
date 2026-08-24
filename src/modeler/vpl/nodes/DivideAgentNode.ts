@@ -26,6 +26,16 @@ import { dividePartitionCode } from '../compiler/dividePartition';
  *  `daughterBond` is decision D4: `auto` (only when the mother was bonded — the
  *  pre-P5 rule), `always`, or `never`.
  *
+ *  D2 — `conserve` says what the daughter RADII conserve:
+ *    area    `rA = r·√f`, `rB = r·√(1−f)` ⇒ `rA² + rB² = r²`. THE DEFAULT, and
+ *            the historical behaviour in BOTH dimensions.
+ *    volume  `rA = r·∛f`, `rB = r·∛(1−f)` ⇒ `rA³ + rB³ = r³`. 3D ONLY (the row
+ *            is hidden in 2D and both the resolver and the engine coerce it).
+ *  It matters because the area split applied in 3D too, where it is NOT
+ *  volume-conserving: at the default symmetric split each daughter is `r/√2`, so
+ *  ~29 % of the volume disappears at every division. Like the partition, it
+ *  rides the per-model TABLE, so switching it moves no emitted byte.
+ *
  *  TRANSPORT: the partition is per-NODE but applied by the ENGINE, so the
  *  compiler collects one table entry per distinct spec and this emit writes its
  *  1-based code into the EXISTING `divideRequest` cell (the `stopMessages` /
@@ -50,7 +60,7 @@ export const DivideAgentNode: NodeTypeDef = {
   ],
   // Axis Z only exists in a 3D-agent model.
   hiddenPorts: (_config, model) => (is3dModelLike(model) ? [] : ['axisZ']),
-  defaultConfig: { axisSource: 'tension', partition: 'tension', daughterBond: 'auto' },
+  defaultConfig: { axisSource: 'tension', partition: 'tension', daughterBond: 'auto', conserve: 'area' },
   compile: (_nodeId, config, inputs, _boundary, ctx) =>
     `_divideRequest[idx] = ${dividePartitionCode(config)}; _divideAxisX[idx] = ${inputs['axisX'] ?? 'NaN'}; _divideAxisY[idx] = ${inputs['axisY'] ?? 'NaN'};${ctx?.is3d ? ` _divideAxisZ[idx] = ${inputs['axisZ'] ?? 'NaN'};` : ''} _divideAsym[idx] = ${inputs['asymmetry'] || '0.5'};\n`,
 };

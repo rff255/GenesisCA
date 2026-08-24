@@ -10,7 +10,8 @@ import { is3dModelLike } from '../compiler/niCodec';
  *
  *  Outputs: `daughterIndex` (0 = the reused mother slot, 1 = the new slot),
  *  `axisDefaultX`/`axisDefaultY` (the engine's chosen division axis), `myArea`
- *  (this daughter's area). Singleton (one per Agents graph, like Behaviour Step). */
+ *  (πr² — a DISC area, in 2D and 3D alike) and, in a 3D model, `myVolume`
+ *  ((4/3)πr³). Singleton (one per Agents graph, like Behaviour Step). */
 export const DivisionEventNode: NodeTypeDef = {
   type: 'divisionEvent',
   label: 'Division Event',
@@ -26,12 +27,14 @@ export const DivisionEventNode: NodeTypeDef = {
     { id: 'axisDefaultY', label: 'Axis Y', kind: 'output', category: 'value', dataType: 'float' },
     { id: 'axisDefaultZ', label: 'Axis Z', kind: 'output', category: 'value', dataType: 'float' },
     { id: 'myArea', label: 'Area', kind: 'output', category: 'value', dataType: 'float' },
+    { id: 'myVolume', label: 'Volume', kind: 'output', category: 'value', dataType: 'float' },
   ],
   // axisDefaultZ only exists in a 3D-agent model. Unlike axisDefaultX/Y (scalar
   // division-fn params), it is NOT a param — the compiler emits its
   // `_v<id>_axisDefaultZ` preamble by reading the `_divideAxisZ[idx]` buffer
-  // (compile.ts ~:2207), gated on `is3d`.
-  hiddenPorts: (_config, model) => (is3dModelLike(model) ? [] : ['axisDefaultZ']),
+  // (compile.ts ~:2207), gated on `is3d`. `myVolume` is 3D-only for the same
+  // reason its Behaviour Step twin is: (4/3)πr³ is a 3D quantity.
+  hiddenPorts: (_config, model) => (is3dModelLike(model) ? [] : ['axisDefaultZ', 'myVolume']),
   defaultConfig: {},
   compile: () => '', // Root — the agent compiler emits the single-agent division function.
 };
