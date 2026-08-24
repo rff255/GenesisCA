@@ -1062,6 +1062,37 @@ function buildLogicalExpressionModel() {
   aE(le5, 'result', s5, 'value', 'value');
   aE(s4, 'next', s5, 'do', 'flow');
 
+  // --- the COMPARISON tier -------------------------------------------------
+  // `v` is the seeded `raw` attribute (-2..2) and `w` a second numeric derived
+  // from the handle (-3..3), both STORED so the invariant recomputes from the
+  // store rather than re-deriving the same arithmetic. Between them the six
+  // operators all discriminate across the population.
+  const wExpr = an('expression', { expression: 'mod(a, 7) - 3', visibleCount: 1 });
+  aE(gsh, 'value', wExpr, 'a', 'value');
+  const sw = an('setAttribute', { attributeId: 'w' });
+  aE(wExpr, 'result', sw, 'value', 'value');
+  aE(s5, 'next', sw, 'do', 'flow');
+
+  let tail = sw;
+  /** One comparison formula → its own attribute, appended to the flow chain. */
+  const cmpFormula = (attrId, expression, wireW) => {
+    const cfg = { expression, visibleCount: wireW ? 2 : 1, _varName_a: 'v' };
+    if (wireW) cfg._varName_b = 'w';
+    const n = an('logicalExpression', cfg);
+    aE(raw, 'value', n, 'a', 'value');
+    if (wireW) aE(wExpr, 'result', n, 'b', 'value');
+    const s = an('setAttribute', { attributeId: attrId });
+    aE(n, 'result', s, 'value', 'value');
+    aE(tail, 'next', s, 'do', 'flow');
+    tail = s;
+  };
+  cmpFormula('lc1', 'v > 0', false);                              // >
+  cmpFormula('lc2', 'v >= -1 AND v <= 1', false);                 // >= <= + a negative literal
+  cmpFormula('lc3', 'NOT v > 0 AND w != v OR v <= -2', true);     // the full ladder + != + NOT over a cmp
+  cmpFormula('lc4', 'v AND NOT v > 0', false);                    // ONE port read BOTH ways
+  cmpFormula('lc5', 'w == v', true);                              // ==
+  cmpFormula('lc6', 'w < v', true);                               // <
+
   return {
     schemaVersion: 1,
     properties: { name: 'Logical Expression Parity Test', dimension: '2d', gridWidth: 24, gridHeight: 24, gridDepth: 1, topology: '2d-grid', boundaryTreatment: 'torus', useWasm: false, useWebGPU: false },
@@ -1079,6 +1110,13 @@ function buildLogicalExpressionModel() {
       { id: 'lx3', name: 'Lx3', type: 'float', defaultValue: '0' },
       { id: 'lx4', name: 'Lx4', type: 'float', defaultValue: '0' },
       { id: 'lx5', name: 'Lx5', type: 'float', defaultValue: '0' },
+      { id: 'w', name: 'W', type: 'float', defaultValue: '0' },
+      { id: 'lc1', name: 'Lc1', type: 'float', defaultValue: '0' },
+      { id: 'lc2', name: 'Lc2', type: 'float', defaultValue: '0' },
+      { id: 'lc3', name: 'Lc3', type: 'float', defaultValue: '0' },
+      { id: 'lc4', name: 'Lc4', type: 'float', defaultValue: '0' },
+      { id: 'lc5', name: 'Lc5', type: 'float', defaultValue: '0' },
+      { id: 'lc6', name: 'Lc6', type: 'float', defaultValue: '0' },
     ],
     variables: [], agentVariables: [], indicators: [], mappings: [],
     graphNodes: [], graphEdges: [], agentGraphNodes: aN, agentGraphEdges: aEd, macroDefs: [],
@@ -1106,6 +1144,27 @@ function logicalExpressionInvariant(st) {
     if (st.attrRead.lx3[i] !== want3) return `agent ${i}: lx3 ${st.attrRead.lx3[i]} !== ${want3} (raw=${st.attrRead.raw[i]} q=${+q})`;
     if (st.attrRead.lx4[i] !== want4) return `agent ${i}: lx4 ${st.attrRead.lx4[i]} !== ${want4} (p=${+p} q=${+q} r=${+r})`;
     if (st.attrRead.lx5[i] !== want5) return `agent ${i}: lx5 ${st.attrRead.lx5[i]} !== ${want5} (p=${+p} q=${+q} r=${+r})`;
+
+    // --- the COMPARISON tier, recomputed from the store's OWN numerics ---
+    // Both operands are exact small integers in f64, so `===` is safe and the
+    // two targets are bit-identical rather than merely close.
+    const vv = st.attrRead.raw[i], ww = st.attrRead.w[i];
+    const wantC = [
+      (vv > 0) ? 1 : 0,
+      (vv >= -1 && vv <= 1) ? 1 : 0,
+      ((!(vv > 0) && ww !== vv) || vv <= -2) ? 1 : 0,
+      // The SAME port truthy-tested AND compared: at v = 0 the two readings
+      // disagree, which is what makes this differ from `NOT v > 0` alone.
+      ((vv !== 0) && !(vv > 0)) ? 1 : 0,
+      (ww === vv) ? 1 : 0,
+      (ww < vv) ? 1 : 0,
+    ];
+    for (let k = 0; k < wantC.length; k++) {
+      const id = `lc${k + 1}`;
+      if (st.attrRead[id][i] !== wantC[k]) {
+        return `agent ${i}: ${id} ${st.attrRead[id][i]} !== ${wantC[k]} (v=${vv} w=${ww})`;
+      }
+    }
   }
   return null;
 }
@@ -1800,7 +1859,7 @@ entries.push({
   raw: buildCensusModel(), setup: setupRingBondStores, invariant: censusInvariant,
 });
 entries.push({
-  name: '[synthetic] Logical Expression (truth table + literals + truthiness)',
+  name: '[synthetic] Logical Expression (truth table + literals + truthiness + COMPARISONS)',
   raw: buildLogicalExpressionModel(), invariant: logicalExpressionInvariant,
 });
 

@@ -993,11 +993,12 @@ function compileExpression(ctx: AgentWgpuCtx, node: GraphNode): ValueRef {
   return emitLet(ctx, 'f32', expr, 'ex');
 }
 
-/** Logical Expression node — parse the boolean formula + emit the AST via the
- *  shared WGSL emitter. The var accessor is `emitLogic`'s own operand form
- *  (`<f32 expr> != 0.0`) and the result is bound through the same
- *  `select(0.0, 1.0, …)`, so a formula and the equivalent chain of Logic nodes
- *  agree exactly (agent value refs are uniformly f32). */
+/** Logical Expression node — parse the formula + emit the AST via the shared
+ *  WGSL emitter. The BOOL accessor is `emitLogic`'s own operand form
+ *  (`<f32 expr> != 0.0`), the NUM accessor is `emitCompare`'s (the bare `inF32`),
+ *  and the result is bound through the same `select(0.0, 1.0, …)` — so a formula
+ *  and the equivalent hand-wired Compare/Logic chain agree exactly (agent value
+ *  refs are uniformly f32). */
 function compileLogicalExpression(ctx: AgentWgpuCtx, node: GraphNode): ValueRef {
   const cfg = node.data.config as Record<string, unknown>;
   const visibleCount = clampVisibleCount(cfg['visibleCount']);
@@ -1005,7 +1006,11 @@ function compileLogicalExpression(ctx: AgentWgpuCtx, node: GraphNode): ValueRef 
   if (errors.length > 0) throw new Error(`logicalExpression: ${errors[0]}`);
   const res = parseLogicExpression(String(cfg['expression'] ?? ''), map);
   if ('error' in res) throw new Error(`logicalExpression: ${res.error}`);
-  const cond = emitLogicWgsl(res.ast, (portId) => `${inF32(ctx, node, portId, 0)} != 0.0`);
+  const cond = emitLogicWgsl(
+    res.ast,
+    (portId) => `${inF32(ctx, node, portId, 0)} != 0.0`,
+    (portId) => inF32(ctx, node, portId, 0),
+  );
   return emitLet(ctx, 'f32', `select(0.0, 1.0, ${cond})`, 'lgx');
 }
 

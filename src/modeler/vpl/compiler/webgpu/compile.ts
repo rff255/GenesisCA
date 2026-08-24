@@ -575,6 +575,21 @@ function inlineValueRef(raw: string | undefined, isFloat: boolean): ValueRef {
   return { expr: `${n | 0}`, type: 'i32' };
 }
 
+/**
+ * Fold an f32 ref that is a WHOLE-NUMBER literal (what `inlineValueRef` emits
+ * for an unwired `float`/`any` port) into the i32 literal form. Same value; a
+ * fractional or non-literal ref is returned untouched, because `n | 0` there
+ * would NOT be the same value. Used only where the consumer immediately casts to
+ * bool, to keep an unwired port's emitted text stable across a port's declared
+ * dataType.
+ */
+function foldInlineF32ToI32(v: ValueRef): ValueRef {
+  if (v.type !== 'f32') return v;
+  const n = Number(v.expr);
+  if (!Number.isInteger(n)) return v;
+  return { expr: `${n | 0}`, type: 'i32' };
+}
+
 // ---------------------------------------------------------------------------
 // Multi-output port cache
 // ---------------------------------------------------------------------------
@@ -1646,17 +1661,32 @@ const VALUE_NODE_EMITTERS: Record<string, NodeValueEmitter> = {
     return emitLet(ctx, 'bool', expr, 'lop');
   },
 
-  // Logical Expression node: parse the boolean formula, emit the AST as a WGSL
-  // bool expr. The var accessor is `logicOperator`'s own operand form above
-  // (castTo bool), so the two agree for any input.
+  // Logical Expression node: parse the formula, emit the AST as a WGSL bool
+  // expr. Each accessor is the equivalent single node's own operand form above:
+  // `logicOperator`'s `castTo(…, 'bool')` for a boolean read, `statement`'s
+  // `castTo(…, 'f32')` for a comparison operand — so the two agree for any
+  // input. The numeric one is only reached by a formula that HAS a comparison.
   logicalExpression: ({ node, ctx, inputs }) => {
     const visibleCount = clampVisibleCount(node.data.config.visibleCount);
     const { map, errors } = buildLogicVarMap(node.data.config, visibleCount);
     if (errors.length > 0) { ctx.errors.push(`logicalExpression: ${errors[0]}`); return null; }
     const res = parseLogicExpression(String(node.data.config.expression ?? ''), map);
     if ('error' in res) { ctx.errors.push(`logicalExpression: ${res.error}`); return null; }
-    const expr = emitLogicWgsl(res.ast, (portId) =>
-      castTo(inputs[portId] ?? { expr: 'false', type: 'bool' }, 'bool'));
+    const expr = emitLogicWgsl(
+      res.ast,
+      (portId) => {
+        // Same rationale as the WASM emitter's bool accessor: an UNWIRED port's
+        // inline ref is f32 (these inputs are `any` so the comparison tier can
+        // read them as numbers), so fold an integral inline constant back to the
+        // i32 form the bool cast consumes — the same value, and it keeps a
+        // comparison-free formula's shader text identical to the pre-comparison
+        // build. Only for an UNWIRED port: a wired ref carries the SOURCE's type.
+        const wired = ctx.inputToSource.has(`${node.id}:${portId}`);
+        const ref = inputs[portId] ?? { expr: 'false', type: 'bool' as const };
+        return castTo(wired ? ref : foldInlineF32ToI32(ref), 'bool');
+      },
+      (portId) => castTo(inputs[portId] ?? { expr: '0.0', type: 'f32' }, 'f32'),
+    );
     return emitLet(ctx, 'bool', expr, 'lexp');
   },
 
