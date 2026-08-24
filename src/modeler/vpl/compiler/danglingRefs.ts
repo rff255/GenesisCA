@@ -32,7 +32,14 @@ import { isInputMappingRoot, rootOutputPortIdsForNode } from '../../../model/inp
 /** Config keys that hold the id of a model element, and the id space(s) each may name. */
 type IdSpace = 'attribute' | 'neighborhood' | 'mapping' | 'indicator' | 'variable' | 'sprite';
 
-const KEY_SPACE: Record<string, IdSpace> = {
+// Exported for `model/macroReferences.ts`, which EXTENDS this map (it also has
+// to see `facingAttributeId` / `facePaletteId` / `presetId`). The extension
+// lives there, never here: two of those are documented graceful SKIPS in the
+// compiler (`facingSource.ts` ignores a `facingAttributeId` that is not a live
+// vector agent attribute; a dangling `presetId` only reaches the Overseer
+// runtime), so widening THIS gate would turn them into hard compile errors on
+// models that run today. Collection stays strictly broader than the gate.
+export const KEY_SPACE: Record<string, IdSpace> = {
   attributeId: 'attribute',
   tagAttributeId: 'attribute',
   tableId: 'attribute',

@@ -1347,6 +1347,42 @@ export function HelpView() {
             contents back into the parent graph. All restored nodes are automatically
             selected for easy repositioning.
           </p>
+
+          <h3 className={styles.h3}>Exporting a Macro &mdash; what the file carries</h3>
+          <p className={styles.p}>
+            Right-click a Macro node and choose <strong>Export Macro&hellip;</strong> to save it
+            as a <code>.gcamacro</code> file you can import into any other project. The nodes
+            inside a macro reference <em>model elements</em> by id &mdash; an attribute, a
+            neighborhood, a mapping, a local variable, an indicator, a sprite &mdash; and those
+            ids only mean something in the model the macro came from. So the file carries the
+            referenced definitions with it:
+          </p>
+          <ul className={styles.list}>
+            <li><strong>Everything is embedded by default.</strong> The export dialog lists every
+              referenced definition, grouped by kind, all checked. Uncheck one to leave it out;
+              its reference will then dangle on import (an amber badge on the node, exactly as
+              before this existed) and you re-point it by hand.</li>
+            <li><strong>Definitions a definition needs come too.</strong> If an attribute is a
+              sub-attribute, its parent rides along; a linked mapping brings the attribute it
+              colors by; a lookup table brings its axis attributes and face palettes; a face
+              pattern brings its palette. These appear <em>indented</em> under whatever pulled
+              them in, and unchecking that requirer drops them too.</li>
+            <li><strong>Sprites are the reason the checkboxes are there.</strong> A sprite is a
+              whole image file (often megabytes), so its size is shown on the row &mdash; uncheck
+              it for a lightweight rule-only macro.</li>
+            <li><strong>Nested macros travel.</strong> If the macro instantiates another macro,
+              that definition is written to the file too.</li>
+            <li><strong>Presets cannot be carried</strong> (an Overseer <em>Load Preset</em> node
+              names one). A preset embeds a whole simulation snapshot &mdash; export it separately
+              as a <code>.gcapreset</code>. The dialog lists it under &quot;Cannot be carried.&quot;</li>
+            <li><strong>&quot;Reference-free template&quot;</strong> unchecks everything at once,
+              for a macro you deliberately want to arrive unwired.</li>
+          </ul>
+          <p className={styles.p}>
+            A macro that references nothing skips the dialog entirely and writes exactly the file
+            it always did. The file format is unchanged otherwise, so a macro exported from a newer
+            build still imports into an older one &mdash; it simply ignores the extra definitions.
+          </p>
         </section>
 
         {/* ============================================================ */}

@@ -705,6 +705,72 @@ export interface MacroDef {
 }
 
 // ---------------------------------------------------------------------------
+// `.gcamacro` — the macro file format
+// ---------------------------------------------------------------------------
+
+/** The model elements a `.gcamacro` carries alongside its subgraph, so a macro
+ *  dropped into ANOTHER model can bring the attributes / neighborhoods /
+ *  mappings / variables / indicators / sprites / face palettes its nodes name.
+ *
+ *  Elements travel **VERBATIM, as the exact schema objects** — there is no
+ *  parallel "display name + metadata" record to drift when a schema field is
+ *  added, and the ids are preserved exactly as exported, which is what makes
+ *  re-importing into the SOURCE model a provable no-op.
+ *
+ *  One list per model list, so `space → CAModel[space]` is the identity: cell
+ *  and model attributes share `attributes` (as `CAModel.attributes` does —
+ *  `isModelAttribute` discriminates) and both mapping directions share
+ *  `mappings` (`isAttributeToColor` discriminates).
+ *
+ *  Deliberately ABSENT: presets (a `Preset` embeds a whole `SimulationState`;
+ *  `.gcapreset` owns that transport) and macro defs (nested defs ride
+ *  `MacroFile.macroDefs`, since a macro def is not a model element). */
+export interface MacroReferenceBundle {
+  attributes?: Attribute[];
+  agentAttributes?: Attribute[];
+  bondAttributes?: Attribute[];
+  neighborhoods?: Neighborhood[];
+  mappings?: Mapping[];
+  agentMappings?: Mapping[];
+  variables?: Variable[];
+  agentVariables?: Variable[];
+  indicators?: Indicator[];
+  sprites?: SpriteAsset[];
+  facePalettes?: FaceLabelPalette[];
+  facePatterns?: FacePattern[];
+}
+
+/** Where an exported macro came from — shown in the import dialog's header and
+ *  used for its compatibility warnings. Purely informational; nothing resolves
+ *  against it. */
+export interface MacroOrigin {
+  modelName?: string;
+  dimension?: Dimension;
+  topologyMode?: TopologyMode;
+}
+
+/** A `.gcamacro` file. `macroDef` + the three metadata fields are the historical
+ *  shape; everything else is ADDITIVE and optional, so an older build ignores
+ *  the new keys and imports exactly as it always did.
+ *
+ *  ⚠ `schemaVersion` stays **1** and the reader must NEVER gate on it: the
+ *  format's only compatibility mechanism is "unknown keys are ignored", and a
+ *  strict version check would reject files a current build reads fine. */
+export interface MacroFile {
+  schemaVersion: 1;
+  name: string;
+  description: string;
+  macroDef: MacroDef;
+  /** Every OTHER def the exported def references, transitively — a macro
+   *  instance may live inside a macro's subgraph, and the def it points at
+   *  lives in the source model, which the importing model has no access to. */
+  macroDefs?: MacroDef[];
+  /** The model elements the subgraph references (+ their transitive closure). */
+  references?: MacroReferenceBundle;
+  origin?: MacroOrigin;
+}
+
+// ---------------------------------------------------------------------------
 // Indicators
 // ---------------------------------------------------------------------------
 

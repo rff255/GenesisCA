@@ -21,7 +21,12 @@ import { CommentNodeComponent } from './CommentNodeComponent';
 import { GroupNodeComponent } from './GroupNodeComponent';
 import { RerouteNodeComponent } from './RerouteNodeComponent';
 import { useModel } from '../../model/ModelContext';
-import { saveTextFile } from '../../model/fileOperations';
+import { buildMacroFile, downloadMacroFile, parseMacroFile } from '../../model/fileOperations';
+import {
+  buildReferenceBundle, collectMacroExportDefs, collectMacroReferences, macroOriginOf,
+} from '../../model/macroReferences';
+import type { CollectedReferences } from '../../model/macroReferences';
+import { MacroExportDialog } from '../../components/MacroExportDialog';
 import { getNodeDef, getAllNodeDefs } from './nodes/registry';
 import { parseHandleId, handleId } from './types';
 import type { PortDef, NodeTypeDef } from './types';
@@ -2651,7 +2656,27 @@ export function GraphEditorInner() {
 
   // --- Macro export / import ---
 
-  /** Export the macro referenced by the right-clicked macro node as a .gcamacro file. */
+  /** Pending macro export — the collected references awaiting the opt-out dialog. */
+  const [macroExport, setMacroExport] = useState<
+    { def: MacroDef; nested: MacroDef[]; collected: CollectedReferences } | null
+  >(null);
+
+  /** Write the `.gcamacro`. `selected` (absent ⇒ everything carryable) picks
+   *  which collected elements ride along; the rest dangle on import, which is
+   *  exactly the pre-feature behaviour. */
+  const writeMacroFile = useCallback((
+    def: MacroDef, nested: MacroDef[], collected: CollectedReferences | null, selected?: Set<string>,
+  ) => {
+    const references = collected ? buildReferenceBundle(collected, selected) : undefined;
+    const file = buildMacroFile(def, { nested, references, origin: macroOriginOf(model) });
+    const safeName = def.name.trim().replace(/[^a-z0-9-_ ]+/gi, '').replace(/\s+/g, '-').toLowerCase() || 'macro';
+    void downloadMacroFile(file, `${safeName}.gcamacro`)
+      .catch(err => console.error('Macro export failed', err));
+  }, [model]);
+
+  /** Export the macro referenced by the right-clicked macro node as a .gcamacro
+   *  file, carrying every model element its subgraph references (+ the nested
+   *  defs it instantiates). References the user unchecks are simply left out. */
   const exportMacro = useCallback(() => {
     if (!contextMenu || contextMenu.target.type !== 'node' || !contextMenu.target.isMacro) return;
     const node = nodesRef.current.find(n => n.id === (contextMenu.target as { nodeId: string }).nodeId);
@@ -2659,20 +2684,16 @@ export function GraphEditorInner() {
     const macroDefId = cfg?.macroDefId as string | undefined;
     const def = (model.macroDefs || []).find(m => m.id === macroDefId);
     if (!def) { setContextMenu(null); return; }
-
-    const payload = {
-      schemaVersion: 1,
-      name: def.name,
-      description: '',
-      macroDef: def,
-    };
-    const safeName = def.name.trim().replace(/[^a-z0-9-_ ]+/gi, '').replace(/\s+/g, '-').toLowerCase() || 'macro';
-    // Via saveTextFile so the desktop (Tauri) build gets a real native Save As —
-    // a bare `<a download>` writes nothing at all under WebView2.
-    void saveTextFile(JSON.stringify(payload, null, 2), `${safeName}.gcamacro`, 'application/json')
-      .catch(err => console.error('Macro export failed', err));
     setContextMenu(null);
-  }, [contextMenu, model.macroDefs]);
+
+    const defs = collectMacroExportDefs(def, model.macroDefs || []);
+    const nested = defs.slice(1);
+    const collected = collectMacroReferences(defs, model);
+    // Nothing to decide ⇒ no dialog, and (with no nested defs either) the file
+    // is byte-identical to the one this app has always written.
+    if (collected.refs.length === 0) { writeMacroFile(def, nested, null); return; }
+    setMacroExport({ def, nested, collected });
+  }, [contextMenu, model, writeMacroFile]);
 
   /** Hidden file input that the "Import Macro..." menu item triggers. */
   const importMacroInputRef = useRef<HTMLInputElement>(null);
@@ -2693,13 +2714,17 @@ export function GraphEditorInner() {
     const finalPos = pendingImportPos.current ?? { x: 0, y: 0 };
     pendingImportPos.current = null;
     file.text().then(text => {
-      let parsed: { macroDef?: unknown };
-      try { parsed = JSON.parse(text); } catch { alert('Invalid .gcamacro file: not valid JSON'); return; }
-      if (!parsed?.macroDef || typeof parsed.macroDef !== 'object') {
-        alert('Invalid .gcamacro file: missing or invalid macroDef field');
+      // ONE reader for the format (`parseMacroFile`), which never gates on
+      // `schemaVersion` and drops any malformed optional field. M1 writes the
+      // richer file; consuming its `references` / `macroDefs` is M2, so import
+      // still takes exactly the historical path.
+      let macroDef: Parameters<typeof importMacro>[0];
+      try {
+        macroDef = parseMacroFile(text).macroDef as Parameters<typeof importMacro>[0];
+      } catch (err) {
+        alert(err instanceof Error ? err.message : 'Invalid .gcamacro file');
         return;
       }
-      const macroDef = parsed.macroDef as Parameters<typeof importMacro>[0];
       const newId = importMacro(macroDef);
       addNodeAtPosition('macro', finalPos, { macroDefId: newId }, macroDef.name);
     });
@@ -4525,6 +4550,20 @@ export function GraphEditorInner() {
             performDeleteNodes(ids);
           }}
           onCancel={() => setPendingMultiDelete(null)}
+        />
+      )}
+      {/* Export Macro — the per-element opt-out. Rendered here (a child of the
+          editor wrapper, NOT of `.react-flow__viewport`) so its `position:fixed`
+          card is not re-based by the viewport's transform. */}
+      {macroExport && (
+        <MacroExportDialog
+          macroName={macroExport.def.name}
+          collected={macroExport.collected}
+          onExport={sel => {
+            writeMacroFile(macroExport.def, macroExport.nested, macroExport.collected, sel);
+            setMacroExport(null);
+          }}
+          onCancel={() => setMacroExport(null)}
         />
       )}
       {namePrompt && (() => {

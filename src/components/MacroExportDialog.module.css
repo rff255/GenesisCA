@@ -1,0 +1,183 @@
+.backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 10000;
+}
+
+.dialog {
+  width: 580px;
+  max-width: calc(100vw - 32px);
+  max-height: calc(100vh - 64px);
+  display: flex;
+  flex-direction: column;
+  background: var(--color-bg-elevated);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-lg);
+  color: var(--color-text-secondary);
+  font-size: var(--font-sm);
+}
+
+.header {
+  padding: var(--space-5) var(--space-6);
+  border-bottom: 1px solid var(--color-border);
+}
+
+.title {
+  font-weight: 600;
+  font-size: var(--font-base);
+  color: var(--color-text-primary);
+}
+
+.subtitle {
+  margin-top: var(--space-2);
+  color: var(--color-text-tertiary);
+  font-size: var(--font-xs);
+  line-height: 1.4;
+}
+
+/* The list is the only scrolling region, so the header + footer stay put. */
+.body {
+  padding: var(--space-4) var(--space-6) var(--space-5);
+  overflow-y: auto;
+  flex: 1;
+  min-height: 0;
+}
+
+.section {
+  margin-top: var(--space-5);
+  margin-bottom: var(--space-2);
+  color: var(--color-text-tertiary);
+  font-size: var(--font-xs);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.section:first-child {
+  margin-top: 0;
+}
+
+.row {
+  display: flex;
+  gap: var(--space-4);
+  align-items: flex-start;
+  padding: var(--space-2) 0;
+  cursor: pointer;
+}
+
+.row input[type='checkbox'] {
+  margin-top: 3px;
+  flex: none;
+  accent-color: var(--color-accent);
+}
+
+/* An element pulled in ONLY by another element's closure reads as its child. */
+.indent {
+  margin-left: var(--space-6);
+  padding-left: var(--space-5);
+  border-left: 1px solid var(--color-border);
+}
+
+.rowMain {
+  flex: 1;
+  min-width: 0;
+}
+
+.name {
+  color: var(--color-text-primary);
+  font-weight: 500;
+}
+
+.kind {
+  color: var(--color-text-tertiary);
+  font-weight: 400;
+}
+
+.meta {
+  margin-top: 2px;
+  color: var(--color-text-tertiary);
+  font-size: var(--font-xs);
+  line-height: 1.35;
+}
+
+.warn {
+  color: var(--color-accent);
+}
+
+.origin {
+  flex: none;
+  color: var(--color-text-tertiary);
+  font-size: var(--font-xs);
+  white-space: nowrap;
+  padding-top: 1px;
+}
+
+.blocked {
+  opacity: 0.75;
+  cursor: default;
+}
+
+.actions {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: var(--space-4);
+  padding: var(--space-5) var(--space-6);
+  border-top: 1px solid var(--color-border);
+}
+
+.linkBtn {
+  background: none;
+  border: none;
+  padding: 0;
+  color: var(--color-text-tertiary);
+  font-size: var(--font-xs);
+  cursor: pointer;
+  text-decoration: underline;
+}
+
+.linkBtn:hover {
+  color: var(--color-text-secondary);
+}
+
+.btnRow {
+  display: flex;
+  gap: var(--space-4);
+}
+
+.btnPrimary,
+.btnSecondary {
+  padding: var(--space-3) var(--space-6);
+  border-radius: var(--radius-md);
+  font-size: var(--font-sm);
+  font-weight: 500;
+  cursor: pointer;
+  transition: background var(--duration-base), border-color var(--duration-base), color var(--duration-base);
+}
+
+.btnPrimary {
+  background: var(--color-accent);
+  border: 1px solid var(--color-accent);
+  color: var(--color-bg-canvas);
+}
+
+.btnPrimary:hover {
+  background: var(--color-accent-hover);
+  border-color: var(--color-accent-hover);
+}
+
+.btnSecondary {
+  background: transparent;
+  border: 1px solid var(--color-border);
+  color: var(--color-text-tertiary);
+}
+
+.btnSecondary:hover {
+  color: var(--color-text-secondary);
+  border-color: var(--color-border-muted);
+}
