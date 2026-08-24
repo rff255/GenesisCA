@@ -55,6 +55,7 @@ import { agentGraphUsesBondRequests } from '../modeler/vpl/compiler/bondRequestQ
 import { dividePartitionTableForModel } from '../modeler/vpl/compiler/dividePartition';
 import { sparseSteppingEnabled } from '../modeler/vpl/compiler/sparseStepping';
 import { periodicParams } from '../modeler/vpl/compiler/periodicExpand';
+import { agentGraphReadsEngineDensity } from '../modeler/vpl/compiler/densityExpand';
 import { analyzeGeometryTaint } from '../modeler/vpl/compiler/geometryTaint';
 
 // ---------------------------------------------------------------------------
@@ -294,7 +295,11 @@ export function describeGenerationPipeline(model: CAModel): PipelinePhase[] {
     const softCollision = usesSoftCollision(cfg);
     const positional = usesPositionalCollision(cfg);
     const growthOn = usesEngineGrowth(cfg) && cbNum(cfg, 'growthRate') > 0;
-    const usesDensity = hasAny(content.agent, 'neighbourDensity', 'divideAgent');
+    // The SHARED consumer predicate (agentFieldGating + SimulatorView read the same
+    // one): `divideAgent` always, `neighbourDensity` only while its Radius is
+    // INACTIVE — an active Radius lowers the node to a fresh Get Nearby Agents
+    // count, so the engine reduction has no reader and the scan does not run.
+    const usesDensity = agentGraphReadsEngineDensity(model);
     // The neighbour scan runs when ANY of its three consumers do — the worker's
     // own `doScan = doForce || agentUsesDensity || doCharge`.
     const scan = softCollision || usesBondingPhysics(cfg) || usesDensity || chargeCutoff;

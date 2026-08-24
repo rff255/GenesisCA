@@ -51,6 +51,7 @@ export { detectWebGPUIncompatibilities } from '../src/modeler/vpl/nodes/nodeVali
 export { expandNeighbourCensus } from '../src/modeler/vpl/compiler/censusExpand.ts';
 export { expandForceToAgents } from '../src/modeler/vpl/compiler/forceToAgentsExpand.ts';
 export { expandPeriodicSteps } from '../src/modeler/vpl/compiler/periodicExpand.ts';
+export { expandDensityRadius } from '../src/modeler/vpl/compiler/densityExpand.ts';
 export { AGENT_NEARBY_SCRATCH_SLOTS, AGENT_HASH_BIN_CAP } from '../src/simulator/engine/agentEngine.ts';
 export { BOND_REQUEST_DEPTH_MAX, CENTER_BASED_DEFAULTS, MAX_LAYOUT_ITERATIONS } from '../src/model/centerBased.ts';
 export { MAX_LOOKUP_AXES, MAX_LOOKUP_TABLE_ENTRIES, MAX_INT_RANGE_SPAN } from '../src/modeler/vpl/compiler/variegation.ts';
@@ -70,6 +71,7 @@ const {
   AGENT_WEBGPU_SUPPORTED_TYPES, AGENT_WEBGPU_NEARBY_SLOTS,
   detectWebGPUIncompatibilities,
   expandNeighbourCensus, expandForceToAgents, expandPeriodicSteps,
+  expandDensityRadius,
   AGENT_NEARBY_SCRATCH_SLOTS, AGENT_HASH_BIN_CAP,
   BOND_REQUEST_DEPTH_MAX, CENTER_BASED_DEFAULTS, MAX_LAYOUT_ITERATIONS,
   MAX_LOOKUP_AXES, MAX_LOOKUP_TABLE_ENTRIES, MAX_INT_RANGE_SPAN,
@@ -97,7 +99,7 @@ const agentDefs = defs.filter(isAgent).sort((a, b) => a.type.localeCompare(b.typ
 // We find them by ASKING the shipped transforms: feed each a one-node graph and
 // see whether the node survives. Adding a new lowering transform means adding it
 // to this probe list — a deliberate one-line edit, not a silent hand-written set.
-const LOWERING_TRANSFORMS = [expandNeighbourCensus, expandForceToAgents, expandPeriodicSteps];
+const LOWERING_TRANSFORMS = [expandNeighbourCensus, expandForceToAgents, expandPeriodicSteps, expandDensityRadius];
 const PROBE_MODEL = { properties: {}, attributes: [], agentAttributes: [], agentGraphNodes: [], agentGraphEdges: [] };
 function isLowered(type) {
   const probe = [{ id: '__probe', type: 'caNode', position: { x: 0, y: 0 }, data: { nodeType: type, config: {} } }];

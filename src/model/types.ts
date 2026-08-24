@@ -1163,9 +1163,22 @@ export interface CenterBasedConfig {
   /** User timestep Δt — auto-clamped against the monotonicity bound at init /
    *  on any force-param change. */
   timeStep?: number;
-  /** Velocity persistence ∈ [0,1). 0 = overdamped (tissue — velocity not
-   *  carried, byte-identical to the original integrator); ~0.9 gives inertia
-   *  for flocking/boids (agents keep moving + steer). */
+  /** Velocity persistence ∈ [0, 0.999] (the worker clamps; the Properties field
+   *  caps at the same 0.999). **THIS IS THE ENGINE'S FRICTION / DAMPING KNOB** —
+   *  the integrator is `v ← momentum·v + (Δt/η)·F`, so below 1 the velocity decays
+   *  geometrically and a constant force settles at the finite terminal speed
+   *  `(Δt/η)·F / (1 − momentum)`. 0 = fully overdamped (tissue — velocity not
+   *  carried, byte-identical to the original integrator); ~0.9 gives inertia for
+   *  flocking/boids; 0.999 ≈ frictionless (v_∞ = 1000·(Δt/η)·F, i.e. practically
+   *  unbounded — that, not a missing feature, is what "agents accelerate forever"
+   *  means).
+   *
+   *  A rule that damps its OWN velocity in the graph (Get Velocity → ×f → Set
+   *  Velocity, as Particle Life does to expose friction as a live model-attribute
+   *  slider) is NOT a second mechanism: the behaviour runs BEFORE the force pass,
+   *  so that composes to `v ← (momentum·f)·v + (Δt/η)·F` — exactly `momentum × f`.
+   *  Friction applied AFTER the force add, `(v + kF)·f`, is likewise `momentum = f`
+   *  with `η' = η/f`. Neither placement reaches a behaviour momentum cannot. */
   momentum?: number;
   /** Optional speed cap (per step). 0 / absent = uncapped. Boids use it to keep
    *  a roughly constant cruising speed. */
