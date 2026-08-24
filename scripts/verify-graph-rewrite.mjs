@@ -55,6 +55,7 @@ export { computeAgentWebGPULayout } from '../src/modeler/vpl/compiler/agentWebgp
 export { compileAgentGraph } from '../src/modeler/vpl/compiler/compile.ts';
 export { resolveAxes } from '../src/modeler/vpl/compiler/variegation.ts';
 export { buildAgentAbiArgs } from '../src/modeler/vpl/compiler/agentAbi.ts';
+export { agentUsesDivisionSibling, agentUsesDivisionRequests } from '../src/modeler/vpl/compiler/divisionUse.ts';
 export { migrateForHarness } from '../src/dev/compileHarness.ts';
 export { migrateFormBondBetween } from '../src/model/formBondBetweenMigration.ts';
 export { resolveAgentFieldGates } from '../src/model/agentFieldGating.ts';
@@ -5090,6 +5091,474 @@ function tierP() {
   }
 }
 
+// ===========================================================================
+// TIER Q — D4: STRUCTURAL REQUESTS FROM THE DIVISION EVENT + THE SECOND DRAIN
+//           (and D3's `siblingId`, which is what makes them addressable).
+//
+// The one thing the agent tier genuinely could not express: **a daughter bonding
+// a THIRD PARTY in the generation it was born**. P5's partition only
+// redistributes the mother's existing bonds and `daughterBond` only adds the A–B
+// edge, so the workaround was to flag the daughter and let its own behaviour step
+// bond one generation later — precisely the transient-intermediate-state problem
+// GRA rules exist to avoid.
+//
+// D4 gives the `division` ABI the request-QUEUE block and runs a SECOND
+// `drainAgentBondRequests` right after every division event. This tier proves the
+// three claims that makes:
+//
+//   §1  THE HEADLINE — a division event's Form Bond APPLIES this generation, with
+//       I1–I4 green immediately after, and the daughters really are the ones
+//       bonded (not the mother slot by accident).
+//   §2  D3 — each daughter is handed the OTHER's id, verified BY VALUE and by
+//       using it as a bond target.
+//   §3  I5 — a rejected op (bond capacity) leaves the graph EXACTLY as the
+//       division left it, and does not truncate the queue behind it.
+//   §4  THE NEGATIVE CONTROL — the second drain does NOT re-apply a first-pass
+//       op. The drain zeroes each entry's two lanes BEFORE decoding, so a second
+//       pass sees nothing; the control reconstructs the failure by hand (re-arm
+//       the entry) and shows it destroys the edge, so the check is discriminating
+//       rather than vacuous.
+//
+// The tier replicates the worker's structural-phase ORDER with the SHIPPED engine
+// primitives (drain → division → division events → drain) rather than a copy of
+// the logic — the same discipline every other queue tier uses.
+// ===========================================================================
+
+/** Build an agents-only model whose Division Event issues structural requests.
+ *  `target`: 'const' → Form Bond to a fixed third-party id · 'sibling' → Form
+ *  Bond to the OTHER daughter (D3 as an addressable id) · 'attr' → write the
+ *  sibling's id into an agent attribute (the value assertion). */
+function buildDivisionRequestModel(target, thirdParty = 5) {
+  const n = [], e = [];
+  const an = (t, c) => { const x = { id: `n${n.length}`, type: 'caNode', position: { x: 0, y: 0 }, data: { nodeType: t, config: c || {} } }; n.push(x); return x; };
+  const ed = (s, sp, tt, tp, cat) => e.push({ id: `e${e.length}`, source: s.id, target: tt.id, sourceHandle: `output_${cat}_${sp}`, targetHandle: `input_${cat}_${tp}` });
+  an('behaviourStep');
+  const dv = an('divisionEvent');
+  if (target === 'attr') {
+    // Set Attribute on SELF (no agentId wired), value = the sibling's id.
+    const sa = an('setAttribute', { attributeId: 'sib' });
+    ed(dv, 'do', sa, 'do', 'flow');
+    ed(dv, 'siblingId', sa, 'value', 'value');
+  } else {
+    const fb = an('formBond', {});
+    ed(dv, 'do', fb, 'do', 'flow');
+    if (target === 'sibling') ed(dv, 'siblingId', fb, 'targetAgent', 'value');
+    else { const k = an('getConstant', { constType: 'integer', constValue: String(thirdParty) }); ed(k, 'value', fb, 'targetAgent', 'value'); }
+  }
+  return migrateForHarness({
+    schemaVersion: 1,
+    properties: { name: 'divreq', dimension: '2d', gridWidth: 16, gridHeight: 16, gridDepth: 1, topology: '2d-grid', boundaryTreatment: 'torus', useWasm: false, useWebGPU: false },
+    topologyMode: { gridCells: false, agents: true },
+    centerBased: { ...queueCfg(64, 4, 8), worldWidth: 64, worldHeight: 64, agentTarget: 'js', agentUpdateMode: 'async',
+      agentCapabilities: AGENT_CAPS({ bonds: 'physics', division: true }) },
+    attributes: [], modelAttributes: [], neighborhoods: [],
+    agentAttributes: [{ id: 'sib', name: 'Sib', type: 'float', defaultValue: '-1', description: '' }],
+    bondAttributes: [], variables: [], agentVariables: [], indicators: [], mappings: [],
+    graphNodes: [], graphEdges: [], agentGraphNodes: n, agentGraphEdges: e, macroDefs: [],
+  });
+}
+
+/** Compile one of those models and return a runner that replays the worker's
+ *  structural phase over a REAL store, in the shipped order. */
+function divisionRequestRunner(model) {
+  const r = compileAgentGraph(model.agentGraphNodes, model.agentGraphEdges, model, 0);
+  if (r.error || !r.divisionCode) return { error: r.error || 'no divisionCode', compiled: r };
+  // eslint-disable-next-line no-eval
+  const fn = eval(r.divisionCode);
+  const shape = {
+    is3d: false, agentAttrs: agentAttrsOf(model).map(a => ({ id: a.id })),
+    fieldAttrs: cellFieldAttrsOf(model), hasLookupTables: false, bondAttrs: [],
+    usesGeneration: true, gates: resolveAgentFieldGates(model),
+    // The worker reads these off the SHIPPED flags; the harness reproduces that.
+    usesDivisionSibling: m.agentUsesDivisionSibling(model),
+    usesDivisionRequests: m.agentUsesDivisionRequests(model),
+  };
+  const rt = {
+    hash: null, emptyI32: new Int32Array(0), modelAttrs: {}, viewer: '',
+    indicators: new Float64Array(0), rngState: new Uint32Array(1), stopFlag: new Uint32Array(1),
+    glyphCodes: new Uint32Array(1), glyphColors: new Uint32Array(1), lookupTables: {},
+    width: 64, height: 64, total: 64 * 64, torus: true, fieldArray: () => undefined, generation: 0,
+  };
+  /** The SHIPPED structural-phase order for ONE division of agent `mother`.
+   *  Returns { a, b } or null when the division itself was rejected. */
+  const structuralPhase = (st, mother, lambda = 1) => {
+    drainAgentBondRequests(st, lambda);                                     // pass 1
+    const out = [0, 0, 0];
+    const b = divideAgent(st, mother, 0, 0, 0, 0.5, lambda, true, 64, 64, 1, out, DEFAULT_DIVIDE_PARTITION);
+    if (b < 0) return null;
+    // Both daughters' queues must be EMPTY here — the safety claim the second
+    // drain rests on. Asserted by the caller via `queueEmpty`.
+    fn(...buildAgentAbiArgs('division', shape, st, { ...rt, idx: mother, daughterIndex: 0, axisX: out[0], axisY: out[1], siblingId: b }));
+    fn(...buildAgentAbiArgs('division', shape, st, { ...rt, idx: b, daughterIndex: 1, axisX: out[0], axisY: out[1], siblingId: mother }));
+    const overflow = drainAgentBondRequests(st, lambda);                    // pass 2 (D4)
+    return { a: mother, b, overflow };
+  };
+  return { fn, shape, rt, structuralPhase, compiled: r };
+}
+
+/** A queue store carrying the division fixtures' agent attribute, so the `r_`/`w_`
+ *  ABI slots resolve to real arrays (`queueStore` builds an attribute-less one). */
+function divStore(n, maxBonds, depth) {
+  const s = createAgentStore(queueCfg(n + 8, maxBonds, depth), [{ id: 'sib', type: 'float', defaultValue: -1 }]);
+  s.worldWidth = 64; s.worldHeight = 64; s.worldDepth = 1;
+  seedAgents(s, Array.from({ length: n }, (_, i) => ({ x: (i % 8) + 0.5, y: Math.floor(i / 8) + 0.5, radius: 0.5 })), 0.5);
+  return s;
+}
+
+/** Is agent `i`'s whole request queue empty (every entry, incl. the overflow bucket)? */
+const queueEmpty = (st, i) => {
+  const s = st.bondReqSlots;
+  for (let c = 0; c < s; c++) if (st.bondFormReq[i * s + c] !== 0 || st.bondBreakReq[i * s + c] !== 0) return false;
+  return true;
+};
+
+async function tierQ() {
+  section('TIER Q — D4: division-event structural requests + the SECOND drain');
+
+  // --- 0. the compile shape (the gate, and that the emit really uses the queue)
+  {
+    const model = buildDivisionRequestModel('const');
+    ok(m.agentUsesDivisionRequests(model) === true,
+      'a Form Bond in the Division Event turns the D4 gate ON');
+    const r = compileAgentGraph(model.agentGraphNodes, model.agentGraphEdges, model, 0);
+    ok(!r.error, 'the model compiles', String(r.error));
+    ok(/let _brqC = 0;/.test(r.divisionCode) && /_bondFormReq\[_bq\]/.test(r.divisionCode),
+      'the division fn declares the queue cursor and writes the queue');
+    // …and the BEHAVIOUR fn is untouched by this (no queue verb there).
+    ok(!/_bondFormReq\[_bq\]/.test(r.behaviourCode),
+      'the behaviour fn does NOT gain a queue write (the verb is division-scoped)');
+    // THE SAFETY PROPERTY the second drain rests on, pinned in the SHIPPED
+    // engine source: the drain zeroes an entry's two lanes BEFORE decoding it,
+    // so a second pass can never re-apply a first-pass op.
+    const eng = readFileSync(join(ROOT, 'src', 'simulator', 'engine', 'agentEngine.ts'), 'utf8');
+    const drainSrc = eng.slice(eng.indexOf('export function drainAgentBondRequests'));
+    const zeroAt = drainSrc.indexOf('s.bondBreakReq[base + c] = 0; s.bondFormReq[base + c] = 0;');
+    const decodeAt = drainSrc.indexOf('if (bl < 0 && fl < 0)');
+    ok(zeroAt > 0 && decodeAt > zeroAt,
+      'the drain ZEROES each entry BEFORE decoding it (what makes a second pass safe)');
+  }
+
+  // --- 1. THE HEADLINE — a daughter bonds a THIRD PARTY this generation -----
+  {
+    const model = buildDivisionRequestModel('const', 5);
+    const R = divisionRequestRunner(model);
+    ok(!R.error, 'the division-request model compiles to a runnable fn', String(R.error));
+    const st = divStore(8, 4, 8);
+    const before = [...edgeSet(decodeAgentGraph(st))].sort().join(',');
+    ok(before === '', '(precondition) the population starts unbonded');
+    // Instrument the moment BETWEEN the division and the events: both daughters'
+    // queues must be empty, which is why one drain after the events suffices.
+    const out = [0, 0, 0];
+    const probeSt = divStore(8, 4, 8);
+    const pb = divideAgent(probeSt, 0, 0, 0, 0, 0.5, 1, true, 64, 64, 1, out, DEFAULT_DIVIDE_PARTITION);
+    ok(pb > 0 && queueEmpty(probeSt, 0) && queueEmpty(probeSt, pb),
+      'both daughters\' queues are EMPTY when their event runs (A\'s was drained in pass 1, B\'s cleared by initAgentSlot)');
+
+    const res = R.structuralPhase(st, 0);
+    ok(res !== null, 'the division itself succeeded');
+    const edges = [...edgeSet(decodeAgentGraph(st))].sort().join(',');
+    ok(hasBond(st, res.a, 5) && hasBond(st, res.b, 5),
+      'BOTH daughters are bonded to the third party, in the SAME generation', edges);
+    ok(st.bondCount[5] === 2, 'the third party gained exactly two bonds', String(st.bondCount[5]));
+    ok(!res.overflow, 'no queue overflow');
+    ok(allInvariants(st) === null, 'I1–I4 hold immediately after the second drain', String(allInvariants(st)));
+    // The requests were CONSUMED — nothing is left to re-apply next generation.
+    ok(queueEmpty(st, res.a) && queueEmpty(st, res.b),
+      'both daughters\' queues are empty again after the second drain');
+    // NEGATIVE CONTROL: WITHOUT the second drain the bond does not exist, so the
+    // check above is really testing the drain and not the division.
+    const st2 = divStore(8, 4, 8);
+    drainAgentBondRequests(st2, 1);
+    const o2 = [0, 0, 0];
+    const b2 = divideAgent(st2, 0, 0, 0, 0, 0.5, 1, true, 64, 64, 1, o2, DEFAULT_DIVIDE_PARTITION);
+    R.fn(...buildAgentAbiArgs('division', R.shape, st2, { ...R.rt, idx: 0, daughterIndex: 0, axisX: o2[0], axisY: o2[1], siblingId: b2 }));
+    R.fn(...buildAgentAbiArgs('division', R.shape, st2, { ...R.rt, idx: b2, daughterIndex: 1, axisX: o2[0], axisY: o2[1], siblingId: 0 }));
+    ok(!hasBond(st2, 0, 5) && !hasBond(st2, b2, 5),
+      'negative control: with NO second drain the request is queued but never applied');
+    ok(!queueEmpty(st2, 0), '…and the entries are still sitting in the queue');
+  }
+
+  // --- 2. D3 — each daughter is handed the OTHER's id -----------------------
+  {
+    // (a) BY VALUE: the event writes the sibling id into an agent attribute.
+    const model = buildDivisionRequestModel('attr');
+    ok(m.agentUsesDivisionSibling(model) === true, 'wiring `siblingId` turns the D3 gate ON');
+    ok(m.agentUsesDivisionRequests(model) === false,
+      'a Division Event with NO bond verb leaves the D4 gate OFF (the two are independent)');
+    const R = divisionRequestRunner(model);
+    ok(!R.error, 'the sibling-attribute model compiles', String(R.error));
+    const st = divStore(8, 4, 8);
+    const res = R.structuralPhase(st, 0);
+    const sib = st.attrRead['sib'];
+    ok(sib[res.a] === res.b && sib[res.b] === res.a,
+      'each daughter read the OTHER daughter\'s id', `A=${sib[res.a]} (want ${res.b}) · B=${sib[res.b]} (want ${res.a})`);
+    ok(res.a !== res.b && res.b > 0, 'the two daughters are distinct slots', `${res.a}/${res.b}`);
+    // Untouched agents keep the attribute default — a broadcast write would show.
+    ok(sib[1] === -1 && sib[7] === -1, 'no uninvolved agent was written');
+
+    // (b) AS AN ADDRESS: Form Bond to `siblingId` bonds the two daughters.
+    const model2 = buildDivisionRequestModel('sibling');
+    const R2 = divisionRequestRunner(model2);
+    ok(!R2.error, 'the sibling-bond model compiles', String(R2.error));
+    const st2 = divStore(8, 4, 8);
+    const res2 = R2.structuralPhase(st2, 0);
+    ok(hasBond(st2, res2.a, res2.b), 'the two daughters bonded EACH OTHER through `siblingId`');
+    ok(edgeSet(decodeAgentGraph(st2)).size === 1, 'exactly one edge was created (both events named the same pair)');
+    ok(allInvariants(st2) === null, 'I1–I4 hold', String(allInvariants(st2)));
+  }
+
+  // --- 3. I5 — a REJECTED request leaves the graph exactly as the division left it
+  {
+    const model = buildDivisionRequestModel('const', 5);
+    const R = divisionRequestRunner(model);
+    const st = divStore(8, 2, 8);                 // maxBonds = 2
+    // Fill agent 5's bond list so every Form Bond naming it must be REJECTED
+    // whole-op (invariant I5: neither side is touched).
+    formBond(st, 5, 6, 1, 1); formBond(st, 5, 7, 1, 1);
+    ok(st.bondCount[5] === 2, '(precondition) the third party is at capacity');
+    const before = [...edgeSet(decodeAgentGraph(st))].sort().join('|');
+    const beforeSlots = Array.from({ length: st.highWater }, (_, i) => partnersOf(st, i).join(','));
+    const res = R.structuralPhase(st, 0);
+    ok(res !== null, 'the division still succeeded (the REQUEST is what fails, not the split)');
+    const after = [...edgeSet(decodeAgentGraph(st))].sort().join('|');
+    ok(after === before, 'I5: the rejected Form Bond changed NOTHING', `${before} -> ${after}`);
+    ok(st.bondCount[5] === 2, 'I5: the full third party kept exactly its two bonds');
+    ok(st.bondCount[res.a] === 0 && st.bondCount[res.b] === 0, 'I5: neither daughter gained a bond');
+    // Compare over the PRE-division index range: the division appends a slot, so
+    // `st.highWater` grew and a raw list-vs-list compare would differ in length.
+    const moved = beforeSlots.filter((v, i) => v !== partnersOf(st, i).join(',')).length;
+    ok(moved === 0, 'I5: not one pre-existing slot moved', `${moved} rows differ`);
+    ok(allInvariants(st) === null, 'I5: I1–I4 hold after the rejection', String(allInvariants(st)));
+    ok(queueEmpty(st, res.a) && queueEmpty(st, res.b),
+      'I5: the rejected entries were still CONSUMED (no queue truncation)');
+    // …and a probe queued BEHIND the rejected op still applies, so a rejection
+    // can never be mistaken for a truncation.
+    const st2 = divStore(8, 2, 8);
+    formBond(st2, 5, 6, 1, 1); formBond(st2, 5, 7, 1, 1);
+    const o = [0, 0, 0];
+    drainAgentBondRequests(st2, 1);
+    const b2 = divideAgent(st2, 0, 0, 0, 0, 0.5, 1, true, 64, 64, 1, o, DEFAULT_DIVIDE_PARTITION);
+    R.fn(...buildAgentAbiArgs('division', R.shape, st2, { ...R.rt, idx: 0, daughterIndex: 0, axisX: o[0], axisY: o[1], siblingId: b2 }));
+    queueOp(st2, 0, 1, { to: 1 });                  // the probe, BEHIND the rejected entry
+    drainAgentBondRequests(st2, 1);
+    ok(hasBond(st2, 0, 1), 'a probe queued behind the rejected op still applies');
+  }
+
+  // --- 4. THE NEGATIVE CONTROL: the second drain re-applies NOTHING ---------
+  //
+  // The discriminator has to be an op whose SECOND application is observable. A
+  // Form is idempotent and a Break of a missing edge is a no-op, so the fixture
+  // is: queue a BREAK, drain (pass 1) — the edge is cut and the entry zeroed —
+  // then RE-FORM the same edge (standing in for "a division event created it")
+  // and drain again. A drain that did not zero would cut it a second time.
+  {
+    const st = divStore(8, 4, 8);
+    formBond(st, 0, 1, 1, 1);
+    queueOp(st, 0, 0, { from: 1 });                 // Break(self=0, 1)
+    drainAgentBondRequests(st, 1);                  // pass 1
+    ok(!hasBond(st, 0, 1), '(precondition) pass 1 cut the edge');
+    formBond(st, 0, 1, 1, 1);                       // the "division event" re-creates it
+    drainAgentBondRequests(st, 1);                  // pass 2 — must be a no-op
+    ok(hasBond(st, 0, 1),
+      'the SECOND drain re-applied nothing — the edge survives (the entry was zeroed at decode time)');
+
+    // The control, constructed by hand: re-ARM the entry after pass 1 and the
+    // second pass DOES destroy the edge. Without this the check above would pass
+    // even if the drain never ran at all.
+    const st2 = divStore(8, 4, 8);
+    formBond(st2, 0, 1, 1, 1);
+    queueOp(st2, 0, 0, { from: 1 });
+    drainAgentBondRequests(st2, 1);
+    formBond(st2, 0, 1, 1, 1);
+    queueOp(st2, 0, 0, { from: 1 });                // ← the entry a non-zeroing drain would leave
+    drainAgentBondRequests(st2, 1);
+    ok(!hasBond(st2, 0, 1),
+      'negative control: an entry still armed at the second pass DOES re-apply (so the check above discriminates)');
+
+    // The same claim end-to-end through a real division: running the second drain
+    // TWICE must be indistinguishable from running it once.
+    const model = buildDivisionRequestModel('const', 5);
+    const R = divisionRequestRunner(model);
+    const s1 = divStore(8, 4, 8), s2 = divStore(8, 4, 8);
+    const r1 = R.structuralPhase(s1, 0);
+    const r2 = R.structuralPhase(s2, 0);
+    drainAgentBondRequests(s2, 1);                  // a THIRD pass
+    drainAgentBondRequests(s2, 1);                  // …and a fourth
+    ok([...edgeSet(decodeAgentGraph(s1))].sort().join(',') === [...edgeSet(decodeAgentGraph(s2))].sort().join(','),
+      'extra drains after the division events are idempotent (the entries are already consumed)',
+      `${[...edgeSet(decodeAgentGraph(s1))].sort().join(',')} vs ${[...edgeSet(decodeAgentGraph(s2))].sort().join(',')}`);
+    ok(r1 !== null && r2 !== null && allInvariants(s2) === null, 'I1–I4 hold after the extra drains');
+  }
+
+  // --- 5. MULTIPLE divisions in one generation ------------------------------
+  //
+  // The events run in a loop and every daughter appends to its OWN queue, so the
+  // second drain must apply all of them — the shape a real tissue produces.
+  {
+    const model = buildDivisionRequestModel('sibling');
+    const R = divisionRequestRunner(model);
+    const st = divStore(6, 4, 8);
+    const lambda = 1, out = [0, 0, 0];
+    drainAgentBondRequests(st, lambda);
+    const evs = [];
+    for (const mother of [0, 1, 2]) {
+      const b = divideAgent(st, mother, 0, 0, 0, 0.5, lambda, true, 64, 64, 1, out, DEFAULT_DIVIDE_PARTITION);
+      ok(b > 0, `division of agent ${mother} succeeded`);
+      evs.push({ a: mother, b, ax: out[0], ay: out[1] });
+    }
+    for (const ev of evs) {
+      R.fn(...buildAgentAbiArgs('division', R.shape, st, { ...R.rt, idx: ev.a, daughterIndex: 0, axisX: ev.ax, axisY: ev.ay, siblingId: ev.b }));
+      R.fn(...buildAgentAbiArgs('division', R.shape, st, { ...R.rt, idx: ev.b, daughterIndex: 1, axisX: ev.ax, axisY: ev.ay, siblingId: ev.a }));
+    }
+    drainAgentBondRequests(st, lambda);
+    const edges = [...edgeSet(decodeAgentGraph(st))].sort().join(',');
+    ok(evs.every(ev => hasBond(st, ev.a, ev.b)), 'all three daughter pairs bonded', edges);
+    ok(edgeSet(decodeAgentGraph(st)).size === 3, 'exactly three edges (one per division)', edges);
+    ok(allInvariants(st) === null, 'I1–I4 hold after three divisions + one drain', String(allInvariants(st)));
+  }
+
+  // --- 6. THE BEHAVIOUR TARGET VARIES; THE DIVISION ROOT DOES NOT ----------
+  //
+  // The division root is JS-on-CPU on every agent target (it is in
+  // `AGENT_WASM_CPU_ROOT_TYPES`, and the WebGPU agent compiler compiles the
+  // BEHAVIOUR root only), so a model whose behaviour runs on WASM or the GPU
+  // still has its division events — and D4's second drain — executed by the same
+  // CPU code. That combination is exactly what must not regress, so it is pinned
+  // here end-to-end: the WASM arm instantiates a REAL module over the wasmBacked
+  // store, runs it, and must produce the IDENTICAL bond graph to the JS arm.
+  {
+    // A model whose BEHAVIOUR divides (agent 0 is gated out and stays the stable
+    // third party) and whose DIVISION EVENT bonds each daughter to it + records
+    // the sibling id. Compiles on all three agent targets.
+    const n = [], e = [];
+    const an = (t, c) => { const x = { id: `q${n.length}`, type: 'caNode', position: { x: 0, y: 0 }, data: { nodeType: t, config: c || {} } }; n.push(x); return x; };
+    const ed = (s, sp, tt, tp, cat) => e.push({ id: `q${e.length}`, source: s.id, target: tt.id, sourceHandle: `output_${cat}_${sp}`, targetHandle: `input_${cat}_${tp}` });
+    const bs = an('behaviourStep');
+    const gsh = an('getSelfHandle');
+    const gHas = an('getCellAttribute', { attributeId: 'sib' });          // -1 until divided
+    const cmpHas = an('statement', { compareType: 'numerical', operation: '<', _port_y: '0' });
+    const cmpId = an('statement', { compareType: 'numerical', operation: '>=', _port_y: '1' });
+    const andN = an('logicOperator', { operation: 'AND' });
+    const cond = an('conditional');
+    const div = an('divideAgent', {});
+    ed(gHas, 'value', cmpHas, 'x', 'value'); ed(gsh, 'value', cmpId, 'x', 'value');
+    ed(cmpHas, 'result', andN, 'a', 'value'); ed(cmpId, 'result', andN, 'b', 'value');
+    ed(andN, 'result', cond, 'condition', 'value');
+    ed(bs, 'do', cond, 'check', 'flow'); ed(cond, 'then', div, 'do', 'flow');
+    const dv = an('divisionEvent');
+    const fb = an('formBond', {});
+    const k0 = an('getConstant', { constType: 'integer', constValue: '0' });
+    const sSib = an('setAttribute', { attributeId: 'sib' });
+    ed(dv, 'do', fb, 'do', 'flow'); ed(k0, 'value', fb, 'targetAgent', 'value');
+    ed(fb, 'next', sSib, 'do', 'flow'); ed(dv, 'siblingId', sSib, 'value', 'value');
+    const model = migrateForHarness({
+      schemaVersion: 1,
+      properties: { name: 'q6', dimension: '2d', gridWidth: 64, gridHeight: 64, gridDepth: 1, topology: '2d-grid', boundaryTreatment: 'torus', useWasm: false, useWebGPU: false },
+      topologyMode: { gridCells: false, agents: true },
+      centerBased: {
+        enabled: true, maxAgents: 64, maxBonds: 8, bondRequestDepth: 8, worldWidth: 64, worldHeight: 64,
+        defaultRadius: 1, timeStep: 0.1, bondStiffness: 0.2, bondRestLength: 4,
+        useBondingPhysics: false, autoBond: false, agentUpdateMode: 'async', agentTarget: 'js',
+        agentCapabilities: AGENT_CAPS({ bonds: 'physics', division: true }),
+      },
+      attributes: [], modelAttributes: [], neighborhoods: [],
+      agentAttributes: [{ id: 'sib', name: 'Sib', type: 'integer', defaultValue: '-1', description: '' }],
+      bondAttributes: [], variables: [], agentVariables: [], indicators: [], mappings: [],
+      graphNodes: [], graphEdges: [], agentGraphNodes: n, agentGraphEdges: e, macroDefs: [],
+    });
+
+    const r = compileAgentGraph(model.agentGraphNodes, model.agentGraphEdges, model, 0);
+    ok(!r.error, 'the cross-target fixture compiles on JS', String(r.error));
+    // eslint-disable-next-line no-eval
+    const behaviourJS = eval(r.behaviourCode);
+    // eslint-disable-next-line no-eval
+    const fnDiv = eval(r.divisionCode);
+    const specs = [{ id: 'sib', type: 'integer', defaultValue: -1 }];
+    const shape = {
+      is3d: false, agentAttrs: specs, fieldAttrs: [], hasLookupTables: false, bondAttrs: [],
+      usesGeneration: true, gates: resolveAgentFieldGates(model),
+      usesDivisionSibling: m.agentUsesDivisionSibling(model),
+      usesDivisionRequests: m.agentUsesDivisionRequests(model),
+    };
+    const rng = new Uint32Array(1);
+    const rt = {
+      hash: null, emptyI32: new Int32Array(0), modelAttrs: {}, viewer: '',
+      indicators: new Float64Array(0), rngState: rng, stopFlag: new Uint32Array(1),
+      glyphCodes: new Uint32Array(1), glyphColors: new Uint32Array(1), lookupTables: {},
+      width: 64, height: 64, total: 64 * 64, torus: true, fieldArray: () => undefined, generation: 0,
+    };
+    const mkStore = (wasmBacked, layoutExtras) => {
+      const s = createAgentStore(model.centerBased, specs, {
+        wasmBacked, syncAttrs: false, layoutExtras, bondReqSlots: bondReqSlotsForModel(model),
+        fieldGates: resolveAgentFieldGates(model),
+        maxHashBins: computeAgentMaxHashBins(64, 64, 1, 1.5, 1, 5),
+      });
+      s.worldWidth = 64; s.worldHeight = 64; s.worldDepth = 1;
+      seedAgents(s, Array.from({ length: 4 }, (_, i) => ({ x: 8 + i * 6, y: 20, radius: 1 })), 1);
+      return s;
+    };
+    /** The worker's structural phase, replayed with the SHIPPED primitives. */
+    const phase = (s) => {
+      drainAgentBondRequests(s, 0.2);
+      const evs = [], out = [0, 0, 0], hw = s.highWater;
+      for (let i = 0; i < hw; i++) {
+        if (!s.alive[i] || !s.divideRequest[i]) continue;
+        s.divideRequest[i] = 0;
+        const b = divideAgent(s, i, s.divideAxisX[i], s.divideAxisY[i], 0, s.divideAsym[i] || 0.5, 0.2, true, 64, 64, 1, out, DEFAULT_DIVIDE_PARTITION);
+        if (b >= 0) evs.push({ a: i, b, ax: out[0], ay: out[1] });
+      }
+      for (const ev of evs) {
+        fnDiv(...buildAgentAbiArgs('division', shape, s, { ...rt, idx: ev.a, daughterIndex: 0, axisX: ev.ax, axisY: ev.ay, siblingId: ev.b }));
+        fnDiv(...buildAgentAbiArgs('division', shape, s, { ...rt, idx: ev.b, daughterIndex: 1, axisX: ev.ax, axisY: ev.ay, siblingId: ev.a }));
+      }
+      if (evs.length > 0) drainAgentBondRequests(s, 0.2);
+      return evs;
+    };
+    const outcome = (s, evs) => {
+      const sib = s.attrRead['sib'];
+      return [
+        evs.length,
+        s.bondCount[0],
+        evs.every(ev => hasBond(s, ev.a, 0) && hasBond(s, ev.b, 0)),
+        evs.every(ev => sib[ev.a] === ev.b && sib[ev.b] === ev.a),
+        [...edgeSet(decodeAgentGraph(s))].sort().join(','),
+      ].join('|');
+    };
+
+    // --- JS behaviour ---
+    const sJs = mkStore(false);
+    rng[0] = 0x1234abcd;
+    behaviourJS(...buildAgentAbiArgs('loop', shape, sJs, { ...rt, hash: null }));
+    const evJs = phase(sJs);
+    ok(evJs.length === 3, '[js] three agents divided (agent 0 is the gated-out third party)', String(evJs.length));
+    ok(sJs.bondCount[0] === 6, '[js] all six daughters bonded the third party this generation', String(sJs.bondCount[0]));
+    ok(allInvariants(sJs) === null, '[js] I1–I4 hold', String(allInvariants(sJs)));
+    const jsOut = outcome(sJs, evJs);
+
+    // --- WASM behaviour + the SAME JS division fn + the SAME drains ---
+    const wr = compileAgentGraphWasmForModel(model);
+    ok(isAgentGraphWasmSupported(model) && !wr.error, '[wasm] the behaviour graph compiles to a module', String(wr.error));
+    const sW = mkStore(true, { ...buildAgentLayoutExtras(model), fieldTotal: 0, syncAttrs: false });
+    const inst = await instantiateAgentWasm(wr.bytes, sW.memory);
+    ok(!!inst && typeof inst.behaviour === 'function', '[wasm] the module instantiates over the wasmBacked store');
+    new Uint32Array(sW.memory.buffer, sW.layout.rngStateOffset, 1)[0] = 0x1234abcd;
+    inst.behaviour(sW.highWater, 0, 0, 0, 0, 1, 1, 1, 64, 64, 1, 1, 0, 0, 0);
+    const evW = phase(sW);
+    ok(allInvariants(sW) === null, '[wasm] I1–I4 hold', String(allInvariants(sW)));
+    ok(outcome(sW, evW) === jsOut,
+      '[wasm] the division events produce the IDENTICAL bond graph + sibling ids as JS', `${outcome(sW, evW)} vs ${jsOut}`);
+
+    // --- WebGPU: the shader compiles and carries NO division-root code -------
+    const gr = compileAgentGraphWebGPUForModel(model);
+    ok(isAgentGraphWebGPUSupported(model) && !gr.error && !!gr.shaderCode,
+      '[webgpu] the behaviour graph passes the gate and compiles', String(gr.error));
+    ok(!/__siblingId|_bondFormReq/.test(gr.shaderCode),
+      '[webgpu] the shader carries NO division-root code — the division event stays JS-on-CPU on every target');
+  }
+
+}
+
+
 tierA();
 tierB();
 await tierC();
@@ -5105,6 +5574,7 @@ tierL();
 tierN();
 tierO();
 tierP();
+await tierQ();
 tierM();
 
 console.log(`\n${fail === 0 ? 'GRAPH-REWRITE HARNESS ✓' : 'GRAPH-REWRITE HARNESS ✗'}  (${pass} passed, ${fail} failed)`);

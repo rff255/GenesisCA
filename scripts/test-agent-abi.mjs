@@ -24,6 +24,7 @@ export { createAgentStore } from '../src/simulator/engine/agentEngine.ts';
 export { buildAgentLoopParams, buildDivisionParams, buildAgentInitParams, buildAgentInputParams,
          compileAgentGraph, agentAbiShapeOf } from '../src/modeler/vpl/compiler/compile.ts';
 export { inputParamsOf } from '../src/model/inputMappingParams.ts';
+export { agentUsesDivisionSibling, agentUsesDivisionRequests } from '../src/modeler/vpl/compiler/divisionUse.ts';
 export { resolveAgentFieldGates } from '../src/model/agentFieldGating.ts';
 export { bondAttrsOf, agentAttrsOf, cellFieldAttrsOf } from '../src/model/attributeScope.ts';
 export { migrateForHarness } from '../src/dev/compileHarness.ts';
@@ -324,6 +325,10 @@ function workerShapeOf(model) {
     hasLookupTables: (model.attributes ?? []).some(a => a.isModelAttribute && a.type === 'lookupTable'),
     bondAttrs: store.bondAttrSpecs,
     usesGeneration: true,          // the worker ALWAYS passes the value
+    // D3 / D4 — SYMMETRIC: the worker reads the SHIPPED compiler-derived flags,
+    // so this side must reproduce that (not always-true like `usesGeneration`).
+    usesDivisionSibling: m.agentUsesDivisionSibling(model),
+    usesDivisionRequests: m.agentUsesDivisionRequests(model),
     gates: store.fieldGates,
   };
   return { store, shape };
@@ -529,6 +534,178 @@ function checkInputMapping(label, model, mappingId) {
   const runBlock = blockAfter(worker, /function runAgentInputMapping\(/);
   ok(/values\.length !== im\.channels/.test(runBlock),
     '[T3] runAgentInputMapping rejects a payload whose channel count disagrees with the compiled fn');
+}
+
+
+// ===========================================================================
+// TIER 4 — D3 / D4: the two GATED, TRAILING `division` blocks.
+//
+//   D3  `__siblingId`               — the OTHER daughter's slot id.
+//   D4  the structural REQUEST QUEUE (`_bondFormReq` / `_bondFormL` /
+//       `_bondFormK` / `_bondBreakReq` + one `_bondFormAttr_<id>` per bond
+//       attribute) — so Form / Break / Rewire / Transfer Bond are usable in a
+//       Division Event.
+//
+// Both are SYMMETRICALLY gated (Impact Map §5.3): unlike `_generation`, the
+// WORKER gates too, off the flags the compiler SHIPS. So the pairing this tier
+// must prove is that the arg/param GAP stays the documented {0,1} — i.e. the
+// worker never silently passes an extra trailing block the fn does not declare,
+// nor declares one it is never given.
+//
+// Every combination is exercised (neither / sibling only / requests only / both)
+// against an INDEPENDENT expected suffix, in 2D and 3D, with and without bond
+// attributes — the last of which is what makes the per-attribute cells real.
+// ===========================================================================
+{
+  const { agentUsesDivisionSibling, agentUsesDivisionRequests } = m;
+  const node = (id, nodeType, config = {}) => ({ id, type: 'caNode', position: { x: 0, y: 0 }, data: { nodeType, config } });
+  const CAPS4 = { motion: 'force', body: true, collision: 'off', charge: 'off', bonds: 'off', autoBond: false,
+    growth: false, division: false, lifespan: false, populationBirth: false, populationDeath: false,
+    sensing: false, orientation: false, fieldCoupling: false, appearance: true };
+
+  /** A model with a Division Event, optionally wiring `siblingId` (D3) and/or
+   *  issuing a Form Bond from the division flow chain (D4). `behaviourBond` puts
+   *  a bond verb in the BEHAVIOUR chain instead — the case that must NOT turn D4
+   *  on, since the scan is division-SUBTREE-scoped. */
+  const buildDiv = ({ sibling = false, request = false, behaviourBond = false, is3d = false, bondAttrs = false, macroRequest = false }) => {
+    const nodes = [node('bs', 'behaviourStep'), node('dv', 'divisionEvent'), node('sa', 'setAttribute', { attributeId: 'energy' })];
+    const edges = [];
+    if (sibling) edges.push({ id: 'es', source: 'dv', target: 'sa', sourceHandle: 'output_value_siblingId', targetHandle: 'input_value_agentId' });
+    else edges.push({ id: 'ed', source: 'dv', target: 'sa', sourceHandle: 'output_flow_do', targetHandle: 'input_flow_do' });
+    if (request) { nodes.push(node('fb', 'formBond')); edges.push({ id: 'er', source: 'dv', target: 'fb', sourceHandle: 'output_flow_do', targetHandle: 'input_flow_do' }); }
+    if (behaviourBond) { nodes.push(node('bb', 'formBond')); edges.push({ id: 'eb', source: 'bs', target: 'bb', sourceHandle: 'output_flow_do', targetHandle: 'input_flow_do' }); }
+    const macroDefs = [];
+    if (macroRequest) {
+      macroDefs.push({ id: 'md1', name: 'M', exposedInputs: [], exposedOutputs: [],
+        nodes: [node('mfb', 'formBond')], edges: [] });
+      nodes.push(node('mac', 'macro', { macroDefId: 'md1' }));
+      edges.push({ id: 'em', source: 'dv', target: 'mac', sourceHandle: 'output_flow_do', targetHandle: 'input_flow_do' });
+    }
+    return migrateForHarness({
+      ...EMPTY_MODEL,
+      properties: { ...EMPTY_MODEL.properties, dimension: is3d ? '3d' : '2d', gridDepth: is3d ? 8 : 1 },
+      topologyMode: { gridCells: false, agents: true },
+      agentAttributes: [{ id: 'energy', name: 'E', type: 'float', defaultValue: '0', description: '' }],
+      bondAttributes: bondAttrs ? [{ id: 'w', name: 'W', type: 'float', defaultValue: '0', description: '' }] : [],
+      centerBased: {
+        maxAgents: 32, maxBonds: 4, bondRequestDepth: 4, timeStep: 0.1, defaultRadius: 0.5, worldWidth: 32, worldHeight: 32,
+        agentCapabilities: { ...CAPS4, bonds: 'physics', division: true },
+      },
+      agentGraphNodes: nodes, agentGraphEdges: edges, macroDefs,
+    });
+  };
+
+  /** The expected TRAILING suffix of the `division` ABI, written out
+   *  independently of the descriptor: siblingId, then the queue block, then the
+   *  generation (which no fixture here reads, so it never appears). */
+  const expectedTail = (sib, req, bondAttrIds) => [
+    ...(sib ? ['__siblingId'] : []),
+    ...(req ? ['_bondFormReq', '_bondFormL', '_bondFormK', '_bondBreakReq', ...bondAttrIds.map(id => `_bondFormAttr_${id}`)] : []),
+  ];
+
+  for (const is3d of [false, true]) {
+    for (const bondAttrs of [false, true]) {
+      for (const [sib, req] of [[false, false], [true, false], [false, true], [true, true]]) {
+        const tag = `[T4 ${is3d ? '3D' : '2D'}${bondAttrs ? '+battr' : ''} sib=${sib} req=${req}]`;
+        const model = buildDiv({ sibling: sib, request: req, is3d, bondAttrs });
+        // The predicates ARE the gate — assert them before anything derived.
+        ok(agentUsesDivisionSibling(model) === sib, `${tag}: agentUsesDivisionSibling === ${sib}`);
+        ok(agentUsesDivisionRequests(model) === req, `${tag}: agentUsesDivisionRequests === ${req}`);
+        // The descriptor's trailing block, against the independent expectation.
+        const { shape } = workerShapeOf(model);
+        // The WORKER shape always carries `_generation` (its arg side is
+        // unconditional — the documented one-sided field), so drop it before
+        // comparing the D3/D4 tail.
+        const namesRaw = deriveAgentAbi('division', shape).map(f => f.name);
+        const names = namesRaw[namesRaw.length - 1] === '_generation' ? namesRaw.slice(0, -1) : namesRaw;
+        const want = expectedTail(sib, req, bondAttrs ? ['w'] : []);
+        ok(want.length === 0 || names.slice(names.length - want.length).join(',') === want.join(','),
+          `${tag}: division tail is '${want.join(',')}' (got '${names.slice(-Math.max(1, want.length)).join(',')}')`);
+        // Nothing outside the tail may carry these names (a MID-list insertion
+        // would shift every later arg and break the 2D-prefix rule).
+        const head = names.slice(0, names.length - want.length);
+        ok(!head.includes('__siblingId') && !head.includes('_bondBreakReq'),
+          `${tag}: neither block leaks into the head of the division ABI`);
+        // DIVISION-ONLY: no other kind grows them.
+        for (const k of ['loop', 'init', 'input', 'spawner']) {
+          const kn = deriveAgentAbi(k, shape).map(f => f.name);
+          ok(!kn.includes('__siblingId'), `${tag}: '${k}' has no __siblingId`);
+        }
+        // 2D is still a strict prefix of 3D once the gated tail is stripped.
+        const strip = (a) => { let e = a.length; while (e > 0 && (a[e - 1] === '_generation' || want.includes(a[e - 1]))) e--; return a.slice(0, e); };
+        const n2 = strip(deriveAgentAbi('division', { ...shape, is3d: false }).map(f => f.name));
+        const n3 = strip(deriveAgentAbi('division', { ...shape, is3d: true }).map(f => f.name));
+        ok(n3.slice(0, n2.length).join(',') === n2.join(','), `${tag}: 2D prefix of 3D holds with the gated tail stripped`);
+        // THE PAIRING the DEV arity assert guards: compile params vs worker args.
+        checkModel(tag, model);
+        // …and the compiled division fn really declares them (the emit side).
+        const res = compileAgentGraph(model.agentGraphNodes, model.agentGraphEdges, model);
+        ok(!res.error, `${tag}: the agent graph compiles (${res.error ?? 'ok'})`);
+        // eslint-disable-next-line no-eval
+        const fn = eval(res.divisionCode);
+        ok(fn.length === paramNames(buildDivisionParams(model)).length,
+          `${tag}: the compiled division fn declares exactly the descriptor's params`);
+        ok(res.divisionCode.includes('_siblingId = __siblingId') === sib,
+          `${tag}: the siblingId alias is emitted iff the param exists`);
+        ok(res.divisionCode.includes('let _brqC = 0;') === req,
+          `${tag}: the queue cursor is declared iff the queue block exists`);
+        if (req) ok(/_bondFormReq\[_bq\]/.test(res.divisionCode), `${tag}: the division fn really writes the queue`);
+      }
+    }
+  }
+
+  // SCOPE — a bond verb in the BEHAVIOUR chain must NOT turn D4 on (the whole
+  // reason the scan is division-subtree-scoped: every shipped GRA model rewrites
+  // bonds in its behaviour step, and several could carry a Division Event).
+  {
+    const model = buildDiv({ behaviourBond: true });
+    ok(agentUsesDivisionRequests(model) === false,
+      '[T4 scope] a Form Bond in the BEHAVIOUR chain does not widen the division ABI');
+    ok(!paramNames(buildDivisionParams(model)).includes('_bondFormReq'),
+      '[T4 scope] …and the division params stay pre-D4');
+  }
+  // …while a MACRO instance in the division chain whose body holds one DOES.
+  {
+    const model = buildDiv({ macroRequest: true });
+    ok(agentUsesDivisionRequests(model) === true,
+      '[T4 scope] a reached MACRO whose body holds a bond verb widens the division ABI (macros expand at compile time)');
+  }
+  // A model with NO Division Event at all is untouched by either flag.
+  {
+    const model = migrateForHarness({
+      ...EMPTY_MODEL,
+      topologyMode: { gridCells: false, agents: true },
+      centerBased: { maxAgents: 8, maxBonds: 2, agentCapabilities: { ...CAPS4, bonds: 'physics' } },
+      agentGraphNodes: [node('bs', 'behaviourStep'), node('fb', 'formBond')],
+      agentGraphEdges: [{ id: 'e', source: 'bs', target: 'fb', sourceHandle: 'output_flow_do', targetHandle: 'input_flow_do' }],
+    });
+    ok(agentUsesDivisionSibling(model) === false && agentUsesDivisionRequests(model) === false,
+      '[T4 no-division] a model without a Division Event sets neither flag');
+  }
+
+  // --- SOURCE INVARIANTS: the worker must read the SHIPPED flags, gate the
+  // SECOND drain on D4's, and disambiguate its overflow notice. Tier 4's
+  // arithmetic above is a mirror of the descriptor and could not see a worker
+  // that re-derived (or ignored) them.
+  const worker4 = readFileSync(join(ROOT, 'src', 'simulator', 'engine', 'sim.worker.ts'), 'utf8');
+  const sv4 = readFileSync(join(ROOT, 'src', 'simulator', 'SimulatorView.tsx'), 'utf8');
+  ok(/usesDivisionSibling: agentUsesDivisionSibling, usesDivisionRequests: agentUsesDivisionRequests/.test(worker4),
+    '[T4 src] agentAbiShapeOfStore passes the SHIPPED division flags (symmetric gating)');
+  ok(/agentUsesDivisionSibling = !!msg\.agentUsesDivisionSibling/.test(worker4)
+    && /agentUsesDivisionSibling = !!rc\.agentUsesDivisionSibling/.test(worker4),
+    '[T4 src] the worker stores the shipped flags on BOTH init and recompile');
+  ok(/agentUsesDivisionRequests && drainAgentBondRequests\(s, lambda\)/.test(worker4),
+    '[T4 src] the SECOND drain is gated on the shipped D4 flag');
+  ok((worker4.match(/drainAgentBondRequests\(s, lambda\)/g) || []).length === 2,
+    '[T4 src] there are exactly TWO drains in the structural phase');
+  ok(/queue full during division events/.test(worker4),
+    '[T4 src] the second drain overflow notice is disambiguated from the first');
+  ok(/buildDivisionArgs\(s, ev\.a, 0, ev\.axisX, ev\.axisY, ev\.b\)/.test(worker4)
+    && /buildDivisionArgs\(s, ev\.b, 1, ev\.axisX, ev\.axisY, ev\.a\)/.test(worker4),
+    '[T4 src] runDivisionEvent passes each daughter the OTHER one id');
+  ok(/agentUsesDivisionSibling: agentUsesDivisionSibling\(model\)/.test(sv4)
+    && /agentUsesDivisionRequests: agentUsesDivisionRequests\(model\)/.test(sv4),
+    '[T4 src] SimulatorView SHIPS both flags (derived from the model, never in the worker)');
 }
 
 console.log(`\n${fail === 0 ? 'ALL ABI DESCRIPTOR TESTS PASS ✓' : 'SOME FAILED ✗'}  (${pass} passed, ${fail} failed)`);

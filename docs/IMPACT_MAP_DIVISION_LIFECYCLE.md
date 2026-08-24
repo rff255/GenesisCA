@@ -1,6 +1,6 @@
 # Impact Map — Division & Agent Lifecycle
 
-**Status:** design only (2026-08-23). No production code changed. Companion illustrated plan:
+**Status:** D1 + D2 + D3 + D4 **SHIPPED** (2026-08-23); Feature 3 (the Spawn Event) and Design B remain deferred with their designs recorded here. Originally written as design-only. Companion illustrated plan:
 [PLAN_DIVISION_LIFECYCLE.html](PLAN_DIVISION_LIFECYCLE.html).
 
 Four coupled features on the bond-graph agent tier, all of them about **the moment an agent
@@ -8,7 +8,7 @@ comes into existence**:
 
 | # | Feature | Decision |
 |---|---|---|
-| 1 | Divide Agent → references to the two daughters | **Design A (staged handles) REJECTED. Design C (empower the Division Event) ADOPTED. Design B (per-daughter payload ports) DEFERRED.** |
+| 1 | Divide Agent → references to the two daughters | **Design A (staged handles) REJECTED. Design C (empower the Division Event) ADOPTED — SHIPPED as D3 (`siblingId`) + D4 (structural requests + a second drain). Design B (per-daughter payload ports) DEFERRED.** |
 | 2 | Division conserves AREA, not volume (3D) | **Add `conserve: 'area' \| 'volume'` to the Divide Agent node, default `'area'`, transported on the EXISTING partition table. Add a 3D-only `myVolume` output. NO Get/Set Area nodes.** |
 | 3 | An on-spawn event for every newborn | **DEFER.** Full design recorded; ship the cheap 80 % (document the existing Init-Event loop-over-seeded-agents idiom) instead. |
 | 4 | Interactions + invariants | Section 5. Includes one **latent footgun** and one **harness gap** found while grounding this doc. |
@@ -570,6 +570,20 @@ headline feature is D4; D2 can be pulled ahead of D3 if the user prefers the vis
   shipped model, since none wires the port); `test-agent-abi` with and without the gate;
   `audit-agent-layout`; a real-worker run asserting each daughter reads the other's id.
 
+> **SHIPPED (D3, 2026-08-23).** The port is `siblingId` ("Sibling"), the ABI scalar is `__siblingId`,
+> and both are gated on **`agentUsesDivisionSibling`** ([divisionUse.ts](../src/modeler/vpl/compiler/divisionUse.ts)),
+> SHIPPED to the worker in the init/recompile message so the gate is symmetric exactly as §5.3
+> decided. Two refinements worth recording. **(a) The compiler emits the `_v<id>_siblingId` alias
+> from the SAME model-level predicate that gates the param, NOT from its own flattened-edge test** —
+> which makes the predicate's direction load-bearing: `true`-but-unwired is a dead `const`,
+> `false`-but-wired is an undeclared identifier. It is therefore a deliberate SUPERSET (it also scans
+> any macroDef that itself holds a `divisionEvent`), and every flattening preserves the edge's
+> SOURCE, so a raw-model scan really is one. **(b) The block sits after the 3D block but BEFORE
+> `_generation`**, which stays dead last on every kind — so `audit-agent-layout`'s "the trailing
+> field is LAST on both sides" claim and the worker's `params ∈ {args − 1, args}` tolerance both keep
+> their shape; the audit gained a generic trailing-gated strip plus a new (stronger) claim that the
+> gated tail is IDENTICAL in 2D and 3D.
+
 ### D4 — Division Event structural requests + the second drain *(medium — the headline)*
 
 - The `loop` queue block added to the `division` ABI kind, gated by `usesDivisionRequests`.
@@ -583,6 +597,36 @@ headline feature is D4; D2 can be pulled ahead of D3 if the user prefers the vis
   (source-mutate the entry-zeroing to see it fail); `test-agent-abi`; `audit-agent-layout`; a
   real-worker run on all three agent targets (the behaviour target varies even though the division
   root does not — that combination is exactly what must not regress).
+
+> **SHIPPED (D4, 2026-08-23).** `usesDivisionRequests` gates the ABI block AND the second drain,
+> shipped to the worker beside D3's flag. Refinements and findings:
+>
+> - **The usage scan is DIVISION-SUBTREE-SCOPED, and that is not optional.** A whole-graph scan
+>   would hand every GRA model that rewrites bonds in its BEHAVIOUR step *and* carries a Division
+>   Event a queue block it never uses, diffing its `agent.divisionCode`. The scan therefore walks
+>   reachability from the division root over the model's own edges (the `behaviourReachedIds` shape).
+>   Pinned in `test-agent-abi` Tier 4 both ways: a behaviour-chain bond verb must NOT widen the ABI,
+>   a reached macro whose body holds one MUST.
+> - **The `_brqC` cursor is one `let` at the top of the division fn.** It is a SINGLE-agent function,
+>   so per-invocation is per-"iteration"; each of the two calls starts at slot 0 of its own agent's
+>   provably-empty queue.
+> - **The second drain is additionally gated on `divideEvents.length > 0`** — no division, no events,
+>   nothing to drain.
+> - **No `nodeValidation` change was needed.** The init-invalid set (`AGENT_SELF_ONLY_TYPES` /
+>   `AGENT_SELF_ONLY_WHEN_UNWIRED`) is scoped to the **init and spawner** roots — there was no
+>   division-root validity machinery at all, which is precisely why §2.3's footgun existed. Making
+>   the verbs work removes it.
+> - **Gates as run:** `check-compile-identity` **31 models, all surfaces unchanged**;
+>   `verify-graph-rewrite` **643 → 699** (Tier Q, 56 checks, including the cross-target arm below);
+>   `test-agent-abi` **629 → 1048**; `audit-agent-layout` **347 → 443**; `parity-agent-wasm` green;
+>   `tsc` clean. The entry-zeroing source mutation fails **4 Tier-Q checks by name** (23 harness-wide)
+>   and was reverted.
+> - **⚠ The "all three agent targets" run used the NODE harness, not a browser** (the Chrome tooling
+>   was unreachable in that session). Tier Q §6 runs the JS behaviour and a REAL instantiated WASM
+>   behaviour module over a wasmBacked store through the SHIPPED structural-phase order and asserts
+>   they produce the IDENTICAL bond graph and sibling ids; the WebGPU arm proves the gate + shader
+>   and that the shader carries no division-root code (so the division stays the same CPU fn). A real
+>   browser pass is still worth doing.
 
 ### Deferred, with reasons
 

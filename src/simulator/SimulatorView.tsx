@@ -30,6 +30,7 @@ import { diagnoseTargets, ENGINE_LABEL, REASON_CLASS_TAG } from '../model/target
 import { bondAttrsOf } from '../model/attributeScope';
 import { compileAgentGraphWasmForModel, isAgentGraphWasmSupported, buildAgentLayoutExtras } from '../modeler/vpl/compiler/agentWasm/compile';
 import { bondReqSlotsForModel } from '../modeler/vpl/compiler/bondRequestQueue';
+import { agentUsesDivisionSibling, agentUsesDivisionRequests } from '../modeler/vpl/compiler/divisionUse';
 import { resolveAgentFieldGates, motionModeCode } from '../model/agentFieldGating';
 import type { DividePartitionSpec } from '../modeler/vpl/compiler/dividePartition';
 import type { AgentLayoutExtras } from './engine/agentEngine';
@@ -8234,6 +8235,11 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
       // param list are one record.
       agentFieldGates: resolveAgentFieldGates(model),
       agentDividePartitions: agentResult.dividePartitions,
+      // D3 / D4 - the division-ABI usage flags. SHIPPED (never recomputed in the
+      // worker) so the compiled param list and the worker's arg list gate on ONE
+      // answer; D4's also gates the SECOND bond-request drain.
+      agentUsesDivisionSibling: agentUsesDivisionSibling(model),
+      agentUsesDivisionRequests: agentUsesDivisionRequests(model),
       // PR5 (C-D1): whether the agent graph reads/writes the cell field. Drives
       // the WebGPU-grid field bridge (a no-field model does 0 per-step
       // readbacks). Cheap boolean — leave the JS/WASM grid path untouched.
@@ -8719,6 +8725,11 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
       // param list are one record.
       agentFieldGates: resolveAgentFieldGates(model),
       agentDividePartitions: agentResult.dividePartitions,
+      // D3 / D4 - the division-ABI usage flags. SHIPPED (never recomputed in the
+      // worker) so the compiled param list and the worker's arg list gate on ONE
+      // answer; D4's also gates the SECOND bond-request drain.
+      agentUsesDivisionSibling: agentUsesDivisionSibling(model),
+      agentUsesDivisionRequests: agentUsesDivisionRequests(model),
         centerBased: model.centerBased,
         // PR5 (C-D1): re-detect on a graph-only edit (field nodes added/removed).
         agentUsesField: agentUsesField(),
