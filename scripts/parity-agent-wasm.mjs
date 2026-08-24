@@ -2929,6 +2929,33 @@ function buildGetRandomModel() {
   // 6. Integer with a WIRED lower bound.
   const cIlo = an('getConstant', { constType: 'integer', constValue: '4' });
   chain({ randomType: 'integer', _port_max: '9' }, 'intW', 'value', [[cIlo, 'value', 'min']]);
+  // 6b. COLOR — three draws (R, G, B) from ONE multi-output node. It sits in the
+  //     MIDDLE of the chain deliberately: if agentWasm drew a different NUMBER of
+  //     times than agent JS, every later draw in this chain would land at a
+  //     different stream position and PARITY would fail loudly. That is what pins
+  //     the 3-draw contract on the agent targets (the invariant below is
+  //     stream-independent and cannot see a count, by construction).
+  const col = chain({ randomType: 'color' }, 'colR', 'r');
+  for (const [port, attrId] of [['g', 'colG'], ['b', 'colB']]) {
+    const set = an('setAttribute', { attributeId: attrId });
+    aE(col, port, set, 'value', 'value');
+    aE(prev, prevPort, set, 'do', 'flow');
+    prev = set; prevPort = 'next';
+  }
+  // 6c. The COMPOSITE `color` port off the SAME node, through Break Color. Its
+  //     alpha is a LITERAL 255 (colour mode draws no alpha), and reusing the same
+  //     node must cost NO extra draw — expandComposites lowers the composite back
+  //     to this node's own channels.
+  {
+    const brk = an('breakColor', {});
+    aE(col, 'color', brk, 'color', 'value');
+    for (const [port, attrId] of [['r', 'cpR'], ['a', 'cpA']]) {
+      const set = an('setAttribute', { attributeId: attrId });
+      aE(brk, port, set, 'value', 'value');
+      aE(prev, prevPort, set, 'do', 'flow');
+      prev = set; prevPort = 'next';
+    }
+  }
   // 7. Vector, ANGLE reference, span 0 => exactly due east at |v| = 2.
   alsoY(chain({ randomType: 'vector', refSource: 'angle', _port_norm: '2', _port_angle: '90', _port_span: '0' }, 'vAx', 'x'), 'vAy');
   // 8. Vector, WIRED direction (0, -1) = north, span 0 => exactly (0, -3).
@@ -2943,7 +2970,9 @@ function buildGetRandomModel() {
     centerBased: { enabled: true, maxAgents: 100, maxBonds: 0, worldWidth: 24, worldHeight: 24, seedCount: 40, seedPattern: 'scatter', defaultRadius: 0.5, growthRate: 0, repulsionStiffness: 0, adhesionStiffness: 0, interactionRange: 1.5, drag: 1, timeStep: 0.1, momentum: 0, maxSpeed: 0, neighbourQueryRadius: 8, useBondingPhysics: false, autoBond: false, agentTarget: 'wasm', agentUpdateMode: 'async',
       agentCapabilities: { motion: 'static', body: true, collision: 'off', bonds: 'off', autoBond: false, growth: false, division: false, lifespan: false, populationBirth: false, populationDeath: false, sensing: false, sensingHeadingSource: 'velocity', orientation: false, fieldCoupling: false, appearance: true } },
     attributes: [], modelAttributes: [], neighborhoods: [],
-    agentAttributes: ['uniIn', 'uniW', 'norm0', 'normS', 'expo', 'intW', 'vAx', 'vAy', 'vDx', 'vDy', 'vFx', 'vFy'].map(attr),
+    agentAttributes: ['uniIn', 'uniW', 'norm0', 'normS', 'expo', 'intW',
+      'colR', 'colG', 'colB', 'cpR', 'cpA',
+      'vAx', 'vAy', 'vDx', 'vDy', 'vFx', 'vFy'].map(attr),
     variables: [], agentVariables: [], indicators: [], mappings: [],
     graphNodes: [], graphEdges: [], agentGraphNodes: aN, agentGraphEdges: aEd, macroDefs: [],
   };
@@ -2961,17 +2990,42 @@ function getRandomInvariant(st) {
     if (!Number.isFinite(A.normS[i]) || Math.abs(A.normS[i]) > 12) return `agent ${i}: normal draw ${A.normS[i]} implausible`;
     if (!(A.expo[i] >= 0) || !Number.isFinite(A.expo[i])) return `agent ${i}: exponential draw ${A.expo[i]} must be >= 0`;
     if (!(A.intW[i] >= 4 && A.intW[i] <= 9) || A.intW[i] !== Math.floor(A.intW[i])) return `agent ${i}: wired integer ${A.intW[i]} outside 4..9`;
+    // COLOR — every channel a WHOLE byte, and the three channels are separate
+    // draws (a shared/copied value would make them identical on every agent,
+    // which the population-level check after this loop rejects).
+    for (const k of ['colR', 'colG', 'colB', 'cpR']) {
+      const v = A[k][i];
+      if (!(v >= 0 && v <= 255) || v !== Math.floor(v)) return `agent ${i}: ${k} = ${v} is not a whole byte in 0..255`;
+    }
+    // The composite port resolves back to the SAME node's channels, so R must
+    // match exactly — and alpha is the literal 255 (colour mode draws no alpha).
+    if (A.cpR[i] !== A.colR[i]) return `agent ${i}: composite R ${A.cpR[i]} !== direct R ${A.colR[i]}`;
+    if (A.cpA[i] !== 255) return `agent ${i}: composite alpha ${A.cpA[i]} must be the literal 255`;
     // Compass: 0 deg = north = -y, 90 deg = east = +x.
     if (!near(A.vAx[i], 2, 1e-12) || !near(A.vAy[i], 0, 1e-12)) return `agent ${i}: angle-90 span-0 vector (${A.vAx[i]}, ${A.vAy[i]}) must be (2, 0)`;
     if (A.vDx[i] !== 0 || A.vDy[i] !== -3) return `agent ${i}: dir(0,-1) span-0 vector (${A.vDx[i]}, ${A.vDy[i]}) must be exactly (0, -3)`;
     const n2 = A.vFx[i] * A.vFx[i] + A.vFy[i] * A.vFy[i];
     if (!near(n2, 25, 1e-9)) return `agent ${i}: full-span vector norm^2 ${n2} must be 25`;
   }
+  // Population-level: R/G/B must be three INDEPENDENT draws. If the emit copied
+  // one draw into all three channels (or cached the wrong port), every agent
+  // would carry R === G === B — the one colour failure parity cannot see,
+  // because both targets would do it identically.
+  let live = 0, rEqG = 0, gEqB = 0;
+  for (let i = 0; i < st.highWater; i++) {
+    if (!st.alive[i]) continue;
+    live++;
+    if (A.colR[i] === A.colG[i]) rEqG++;
+    if (A.colG[i] === A.colB[i]) gEqB++;
+  }
+  if (live > 8 && (rEqG === live || gEqB === live)) {
+    return `all ${live} agents have a repeated channel (R==G on ${rEqG}, G==B on ${gEqB}) — the channels are not independent draws`;
+  }
   return null;
 }
 
 entries.push({
-  name: '[synthetic] Get Random (intervals, normal/exponential, vector)',
+  name: '[synthetic] Get Random (intervals, normal/exponential, vector, COLOR)',
   raw: buildGetRandomModel(), invariant: getRandomInvariant,
 });
 

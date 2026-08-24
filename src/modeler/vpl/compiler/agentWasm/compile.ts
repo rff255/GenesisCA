@@ -1044,9 +1044,11 @@ function compileValueNode(ctx: AgentWasmCtx, nodeId: string, portId: string): Va
       break;
     }
     case 'getRandom': {
-      // Vector mode is MULTI-OUTPUT (x / y) and caches both ports itself.
+      // Vector (x / y) and colour (r / g / b) modes are MULTI-OUTPUT and cache
+      // every port themselves.
       const rt = (node.data.config?.['randomType'] as string) || '';
       if (rt === 'vector') { result = emitGetRandomVector(ctx, node, portId); break; }
+      if (rt === 'color') { result = emitGetRandomColor(ctx, node, portId); break; }
       result = f64Result(() => emitGetRandom(ctx, node));
       break;
     }
@@ -1673,6 +1675,35 @@ function emitGetRandomVector(ctx: AgentWasmCtx, node: GraphNode, portId: string)
   };
   for (const k of Object.keys(refs)) ctx.valueCache.set(`${node.id}:${k}`, refs[k]!);
   return refs[portId] ?? refs['x']!;
+}
+
+/** Get Random, COLOR mode (multi-output r / g / b). THREE draws, in the order
+ *  R, G, B — the cross-target stream contract — each `floor(u * 256) & 255`, so
+ *  every channel is a uniform integer in 0..255. Agent value refs are uniformly
+ *  f64, so each channel converts back (mirroring the orientation path). */
+function emitGetRandomColor(ctx: AgentWasmCtx, node: GraphNode, portId: string): ValueRef {
+  const cachedSibling = ctx.valueCache.get(`${node.id}:r`);
+  if (cachedSibling !== undefined) return ctx.valueCache.get(`${node.id}:${portId}`) ?? cachedSibling;
+  const em = ctx.em;
+  const rs = ctx.rsLocal;
+  /** advance + uniform + channel-quantise, into a fresh f64 local. */
+  const channel = (): number => {
+    em.localGet(rs); em.localGet(rs); em.i32Const(13); em.op(OP_I32_SHL); em.op(OP_I32_XOR); em.localSet(rs);
+    em.localGet(rs); em.localGet(rs); em.i32Const(17); em.op(OP_I32_SHR_U); em.op(OP_I32_XOR); em.localSet(rs);
+    em.localGet(rs); em.localGet(rs); em.i32Const(5); em.op(OP_I32_SHL); em.op(OP_I32_XOR); em.localSet(rs);
+    em.localGet(rs); em.op(OP_F64_CONVERT_I32_U); em.f64Const(4294967296); em.op(OP_F64_DIV);
+    em.f64Const(256); em.op(OP_F64_MUL); em.op(OP_F64_FLOOR);
+    em.op(OP_I32_TRUNC_F64_S); em.i32Const(255); em.op(OP_I32_AND); em.i32ToF64();
+    const l = em.allocLocal(F64); em.localSet(l); return l;
+  };
+  const rL = channel(), gL = channel(), bL = channel();
+  const refs: Record<string, ValueRef> = {
+    r: { localIdx: rL, valtype: F64 },
+    g: { localIdx: gL, valtype: F64 },
+    b: { localIdx: bL, valtype: F64 },
+  };
+  for (const k of Object.keys(refs)) ctx.valueCache.set(`${node.id}:${k}`, refs[k]!);
+  return refs[portId] ?? refs['r']!;
 }
 
 /** Get Agent Offset — torus-shortest (dX, dY[, dZ]) + Distance from self to a

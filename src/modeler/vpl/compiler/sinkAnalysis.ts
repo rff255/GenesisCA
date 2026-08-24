@@ -237,7 +237,12 @@ export function analyzeSinkScopes(input: SinkAnalysisInput): SinkAnalysisResult 
       return;
     }
 
-    if (type === 'conditional') {
+    // `assertActiveViewer` is `conditional` minus the ELSE — its IF ACTIVE
+    // branch is a real child scope, which is exactly what lets values consumed
+    // ONLY inside the guard sink into it (the whole point of the node: skip the
+    // viz-only work when its viewer is not on screen). Its `else` port simply has
+    // no targets, so the shared walk below is a no-op for it.
+    if (type === 'conditional' || type === 'assertActiveViewer') {
       const thenS = `${nodeId}:then`;
       registerScope(thenS, parentScope, { kind: 'then', flowNodeId: nodeId });
       walkFlowOutput(nodeId, 'then', thenS);

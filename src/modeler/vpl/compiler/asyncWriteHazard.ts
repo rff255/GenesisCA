@@ -353,7 +353,10 @@ export function computeAsyncReadWriteHazards(input: AsyncHazardInput): Set<strin
       }
       return;
     }
-    if (type === 'conditional') {
+    // `assertActiveViewer` — conditional minus the ELSE. Treating it as a branch
+    // is the CONSERVATIVE reading for the hazard prefix: the guarded writes MAY
+    // have happened when the DONE chain runs. (Its `else` port has no targets.)
+    if (type === 'conditional' || type === 'assertActiveViewer') {
       walkOutput(nodeId, 'then', entry);
       walkOutput(nodeId, 'else', entry);
       // DONE chain runs after the construct: branches MAY have written.
