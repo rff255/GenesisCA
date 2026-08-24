@@ -1457,11 +1457,12 @@ function compileExpression(ctx: AgentWasmCtx, node: GraphNode): ValueRef {
   return emitWasm(res.ast, ctx.em, inputs);
 }
 
-/** Logical Expression node — parse the boolean formula + emit the AST via the
- *  shared emitter. The var pusher is `emitLogic`'s own `pushBool` (an f64 input
- *  `!= 0`), so a formula and the equivalent chain of Logic nodes agree exactly;
- *  the i32 0/1 result is converted to f64 1.0/0.0 because agent value refs are
- *  uniformly f64 (again mirroring `emitLogic`'s tail). */
+/** Logical Expression node — parse the formula + emit the AST via the shared
+ *  emitter. The BOOL pusher is `emitLogic`'s own `pushBool` (an f64 input
+ *  `!= 0`) and the NUM pusher is `emitCompare`'s own operand (`pushValueInputF64`
+ *  raw), so a formula and the equivalent hand-wired Compare/Logic chain agree
+ *  exactly; the i32 0/1 result is converted to f64 1.0/0.0 because agent value
+ *  refs are uniformly f64 (again mirroring `emitLogic`'s tail). */
 function compileLogicalExpression(ctx: AgentWasmCtx, node: GraphNode): ValueRef {
   const em = ctx.em;
   const cfg = node.data.config as Record<string, unknown>;
@@ -1470,11 +1471,16 @@ function compileLogicalExpression(ctx: AgentWasmCtx, node: GraphNode): ValueRef 
   if (errors.length > 0) throw new Error(`logicalExpression: ${errors[0]}`);
   const res = parseLogicExpression(String(cfg['expression'] ?? ''), map);
   if ('error' in res) throw new Error(`logicalExpression: ${res.error}`);
-  const bit = emitLogicWasm(res.ast, em, (portId) => {
-    pushValueInputF64(ctx, node, portId, 0);
-    em.f64Const(0);
-    em.op(OP_F64_NE);
-  });
+  const bit = emitLogicWasm(
+    res.ast,
+    em,
+    (portId) => {
+      pushValueInputF64(ctx, node, portId, 0);
+      em.f64Const(0);
+      em.op(OP_F64_NE);
+    },
+    (portId) => { pushValueInputF64(ctx, node, portId, 0); },
+  );
   em.localGet(bit.localIdx);
   em.op(OP_F64_CONVERT_I32_S);
   const out = em.allocLocal(F64);

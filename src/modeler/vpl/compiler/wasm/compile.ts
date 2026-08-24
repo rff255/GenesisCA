@@ -1500,22 +1500,47 @@ const VALUE_NODE_EMITTERS: Record<string, NodeValueEmitter> = {
     return storeResult(ctx.emitter, I32);
   },
 
-  // -- Logical Expression (LogicalExpressionNode: parse the boolean formula,
-  //    emit the AST). The var pusher reproduces `logicOperator`'s operand
-  //    normalisation above EXACTLY — `pushValueAs(…, I32)` then `!= 0` — so a
-  //    formula and the equivalent chain of Logic nodes agree for any input,
-  //    including a non-0/1 value an 'any' source may deliver. --
+  // -- Logical Expression (LogicalExpressionNode: parse the formula, emit the
+  //    AST). Each accessor reproduces the equivalent single node's operand
+  //    convention above EXACTLY, so a formula and the hand-wired chain agree for
+  //    any input:
+  //      BOOL — `logicOperator`'s `pushValueAs(…, I32)` then `!= 0` (a truthy
+  //             test, so a non-0/1 value from an 'any' source behaves);
+  //      NUM  — `statement`'s `pushValueAs(…, F64)` (the raw value, exact
+  //             `==` / `!=`). Only reached by a formula that HAS a comparison.
   logicalExpression: ({ node, ctx, inputs }) => {
     const visibleCount = clampVisibleCount(node.data.config.visibleCount);
     const { map, errors } = buildLogicVarMap(node.data.config, visibleCount);
     if (errors.length > 0) { ctx.errors.push(`logicalExpression: ${errors[0]}`); return null; }
     const res = parseLogicExpression(String(node.data.config.expression ?? ''), map);
     if ('error' in res) { ctx.errors.push(`logicalExpression: ${res.error}`); return null; }
-    return emitLogicWasm(res.ast, ctx.emitter, (portId) => {
-      pushValueAs(ctx.emitter, inputs[portId] ?? { inline: true, value: 0, valtype: I32 }, I32);
-      ctx.emitter.i32Const(0);
-      ctx.emitter.op(OP_I32_NE_OP);
-    });
+    return emitLogicWasm(
+      res.ast,
+      ctx.emitter,
+      (portId) => {
+        // An UNWIRED port resolves to an inline ref whose valtype comes from the
+        // port's declared dataType — F64, since these inputs are `any` so the
+        // comparison tier can read them as numbers. The truthy test converts to
+        // I32 anyway, so fold an integral inline constant into that I32 up front:
+        // provably the same value (`pushValueAs(…, I32)` truncates identically),
+        // and it keeps a comparison-free formula's module BYTE-IDENTICAL to the
+        // pre-comparison build, where these ports were declared `bool` and the
+        // inline resolved to I32. Applied only to an UNWIRED port — a wired ref
+        // carries the SOURCE's type and must not be re-typed.
+        const wired = ctx.inputToSource.has(`${node.id}:${portId}`);
+        let ref = inputs[portId] ?? { inline: true as const, value: 0, valtype: I32 };
+        if (!wired && isInline(ref) && Number.isInteger(ref.value)
+            && ref.value >= -2147483648 && ref.value <= 2147483647) {
+          ref = { inline: true, value: ref.value, valtype: I32 };
+        }
+        pushValueAs(ctx.emitter, ref, I32);
+        ctx.emitter.i32Const(0);
+        ctx.emitter.op(OP_I32_NE_OP);
+      },
+      (portId) => pushValueAs(
+        ctx.emitter, inputs[portId] ?? { inline: true, value: 0, valtype: F64 }, F64,
+      ),
+    );
   },
 
   // -- Aggregate over neighbors --
