@@ -33,6 +33,9 @@ import type { AgentStore } from './agentEngine';
 import { initAgentSlot, freeStagedSlot } from './agentEngine';
 import type { AgentWebGPULayout } from '../../modeler/vpl/compiler/agentWebgpu/layout';
 import { AGENT_GPU_F32_FIELDS, AGENT_GPU_F32_FIELDS_3D, AGENT_GPU_I32_FIELDS, AGENT_GPU_QUEUE_FIELDS, AGENT_GPU_REQUEST_FIELDS, AGENT_GPU_SPRITE_FIELDS } from '../../modeler/vpl/compiler/agentWebgpu/layout';
+import { AGENT_SPRITE_MAX_LAYERS, type AgentSpriteAtlasPayload } from './agentSpriteAtlas';
+export { AGENT_SPRITE_ATLAS_CELL, AGENT_SPRITE_MAX_LAYERS } from './agentSpriteAtlas';
+export type { AgentSpriteAtlasPayload, AgentSpriteSlot } from './agentSpriteAtlas';
 import { emitAgentForcePassWGSL, agentMirrorFields, emitForceControlStruct } from '../../modeler/vpl/compiler/agentWebgpu/forcePass';
 import { acquireSharedGpuDevice, releaseSharedGpuDevice } from './sharedGpuDevice';
 import { buildSceneWireframeVerts, buildBrushPlaneVerts, SCENE_MSAA_SAMPLES, type SceneViz, type BrushPlaneSpec } from './sceneWireframe';
@@ -898,6 +901,18 @@ function spriteRunsActive(rt: AgentWebGPURuntime): boolean {
   return rt.usesSpriteWrite && rt.layout.spritesReserved;
 }
 
+/** Does the per-generation UPLOAD have to carry the sprite runs? A superset of
+ *  `spriteRunsActive`: the billboard pass READS spriteIds/frames/rotations/scales
+ *  (and vx/vy) out of `agentF32`, so they must be seeded even for a model whose
+ *  shader never writes them (sprite state set from an Agent Output Mapping, which
+ *  is CPU-side). Upload-only — the READ plan and both readbacks stay on
+ *  `spriteRunsActive`, so the CPU remains authoritative for sprite state between
+ *  generations (`advanceAgentSprites`) and nothing reads back a run the shader
+ *  never wrote. */
+function spriteRunsUploaded(rt: AgentWebGPURuntime): boolean {
+  return spriteRunsActive(rt) || (rt.layout.spritesReserved && spriteRenderActive(rt));
+}
+
 function f32ReadPlan(rt: AgentWebGPURuntime, window: number): AgentF32ReadPlan {
   const cached = rt.f32ReadPlan;
   if (cached && cached.window === window) return cached;
@@ -1023,7 +1038,7 @@ export function uploadAgentSoA(rt: AgentWebGPURuntime, s: AgentStore): void {
   // consumes as f32 — a frame counter, compass degrees, a size multiplier. The
   // f64→f32 round-trip is therefore invisible; it is the same statistical-parity
   // stance the rest of the WebGPU agent SoA takes.
-  if (spriteRunsActive(rt)) {
+  if (spriteRunsUploaded(rt)) {
     const spriteSrc: Record<string, ArrayLike<number>> = {
       spriteIds: s.spriteIds, spriteFrames: s.spriteFrames, spriteSpeeds: s.spriteSpeeds,
       spriteRotations: s.spriteRotations, spriteScales: s.spriteScales,
@@ -1055,7 +1070,7 @@ export function uploadAgentSoA(rt: AgentWebGPURuntime, s: AgentStore): void {
     const base = L.bondFormAttrBase[id];
     if (base !== undefined) putF32(base, L.bondReqSlots);
   }
-  if (spriteRunsActive(rt)) {
+  if (spriteRunsUploaded(rt)) {
     for (const field of AGENT_GPU_SPRITE_FIELDS) {
       const base = L.f32Base[field];
       if (base !== undefined) putF32(base, 1);
@@ -1723,6 +1738,31 @@ export interface AgentRenderSurface {
    *  call at 50k agents. Declared here (not only on the render-only surface)
    *  because the FULL webgpu runtime goes through the same helper. */
   renderColorScratch?: Uint32Array;
+  // --- 2D agent SPRITES (the billboard pass — the WebGPU sibling of gl3d's
+  //     renderSprites, and the reason a sprite model is no longer excluded from
+  //     direct render). Built ONLY when `layout.spritesReserved` (a static model
+  //     property known at attach), so a non-sprite surface keeps EXACTLY today's
+  //     4-binding disc module + pipelines. The ATLAS itself arrives later (the
+  //     main thread decodes; see setAgentSpriteAtlas) — until it does, every
+  //     spriteMeta record carries frameCount 0, which is the disc pass's own
+  //     "not decoded → draw the circle" fallback signal. ---
+  spritePipeline?: GPURenderPipeline | null;
+  spriteBGL?: GPUBindGroupLayout | null;
+  /** The DISC bind-group layout, kept so a sprite-meta re-allocation can rebuild
+   *  the disc bind group (which binds it) without rebuilding the pipelines. */
+  renderBGL?: GPUBindGroupLayout | null;
+  spriteBindGroup?: GPUBindGroup | null;
+  /** One SPRITE_META_BYTES record per model sprite slot (index = slot-1). Sized on
+   *  the first atlas payload; re-created when the slot count changes. */
+  spriteMetaBuf?: GPUBuffer | null;
+  spriteMetaSlots?: number;
+  spriteAtlasTex?: GPUTexture | null;
+  spriteAtlasView?: GPUTextureView | null;
+  spriteAtlasLayers?: number;
+  spriteSampler?: GPUSampler | null;
+  /** How many slots currently carry decoded frames — the render-side "sprites are
+   *  live" predicate (0 ⇒ the sprite pass is skipped and every agent draws a disc). */
+  spriteLiveSlots?: number;
   // Phase C — 3D sphere-impostor render (built instead of the 2D disc pipeline when
   // layout.gridDepth > 1). The MVP + camera basis + light come from the main thread
   // (sceneCameraMatrices in gl3d.ts, so the two renderers agree on projection); the
@@ -1872,6 +1912,168 @@ const RENDER_VIEW_WGSL = `struct RenderView {
   glowCore      : f32,
 };`;
 
+// ---------------------------------------------------------------------------
+// 2D agent SPRITES — the billboard pass.
+//
+// THE SEMANTICS ARE THE CPU OVERLAY'S, term for term (drawAgentsOverlay's sprite
+// branch): frame = floor(spriteFrames) then wrap (loop) / clamp (once); size =
+// max(1.2, radius*scalePx) * 2 * perAgentScale with the LONGEST side taking that
+// value and the other shortened by the frame aspect; facing = the per-agent
+// compass rotation, OVERRIDDEN by the velocity heading atan2(vx, -vy) when the
+// asset auto-orients, then aligned by (- defaultDirection + rotationOffset);
+// alpha = the agent colour's A byte alone (a sprite is never tinted).
+//
+// THE ATLAS IS BUILT ON THE MAIN THREAD AND SHIPPED AS ONE ImageBitmap. Sprite
+// decode is main-thread-only by design (the worker never carries the pixels), so
+// the atlas arrives as a single transferable tile-grid image + plain-JSON meta;
+// the worker copies each CELL x CELL tile into one layer of a texture_2d_array.
+// One transferable, N cheap GPU copies, and the stretch policy (each frame drawn
+// stretched to fill its square cell, un-stretched by the aspect-shaped quad) is
+// gl3d's, so the two renderers cannot disagree about what a frame looks like.
+// ---------------------------------------------------------------------------
+
+/** 8 x 4 B — baseLayer / frameCount / flags / pad, aspect / scale /
+ *  defaultDirection / rotationOffset. */
+const SPRITE_META_BYTES = 32;
+const SPRITE_FLAG_LOOP = 1;
+const SPRITE_FLAG_ORIENT = 2;
+
+const SPRITE_META_WGSL = `struct SpriteMeta {
+  baseLayer        : u32,
+  frameCount       : u32,
+  flags            : u32,
+  pad0             : u32,
+  aspect           : f32,
+  scale            : f32,
+  defaultDirection : f32,
+  rotationOffset   : f32,
+};`;
+
+/** The sprite billboard module. Bindings 0-3 mirror the disc module (so the two
+ *  read the same agent state and the same camera); 4 adds the per-slot meta, 5/6
+ *  the atlas + its sampler. */
+function agentSpriteWGSL(layout: AgentWebGPULayout): string {
+  const b = (n: string): string => {
+    const base = layout.f32Base[n];
+    if (base === undefined) throw new Error(`[agents/webgpu] sprite pass needs the '${n}' run`);
+    return base === 0 ? 'agent' : `${base}u + agent`;
+  };
+  const xB = b('x'), yB = b('y'), rB = b('radius');
+  const vxB = b('vx'), vyB = b('vy');
+  const idB = b('spriteIds'), frB = b('spriteFrames'), rotB = b('spriteRotations'), sclB = b('spriteScales');
+  return `${RENDER_VIEW_WGSL}
+${SPRITE_META_WGSL}
+@group(0) @binding(0) var<storage, read> agentF32    : array<f32>;
+@group(0) @binding(1) var<storage, read> agentAlive  : array<u32>;
+@group(0) @binding(2) var<storage, read> agentColors : array<u32>;
+@group(0) @binding(3) var<uniform>       rv          : RenderView;
+@group(0) @binding(4) var<storage, read> spriteMeta  : array<SpriteMeta>;
+@group(0) @binding(5) var spriteAtlas : texture_2d_array<f32>;
+@group(0) @binding(6) var spriteSamp  : sampler;
+
+struct SpriteOut {
+  @builtin(position) pos   : vec4<f32>,
+  @location(0)       uv    : vec2<f32>,
+  @location(1)       layer : f32,
+  @location(2)       alpha : f32,
+};
+
+fn cullSprite() -> SpriteOut {
+  var o: SpriteOut;
+  o.pos = vec4<f32>(2.0, 2.0, 2.0, 1.0);
+  o.uv = vec2<f32>(0.0, 0.0);
+  o.layer = 0.0;
+  o.alpha = 0.0;
+  return o;
+}
+
+@vertex
+fn vsSprite(@builtin(vertex_index) vi: u32, @builtin(instance_index) inst: u32) -> SpriteOut {
+  var out: SpriteOut;
+  let hw: u32 = max(1u, rv.highWater);
+  let agent: u32 = inst % hw;
+  let copy:  u32 = inst / hw;
+  let ncx: u32 = max(1u, u32(rv.copiesX));
+  let cx: i32 = i32(copy % ncx) + rv.startX;
+  let cy: i32 = i32(copy / ncx) + rv.startY;
+  var corner: vec2<f32> = vec2<f32>(-1.0, -1.0);
+  if (vi == 1u) { corner = vec2<f32>(1.0, -1.0); }
+  else if (vi == 2u) { corner = vec2<f32>(-1.0, 1.0); }
+  else if (vi == 3u) { corner = vec2<f32>(1.0, 1.0); }
+  let packed: u32 = agentColors[agent];
+  let a: f32 = f32((packed >> 24u) & 0xffu) / 255.0;
+  if (agentAlive[agent] == 0u || a <= 0.0) { return cullSprite(); }
+  // The EXACT complement of the disc VS's cull: no slot, or a slot whose frames
+  // are not decoded, means this agent is a disc and the sprite pass skips it.
+  let slot: i32 = i32(agentF32[${idB}]);
+  if (slot <= 0 || u32(slot) > arrayLength(&spriteMeta)) { return cullSprite(); }
+  let m: SpriteMeta = spriteMeta[slot - 1];
+  if (m.frameCount == 0u) { return cullSprite(); }
+  // FRAME — floor, then wrap (loop) or clamp (once). The wrap is written to match
+  // the overlay's negative-safe ((raw % fc) + fc) % fc.
+  let fc: i32 = i32(m.frameCount);
+  let raw: i32 = i32(floor(agentF32[${frB}]));
+  var frame: i32 = 0;
+  if (fc > 1) {
+    if ((m.flags & ${SPRITE_FLAG_LOOP}u) != 0u) { frame = ((raw % fc) + fc) % fc; }
+    else { frame = clamp(raw, 0, fc - 1); }
+  }
+  // SIZE — the 1.2 px radius floor first (as the overlay applies it), then the
+  // per-agent scale override (0 = use the asset's), then aspect-shape so the
+  // LONGEST side is the scaled diameter.
+  let radPx: f32 = max(agentF32[${rB}] * rv.scalePx, 1.2);
+  let ps: f32 = agentF32[${sclB}];
+  let perScale: f32 = select(m.scale, ps, ps > 0.0);
+  // NB \`span\`, not \`target\` — \`target\` is a WGSL RESERVED KEYWORD, and the whole
+  // module fails to parse (the same trap \`ref\` sprang in the voxel line shader).
+  let span: f32 = radPx * 2.0 * perScale;
+  var dw: f32 = span;
+  var dh: f32 = span;
+  if (m.aspect >= 1.0) { dh = span / m.aspect; } else { dw = span * m.aspect; }
+  // FACING — compass degrees (0 = up, clockwise), overridden by the velocity
+  // heading when the asset auto-orients and the agent is actually moving.
+  var facingDeg: f32 = agentF32[${rotB}];
+  if ((m.flags & ${SPRITE_FLAG_ORIENT}u) != 0u) {
+    let vX: f32 = agentF32[${vxB}];
+    let vY: f32 = agentF32[${vyB}];
+    if (vX * vX + vY * vY > 1.0e-9) { facingDeg = atan2(vX, -vY) * 180.0 / 3.14159265358979; }
+  }
+  let rr: f32 = ((facingDeg - m.defaultDirection) + m.rotationOffset) * 3.14159265358979 / 180.0;
+  let cs: f32 = cos(rr);
+  let sn: f32 = sin(rr);
+  let ax: f32 = agentF32[${xB}];
+  let ay: f32 = agentF32[${yB}];
+  let px: f32 = (ax + f32(cx) * rv.worldW) * rv.scalePx + rv.oxPx;
+  let py: f32 = (ay + f32(cy) * rv.worldH) * rv.scalePx + rv.oyPx;
+  // The quad is built in SCREEN pixels, which are Y-DOWN — the same space
+  // ctx.rotate turns in — so this is the PLAIN rotation matrix. (gl3d needs the
+  // transposed form only because its billboard basis is screen-UP.)
+  let lx: f32 = corner.x * dw * 0.5;
+  let ly: f32 = corner.y * dh * 0.5;
+  let sx: f32 = px + lx * cs - ly * sn;
+  let sy: f32 = py + lx * sn + ly * cs;
+  out.pos = vec4<f32>(sx / rv.canvasW * 2.0 - 1.0, 1.0 - sy / rv.canvasH * 2.0, 0.0, 1.0);
+  // UV from the UNROTATED corner (the image is fixed to the quad and turns with
+  // it). corner.y = -1 is the TOP in this y-down space, so v = (y+1)/2.
+  out.uv = vec2<f32>((corner.x + 1.0) * 0.5, (corner.y + 1.0) * 0.5);
+  out.layer = f32(i32(m.baseLayer) + frame);
+  out.alpha = a;
+  return out;
+}
+
+@fragment
+fn fsSprite(in: SpriteOut) -> @location(0) vec4<f32> {
+  // The atlas is stored PREMULTIPLIED (copyExternalImageToTexture premultipliedAlpha),
+  // so scaling the whole texel by the agent alpha keeps it premultiplied — which is
+  // what the disc pipeline's blend expects. The 0.02 cutout is gl3d's, and it is what
+  // lets the pass draw unsorted.
+  let t: vec4<f32> = textureSampleLevel(spriteAtlas, spriteSamp, in.uv, i32(in.layer), 0.0);
+  let a: f32 = t.a * in.alpha;
+  if (a < 0.02) { discard; }
+  return t * in.alpha;
+}`;
+}
+
 /** Build the agent render module (VS pulls x/y/radius from agentF32 + packed
  *  RGBA from agentColors). TWO entry-point pairs, drawn as TWO passes when Glow
  *  is on (see presentAgentsEncode):
@@ -1893,12 +2095,39 @@ const RENDER_VIEW_WGSL = `struct RenderView {
 function agentRenderWGSL(layout: AgentWebGPULayout): string {
   const xB = layout.f32Base['x']!, yB = layout.f32Base['y']!, rB = layout.f32Base['radius']!;
   const at = (base: number): string => (base === 0 ? 'agent' : `${base}u + agent`);
+  // SPRITES — a sprite-carrying agent is drawn by the billboard pass instead, so the
+  // disc VS must CULL it (the GPU analogue of the overlay's `continue; // sprite
+  // replaces the circle`). The two culls are exact complements, so every agent draws
+  // exactly one of the two: the sprite pass requires a decoded slot, this one culls
+  // on the same condition. Emitted ONLY when the layout reserves the sprite runs, so
+  // a non-sprite model's module + bind-group layout are byte-for-byte today's.
+  const sp = layout.spritesReserved;
+  const sIdB = sp ? layout.f32Base['spriteIds']! : 0;
+  const spriteDecl = sp ? `
+${SPRITE_META_WGSL}
+@group(0) @binding(4) var<storage, read> spriteMeta : array<SpriteMeta>;
+` : '';
+  // `frameCount == 0` is the "slot has no decoded frames" marker the atlas builder
+  // writes — an undecoded / deleted sprite falls through to the circle exactly as the
+  // CPU overlay does, and an EMPTY atlas (every record zeroed) makes this cull inert
+  // without a rebuild.
+  const spriteCull = sp ? `
+  let slot: i32 = i32(agentF32[${at(sIdB)}]);
+  if (slot > 0 && u32(slot) <= arrayLength(&spriteMeta) && spriteMeta[slot - 1].frameCount > 0u) {
+    out.pos = vec4<f32>(2.0, 2.0, 2.0, 1.0);
+    out.uv = vec2<f32>(0.0, 0.0);
+    out.col = vec4<f32>(0.0, 0.0, 0.0, 0.0);
+    out.radPx = 0.0;
+    out.coreFrac = 0.0;
+    return out;
+  }
+` : '';
   return `${RENDER_VIEW_WGSL}
 @group(0) @binding(0) var<storage, read> agentF32    : array<f32>;
 @group(0) @binding(1) var<storage, read> agentAlive  : array<u32>;
 @group(0) @binding(2) var<storage, read> agentColors : array<u32>;
 @group(0) @binding(3) var<uniform>       rv          : RenderView;
-
+${spriteDecl}
 struct VSOut {
   @builtin(position) pos      : vec4<f32>,
   @location(0)       uv       : vec2<f32>,
@@ -1933,7 +2162,7 @@ fn buildVert(vi: u32, inst: u32, halo: bool) -> VSOut {
     out.radPx = 0.0;
     out.coreFrac = 0.0;
     return out;
-  }
+  }${spriteCull}
   let ax: f32 = agentF32[${at(xB)}];
   let ay: f32 = agentF32[${at(yB)}];
   let ar: f32 = agentF32[${at(rB)}];
@@ -3054,6 +3283,168 @@ async function setupAgentSphereRender(rt: AgentRenderSurface, canvas: OffscreenC
  *  synchronous in every present path, so no command buffer can be recorded-but-
  *  unsubmitted across the swap, and an ALREADY-submitted one completes normally
  *  per spec. No `onSubmittedWorkDone` deferral is needed. */
+/** Is the sprite billboard pass live? (Pipeline built AND at least one slot has
+ *  decoded frames.) The ONE predicate the present paths and the upload widening
+ *  consult, so "the disc pass culled it" and "the sprite pass drew it" cannot
+ *  disagree — the shader-side complement is `frameCount > 0`, which is zero for
+ *  every slot whenever this is false. */
+export function spriteRenderActive(rt: AgentRenderSurface): boolean {
+  return !!rt.spritePipeline && !!rt.spriteBindGroup && (rt.spriteLiveSlots ?? 0) > 0;
+}
+
+/** (Re)create the per-slot meta buffer when the slot count changed. Always at
+ *  least one record, so the bind groups are valid before an atlas exists. */
+function ensureSpriteMetaBuffer(rt: AgentRenderSurface, slots: number): void {
+  const n = Math.max(1, slots | 0);
+  if (rt.spriteMetaBuf && rt.spriteMetaSlots === n) return;
+  if (rt.spriteMetaBuf) { try { rt.spriteMetaBuf.destroy(); } catch { /* non-fatal */ } }
+  rt.spriteMetaBuf = rt.device.createBuffer({
+    label: 'agent-sprite-meta', size: n * SPRITE_META_BYTES,
+    usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+  });
+  rt.spriteMetaSlots = n;
+  // Zero-filled by creation ⇒ every frameCount is 0 ⇒ discs draw.
+}
+
+/** A 1x1x1 placeholder so the sprite bind group is valid before the real atlas
+ *  arrives (the dummy-shadow-texture precedent). */
+function ensureSpriteAtlasTex(rt: AgentRenderSurface): void {
+  if (rt.spriteAtlasView) return;
+  const tex = rt.device.createTexture({
+    label: 'agent-sprite-atlas-placeholder', format: 'rgba8unorm',
+    size: { width: 1, height: 1, depthOrArrayLayers: 1 },
+    usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST | GPUTextureUsage.RENDER_ATTACHMENT,
+  });
+  rt.spriteAtlasTex = tex;
+  rt.spriteAtlasView = tex.createView({ dimension: '2d-array' });
+  rt.spriteAtlasLayers = 1;
+}
+
+/** Build the disc bind group (+ the sprite one when the pass exists) from the
+ *  surface's CURRENT resources. Called on pipeline build and whenever the atlas /
+ *  meta buffer is replaced — a bind group holds concrete buffers, so a new atlas
+ *  texture invalidates it. */
+function rebuildRenderBindGroups(rt: AgentRenderSurface): void {
+  if (!rt.renderBGL || !rt.renderViewBuf) return;
+  const withSprites = !!rt.layout.spritesReserved;
+  if (withSprites) { ensureSpriteMetaBuffer(rt, rt.spriteMetaSlots ?? 1); ensureSpriteAtlasTex(rt); }
+  rt.renderBindGroup = rt.device.createBindGroup({
+    label: 'agent-render-bg', layout: rt.renderBGL,
+    entries: [
+      { binding: 0, resource: { buffer: rt.agentF32Buf } },
+      { binding: 1, resource: { buffer: rt.agentAliveBuf } },
+      { binding: 2, resource: { buffer: rt.agentColorsBuf } },
+      { binding: 3, resource: { buffer: rt.renderViewBuf } },
+      ...(withSprites ? [{ binding: 4, resource: { buffer: rt.spriteMetaBuf! } }] : []),
+    ],
+  });
+  if (!rt.spriteBGL || !rt.spritePipeline) { rt.spriteBindGroup = null; return; }
+  if (!rt.spriteSampler) {
+    rt.spriteSampler = rt.device.createSampler({
+      label: 'agent-sprite-sampler',
+      magFilter: 'linear', minFilter: 'linear',
+      addressModeU: 'clamp-to-edge', addressModeV: 'clamp-to-edge',
+    });
+  }
+  rt.spriteBindGroup = rt.device.createBindGroup({
+    label: 'agent-sprite-bg', layout: rt.spriteBGL,
+    entries: [
+      { binding: 0, resource: { buffer: rt.agentF32Buf } },
+      { binding: 1, resource: { buffer: rt.agentAliveBuf } },
+      { binding: 2, resource: { buffer: rt.agentColorsBuf } },
+      { binding: 3, resource: { buffer: rt.renderViewBuf } },
+      { binding: 4, resource: { buffer: rt.spriteMetaBuf! } },
+      { binding: 5, resource: rt.spriteAtlasView! },
+      { binding: 6, resource: rt.spriteSampler },
+    ],
+  });
+}
+
+/** Install a sprite atlas built on the main thread: copy each CELL x CELL tile of
+ *  the shipped grid image into one layer of a `texture_2d_array`, write the
+ *  per-slot meta, and rebuild the bind groups. `bitmap` is CLOSED here (the worker
+ *  owns it after the transfer). A null bitmap / zero layers CLEARS the atlas, which
+ *  zeroes every meta record and therefore returns every agent to a disc. */
+export function setAgentSpriteAtlas(rt: AgentRenderSurface, p: AgentSpriteAtlasPayload): void {
+  if (!rt.layout.spritesReserved) { p.bitmap?.close(); return; }
+  const layers = Math.max(0, Math.min(p.layers | 0, AGENT_SPRITE_MAX_LAYERS));
+  const slotCount = Math.max(1, p.slotCount | 0);
+  try {
+    if (p.bitmap && layers > 0) {
+      const cell = Math.max(1, p.cell | 0);
+      const cols = Math.max(1, p.cols | 0);
+      if (!rt.spriteAtlasTex || rt.spriteAtlasLayers !== layers || (rt.spriteAtlasTex.width !== cell)) {
+        if (rt.spriteAtlasTex) { try { rt.spriteAtlasTex.destroy(); } catch { /* non-fatal */ } }
+        rt.spriteAtlasTex = rt.device.createTexture({
+          label: 'agent-sprite-atlas', format: 'rgba8unorm',
+          size: { width: cell, height: cell, depthOrArrayLayers: layers },
+          usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST | GPUTextureUsage.RENDER_ATTACHMENT,
+        });
+        rt.spriteAtlasView = rt.spriteAtlasTex.createView({ dimension: '2d-array' });
+        rt.spriteAtlasLayers = layers;
+      }
+      for (let i = 0; i < layers; i++) {
+        const cx = (i % cols) * cell, cy = Math.floor(i / cols) * cell;
+        rt.device.queue.copyExternalImageToTexture(
+          { source: p.bitmap, origin: { x: cx, y: cy } },
+          // PREMULTIPLIED destination — the FS then just scales the texel by the
+          // agent alpha, and the result feeds the same source-over blend the discs use.
+          { texture: rt.spriteAtlasTex!, origin: { x: 0, y: 0, z: i }, premultipliedAlpha: true },
+          { width: cell, height: cell, depthOrArrayLayers: 1 },
+        );
+      }
+    } else if (rt.spriteAtlasLayers && rt.spriteAtlasLayers > 1) {
+      // Explicit clear — drop the (potentially large) atlas back to the 1x1
+      // placeholder rather than holding it until teardown.
+      if (rt.spriteAtlasTex) { try { rt.spriteAtlasTex.destroy(); } catch { /* non-fatal */ } }
+      rt.spriteAtlasTex = null; rt.spriteAtlasView = null; rt.spriteAtlasLayers = 0;
+    }
+    // The meta buffer is indexed by SLOT (not by decoded order), so an undecoded
+    // slot keeps a zeroed record — the fallback-to-disc marker.
+    ensureSpriteMetaBuffer(rt, slotCount);
+    const meta = new ArrayBuffer(Math.max(1, rt.spriteMetaSlots!) * SPRITE_META_BYTES);
+    const mu = new Uint32Array(meta), mf = new Float32Array(meta);
+    let live = 0;
+    if (p.bitmap && layers > 0) {
+      for (const s of p.slots) {
+        const idx = (s.slot | 0) - 1;
+        if (idx < 0 || idx >= rt.spriteMetaSlots! || s.frameCount <= 0) continue;
+        const o = idx * 8;
+        mu[o] = s.baseLayer >>> 0;
+        mu[o + 1] = s.frameCount >>> 0;
+        mu[o + 2] = ((s.loop ? SPRITE_FLAG_LOOP : 0) | (s.orientToVelocity ? SPRITE_FLAG_ORIENT : 0)) >>> 0;
+        mf[o + 4] = s.aspect > 0 ? s.aspect : 1;
+        mf[o + 5] = s.scale > 0 ? s.scale : 1;
+        mf[o + 6] = s.defaultDirection;
+        mf[o + 7] = s.rotationOffset;
+        live++;
+      }
+    }
+    rt.device.queue.writeBuffer(rt.spriteMetaBuf!, 0, meta);
+    rt.spriteLiveSlots = live;
+    rebuildRenderBindGroups(rt);
+  } catch (e) {
+    // A failed atlas must never leave the disc cull active with nothing to draw:
+    // zero the live count so `spriteRenderActive` is false and the (still zeroed or
+    // partially written) meta is re-zeroed on the next payload.
+    rt.spriteLiveSlots = 0;
+    // eslint-disable-next-line no-console
+    console.error('[agents/webgpu] sprite atlas upload failed:', e);
+  } finally {
+    p.bitmap?.close();
+  }
+}
+
+/** Release every sprite resource (atlas texture, meta buffer, sampler). */
+function destroySpriteResources(rt: AgentRenderSurface): void {
+  if (rt.spriteAtlasTex) { try { rt.spriteAtlasTex.destroy(); } catch { /* non-fatal */ } }
+  if (rt.spriteMetaBuf) { try { rt.spriteMetaBuf.destroy(); } catch { /* non-fatal */ } }
+  rt.spriteAtlasTex = null; rt.spriteAtlasView = null; rt.spriteAtlasLayers = 0;
+  rt.spriteMetaBuf = null; rt.spriteMetaSlots = 0;
+  rt.spriteBindGroup = null; rt.spriteLiveSlots = 0;
+  rt.spriteSampler = null;
+}
+
 async function buildAgentDiscPipelines(rt: AgentRenderSurface): Promise<boolean> {
   const format: GPUTextureFormat = 'rgba8unorm';
   const module = rt.device.createShaderModule({ code: agentRenderWGSL(rt.layout) });
@@ -3064,6 +3455,10 @@ async function buildAgentDiscPipelines(rt: AgentRenderSurface): Promise<boolean>
     console.error('[agents/webgpu] render WGSL compile errors:\n' + errs.map(m => `  line ${m.lineNum}: ${m.message}`).join('\n'));
     return false;
   }
+  // SPRITES: the disc module reads the per-slot meta too (to cull a sprite-carrying
+  // agent), so its layout gains binding 4 — but ONLY when the layout reserves the
+  // sprite runs, so a non-sprite surface keeps the historical 4-entry layout.
+  const withSprites = !!rt.layout.spritesReserved;
   const bgl = rt.device.createBindGroupLayout({
     label: 'agent-render-bgl',
     entries: [
@@ -3071,6 +3466,7 @@ async function buildAgentDiscPipelines(rt: AgentRenderSurface): Promise<boolean>
       { binding: 1, visibility: GPUShaderStage.VERTEX, buffer: { type: 'read-only-storage' } },
       { binding: 2, visibility: GPUShaderStage.VERTEX, buffer: { type: 'read-only-storage' } },
       { binding: 3, visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT, buffer: { type: 'uniform' } },
+      ...(withSprites ? [{ binding: 4, visibility: GPUShaderStage.VERTEX, buffer: { type: 'read-only-storage' as const } }] : []),
     ],
   });
   const pl = rt.device.createPipelineLayout({ label: 'agent-render-pl', bindGroupLayouts: [bgl] });
@@ -3126,6 +3522,44 @@ async function buildAgentDiscPipelines(rt: AgentRenderSurface): Promise<boolean>
     fragment: { module: composeModule, entryPoint: 'fsGlowCompose', targets: [{ format, blend: glowComposeBlend }] },
     primitive: { topology: 'triangle-list' },
   });
+  // ---- SPRITES: a second module + pipeline reading the same agent state through
+  // the same camera. Built here (its await joins the others) so the commit below
+  // stays uninterruptible; a compile failure fails the whole build, which is what
+  // keeps the disc module's cull from being left active with no pass to draw the
+  // sprites it culled.
+  let spritePipeline: GPURenderPipeline | null = null;
+  let spriteBGL: GPUBindGroupLayout | null = null;
+  if (withSprites) {
+    const smod = rt.device.createShaderModule({ code: agentSpriteWGSL(rt.layout) });
+    const sinfo = await smod.getCompilationInfo();
+    const serrs = sinfo.messages.filter(m => m.type === 'error');
+    if (serrs.length > 0) {
+      // eslint-disable-next-line no-console
+      console.error('[agents/webgpu] sprite WGSL compile errors:\n' + serrs.map(m => `  line ${m.lineNum}: ${m.message}`).join('\n'));
+      return false;
+    }
+    spriteBGL = rt.device.createBindGroupLayout({
+      label: 'agent-sprite-bgl',
+      entries: [
+        { binding: 0, visibility: GPUShaderStage.VERTEX, buffer: { type: 'read-only-storage' } },
+        { binding: 1, visibility: GPUShaderStage.VERTEX, buffer: { type: 'read-only-storage' } },
+        { binding: 2, visibility: GPUShaderStage.VERTEX, buffer: { type: 'read-only-storage' } },
+        { binding: 3, visibility: GPUShaderStage.VERTEX, buffer: { type: 'uniform' } },
+        { binding: 4, visibility: GPUShaderStage.VERTEX, buffer: { type: 'read-only-storage' } },
+        { binding: 5, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: 'float', viewDimension: '2d-array' } },
+        { binding: 6, visibility: GPUShaderStage.FRAGMENT, sampler: { type: 'filtering' } },
+      ],
+    });
+    spritePipeline = rt.device.createRenderPipeline({
+      label: 'agent-sprite',
+      layout: rt.device.createPipelineLayout({ label: 'agent-sprite-pl', bindGroupLayouts: [spriteBGL] }),
+      vertex: { module: smod, entryPoint: 'vsSprite' },
+      // The atlas is premultiplied and the FS returns premultiplied, so the sprite
+      // uses the SAME source-over blend as the disc core.
+      fragment: { module: smod, entryPoint: 'fsSprite', targets: [{ format, blend: plainBlend }] },
+      primitive: { topology: 'triangle-strip' },
+    });
+  }
   const renderViewBuf = rt.device.createBuffer({ label: 'agent-render-view', size: RENDER_VIEW_BYTES, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
   const plainPipeline = mkPipe('agent-render-plain', plainBlend, 'vsMain', 'fsMain');
   // The halo pipeline targets the HDR format, so it CANNOT share mkPipe's canvas target.
@@ -3135,16 +3569,6 @@ async function buildAgentDiscPipelines(rt: AgentRenderSurface): Promise<boolean>
     fragment: { module, entryPoint: 'fsGlow', targets: [{ format: GLOW_HDR_FORMAT, blend: glowBlend }] },
     primitive: { topology: 'triangle-strip' },
   });
-  const renderBindGroup = rt.device.createBindGroup({
-    label: 'agent-render-bg', layout: bgl,
-    entries: [
-      { binding: 0, resource: { buffer: rt.agentF32Buf } },
-      { binding: 1, resource: { buffer: rt.agentAliveBuf } },
-      { binding: 2, resource: { buffer: rt.agentColorsBuf } },
-      { binding: 3, resource: { buffer: renderViewBuf } },
-    ],
-  });
-
   // ---- ATOMIC COMMIT — NO await below this line, and nothing is destroyed
   // until every field points at the new resources. -------------------------
   const oldViewBuf = rt.renderViewBuf;
@@ -3153,7 +3577,14 @@ async function buildAgentDiscPipelines(rt: AgentRenderSurface): Promise<boolean>
   rt.renderGlowPipeline = glowPipeline;
   rt.glowComposeBGL = composeBGL;
   rt.glowComposePipeline = composePipeline;
-  rt.renderBindGroup = renderBindGroup;
+  rt.renderBGL = bgl;
+  rt.spriteBGL = spriteBGL;
+  rt.spritePipeline = spritePipeline;
+  // Builds BOTH bind groups (and, with sprites, seeds a zeroed meta record + a 1x1
+  // placeholder atlas so the groups are valid before any atlas payload arrives —
+  // frameCount 0 ⇒ the disc cull is inert ⇒ every agent draws a circle, which is
+  // exactly the CPU overlay's not-yet-decoded behaviour).
+  rebuildRenderBindGroups(rt);
   // A re-attach rebuilds the pipelines on the SAME surface — drop the previous HDR
   // target (its bind group belongs to the OLD compose layout) instead of orphaning
   // it. Must follow the glowComposeBGL commit: the next ensureGlowHdrTex rebuilds
@@ -3171,7 +3602,10 @@ async function setupAgentDiscRender(rt: AgentRenderSurface, canvas: OffscreenCan
     const ctx = canvas.getContext('webgpu') as GPUCanvasContext | null;
     if (!ctx) return false;
     const format: GPUTextureFormat = 'rgba8unorm';
-    ctx.configure({ device: rt.device, format, usage: GPUTextureUsage.RENDER_ATTACHMENT, alphaMode: 'premultiplied' });
+    // COPY_SRC so a DEV probe can read the presented pixels back (the pane is
+    // routinely occluded, which makes a main-thread drawImage of this transferred
+    // canvas return transparent) — the same allowance the composite path makes.
+    ctx.configure({ device: rt.device, format, usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.COPY_SRC, alphaMode: 'premultiplied' });
     if (!(await buildAgentDiscPipelines(rt))) return false;
     rt.renderCanvas = canvas;
     rt.renderCtx = ctx;
@@ -3394,6 +3828,12 @@ export function presentCompositeEncode(rt: AgentRenderSurface, enc: GPUCommandEn
       ap.setPipeline(rt.renderPlainPipeline!);
       ap.setBindGroup(0, rt.renderBindGroup);
       ap.draw(4, insts);
+      // Sprites over the discs (and over the grid layer beneath) — see presentAgentsEncode.
+      if (spriteRenderActive(rt)) {
+        ap.setPipeline(rt.spritePipeline!);
+        ap.setBindGroup(0, rt.spriteBindGroup!);
+        ap.draw(4, insts);
+      }
     }
     ap.end();
   }
@@ -3538,6 +3978,14 @@ export function presentAgentsEncode(rt: AgentRenderSurface, enc: GPUCommandEncod
   pass.setPipeline(rt.renderPlainPipeline!);
   pass.setBindGroup(0, rt.renderBindGroup);
   pass.draw(4, insts);
+  // SPRITES last — the CPU overlay draws bodies after the glow, and a sprite IS
+  // that agent's body (its disc was culled), so the billboards sit over the halo
+  // and over every disc. Same instance decomposition, so infinity tiling matches.
+  if (spriteRenderActive(rt)) {
+    pass.setPipeline(rt.spritePipeline!);
+    pass.setBindGroup(0, rt.spriteBindGroup!);
+    pass.draw(4, insts);
+  }
   pass.end();
 }
 
@@ -3600,6 +4048,49 @@ export function presentAgentsOnce(rt: AgentRenderSurface, hw: number): void {
   const enc = rt.device.createCommandEncoder({ label: 'agent-present-once' });
   presentAgentsEncode(rt, enc, hw);
   rt.device.queue.submit([enc.finish()]);
+}
+
+/** DEV/verification only: present the agent frame, copy the canvas texture back
+ *  and summarise it. The Browser pane is routinely OCCLUDED, which makes a
+ *  main-thread `drawImage` of this transferred canvas return fully transparent —
+ *  so pixel evidence for the disc / sprite passes has to come from the worker
+ *  side, exactly as `debugReadCompositePixels` does for E2.
+ *
+ *  `distinct` is the discriminator the sprite pass needs: a disc is ONE flat
+ *  colour, a textured billboard is many. */
+export async function debugReadAgentPixels(
+  rt: AgentRenderSurface, hw: number, box?: { x: number; y: number; w: number; h: number },
+): Promise<{ w: number; h: number; lit: number; distinct: number; opaque: number; hash: number; spriteActive: boolean; liveSlots: number } | null> {
+  if (!rt.renderActive || !rt.renderCtx) return null;
+  const enc = rt.device.createCommandEncoder({ label: 'agent-dev-readback' });
+  presentAgentsEncode(rt, enc, hw);
+  const tex = rt.renderCtx.getCurrentTexture();
+  const W = tex.width, H = tex.height;
+  const bytesPerRow = Math.ceil((W * 4) / 256) * 256;
+  const rb = rt.device.createBuffer({ label: 'agent-dev-rb', size: bytesPerRow * H, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
+  enc.copyTextureToBuffer({ texture: tex }, { buffer: rb, bytesPerRow, rowsPerImage: H }, { width: W, height: H, depthOrArrayLayers: 1 });
+  rt.device.queue.submit([enc.finish()]);
+  await rb.mapAsync(GPUMapMode.READ);
+  const data = new Uint8Array(rb.getMappedRange().slice(0));
+  rb.unmap(); rb.destroy();
+  const x0 = Math.max(0, box?.x ?? 0), y0 = Math.max(0, box?.y ?? 0);
+  const x1 = Math.min(W, box ? box.x + box.w : W), y1 = Math.min(H, box ? box.y + box.h : H);
+  const cols = new Set<number>();
+  let lit = 0, opaque = 0;
+  // An FNV-1a hash of every sampled byte: the ONLY way to tell two renders apart
+  // when the aggregate counts cannot (rotating a sprite preserves its area, so
+  // lit/opaque/distinct are all but identical across facings).
+  let hash = 0x811c9dc5;
+  for (let y = y0; y < y1; y++) {
+    for (let x = x0; x < x1; x++) {
+      const o = y * bytesPerRow + x * 4;
+      const a = data[o + 3]!;
+      if (a > 8) { lit++; cols.add((data[o]! << 16) | (data[o + 1]! << 8) | data[o + 2]!); }
+      if (a > 250) opaque++;
+      for (let k = 0; k < 4; k++) { hash ^= data[o + k]!; hash = Math.imul(hash, 0x01000193) >>> 0; }
+    }
+  }
+  return { w: W, h: H, lit, distinct: cols.size, opaque, hash: hash >>> 0, spriteActive: spriteRenderActive(rt), liveSlots: rt.spriteLiveSlots ?? 0 };
 }
 
 /** Sync the GPU render buffers from the CPU store (positions + colours) and
@@ -3675,6 +4166,27 @@ export function uploadAgentRenderFields(rt: AgentRenderSurface, s: AgentStore): 
     write(L.f32Base['radius']!, s.radius);
     // Phase C: a 3D layout carries a z field the sphere pass reads.
     if ((L.gridDepth ?? 1) > 1 && L.f32Base['z'] !== undefined && s.z) write(L.f32Base['z'], s.z);
+    // SPRITES (2D billboard pass): its VS reads the four per-agent sprite runs plus
+    // vx/vy (the orientToVelocity heading), none of which the disc pass needs — so
+    // they ride the tight upload ONLY while the pass is live. On this A2 surface the
+    // CPU store is authoritative for all of them, so this is the whole animation
+    // pipeline: `advanceAgentSprites` ticks, the next present uploads.
+    if (spriteRenderActive(rt)) {
+      const put = (name: string, src: ArrayLike<number> | undefined): void => {
+        const base = L.f32Base[name];
+        if (base === undefined || !src) return;
+        const n = Math.min(hw, src.length);
+        for (let i = 0; i < n; i++) scratch[i] = src[i]!;
+        for (let i = n; i < hw; i++) scratch[i] = 0;
+        rt.device.queue.writeBuffer(rt.agentF32Buf, base * 4, scratch.buffer, 0, hw * 4);
+      };
+      put('spriteIds', s.spriteIds);
+      put('spriteFrames', s.spriteFrames);
+      put('spriteRotations', s.spriteRotations);
+      put('spriteScales', s.spriteScales);
+      put('vx', s.vx);
+      put('vy', s.vy);
+    }
   }
   const al = rt.renderAliveScratch ?? (rt.renderAliveScratch = new Uint32Array(ma));
   for (let i = 0; i < hw; i++) al[i] = s.alive[i]!;
@@ -3704,6 +4216,7 @@ export function destroyAgentRenderSurface(rt: AgentRenderSurface | null): void {
   if (rt.renderMsaaTex) { try { rt.renderMsaaTex.destroy(); } catch { /* non-fatal */ } rt.renderMsaaTex = null; }
   destroyGlowHdrTex(rt);
   destroyBloom3DResources(rt);
+  destroySpriteResources(rt);
   const bufs = [rt.agentF32Buf, rt.agentAliveBuf, rt.agentColorsBuf, rt.renderViewBuf ?? null, rt.renderView3DBuf ?? null, rt.gridPresentUniform ?? null, rt.renderLineBuf ?? null];
   for (const b of bufs) { if (b) try { b.destroy(); } catch { /* non-fatal */ } }
   rt.renderLineBuf = null; rt.renderLineCount = 0; rt.renderLineSig = '';
@@ -4601,6 +5114,7 @@ export function destroyAgentWebGPURuntime(rt: AgentWebGPURuntime | null): void {
   if (rt.renderMsaaTex) { try { rt.renderMsaaTex.destroy(); } catch { /* non-fatal */ } rt.renderMsaaTex = null; }
   destroyGlowHdrTex(rt);
   destroyBloom3DResources(rt);
+  destroySpriteResources(rt);
   for (const b of bufs) { if (b) try { b.destroy(); } catch { /* non-fatal */ } }
   rt.renderLineBuf = null; rt.renderLineCount = 0; rt.renderLineSig = '';
   for (const bucket of rt.stagingPool.values()) for (const e of bucket) { try { e.buffer.destroy(); } catch { /* non-fatal */ } }
