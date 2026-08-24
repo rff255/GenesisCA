@@ -38,6 +38,7 @@
 import type { CAModel, CenterBasedConfig, GraphNode, GraphEdge, MotionMode } from './types';
 import { resolveAgentProfile } from './agentCapabilities';
 import { usesEngineGrowth, usesSoftCollision, usesBondingPhysics, usesCharge } from './centerBased';
+import { agentGraphReadsEngineDensity } from '../modeler/vpl/compiler/densityExpand';
 
 /** Which OPTIONAL per-agent SoA field groups this model allocates. `true` = the
  *  field exists (today's behaviour); `false` = it is a zero-length array and its
@@ -147,7 +148,12 @@ export function resolveAgentFieldGates(model: CAModel): AgentFieldGates {
   // charge`; a consumer is `neighbourDensity` (reads it) or `divideAgent` (whose
   // degenerate-axis fallback reads it in the engine). So density off ⇒ the scan
   // never runs ⇒ nothing writes it, on every target.
-  const density = scan.types.has('neighbourDensity') || scan.types.has('divideAgent')
+  // `agentGraphReadsEngineDensity` is the SHARED consumer predicate (also read by
+  // SimulatorView's `agentUsesDensity` and the C2 pipeline panel): `divideAgent`
+  // always counts, a `neighbourDensity` only while its Radius is INACTIVE — an
+  // active Radius lowers the node to a fresh Get Nearby Agents count, so nothing
+  // would read the reduction and scanning for it would be the dead scan P1 removed.
+  const density = agentGraphReadsEngineDensity(model)
     || usesSoftCollision(cfg) || usesBondingPhysics(cfg) || usesCharge(cfg);
 
   return { sprites, age, targetRadius, density };

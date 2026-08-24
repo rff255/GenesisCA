@@ -22,6 +22,7 @@ import { isAgentIdArraySource } from './agentIdArray';
 import { expandMultiAttrs } from './multiAttrExpand';
 import { expandForceToAgents } from './forceToAgentsExpand';
 import { expandNeighbourCensus } from './censusExpand';
+import { expandDensityRadius } from './densityExpand';
 import { expandPeriodicSteps } from './periodicExpand';
 import { cellUsesGeneration, agentUsesGeneration } from './generationUse';
 import { agentUsesDivisionSibling, agentUsesDivisionRequests } from './divisionUse';
@@ -2678,6 +2679,11 @@ export function compileAgentGraph(
   // port (+ Array Length for `total`), so it reuses the existing emitters on every
   // target (no new emit). See censusExpand.ts.
   ({ nodes: agentNodes, edges: agentEdges } = expandNeighbourCensus(agentNodes, agentEdges, model));
+  // Neighbour Density with an ACTIVE Radius -> Get Nearby Agents(radius) + Array
+  // Length, so an absolute-radius density reuses the existing emitters on every
+  // target (no new emit). Radius unwired/0 keeps the engine reduction, so this is
+  // a no-op for every existing model. See densityExpand.ts.
+  ({ nodes: agentNodes, edges: agentEdges } = expandDensityRadius(agentNodes, agentEdges, model));
   // Periodic Step roots → Get Generation + Math(%) + Compare + If/Then hung off
   // the single Behaviour Step, sequenced. Zero per-target emit — see
   // periodicExpand.ts. No-op when the graph has no Periodic Step.

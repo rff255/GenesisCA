@@ -54,6 +54,7 @@ import { isAgentIdArraySource } from '../agentIdArray';
 import { expandMultiAttrs } from '../multiAttrExpand';
 import { expandForceToAgents } from '../forceToAgentsExpand';
 import { expandNeighbourCensus } from '../censusExpand';
+import { expandDensityRadius } from '../densityExpand';
 import { expandPeriodicSteps } from '../periodicExpand';
 import { expandComposites } from '../expandComposites';
 import { BOND_REQ_ID_BIAS, BOND_REQ_NONE, bondReqSlotsForModel } from '../bondRequestQueue';
@@ -3792,6 +3793,11 @@ function flattenAgentGraph(nodes: GraphNode[], edges: GraphEdge[], model: CAMode
   // already supported, so the gate + emitter never see the census node and it runs
   // on WebGPU with zero per-target emit. See censusExpand.ts.
   ({ nodes: n, edges: e } = expandNeighbourCensus(n, e, model));
+  // Neighbour Density with an ACTIVE Radius -> Get Nearby Agents(radius) + Array
+  // Length, so an absolute-radius density reuses the existing emitters on every
+  // target (no new emit). Radius unwired/0 keeps the engine reduction, so this is
+  // a no-op for every existing model. See densityExpand.ts.
+  ({ nodes: n, edges: e } = expandDensityRadius(n, e, model));
   // Periodic Step roots → Get Generation + Math(%) + Compare + If/Then hung off the
   // single Behaviour Step, sequenced — all already supported, so the gate + emitter
   // never see the periodicStep node. See periodicExpand.ts.

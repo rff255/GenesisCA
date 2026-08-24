@@ -1462,7 +1462,7 @@ export function PropertiesPanelContent({ mode = 'list' }: PanelContentProps = {}
                 {/* Motion — the velocity integrator; relevant to EVERY agent model
                     (a custom-force boids model lives entirely here), so always shown. */}
                 <div style={{ fontSize: '0.6rem', color: '#888', textTransform: 'uppercase', letterSpacing: '0.05em', margin: '8px 0 4px' }}>Motion</div>
-                {Row('Momentum', NF('momentum', { min: 0, max: 0.999, step: 0.05 }), '0 = overdamped (tissue); ~0.9 = flocking inertia.')}
+                {Row('Momentum (friction)', NF('momentum', { min: 0, max: 0.999, step: 0.05 }), 'Velocity retained per step — THIS is the friction / damping control. Below 1 the velocity decays geometrically, so a constant force settles at the finite terminal speed (Δt/η)·F / (1 − momentum): 0 = fully overdamped (tissue), ~0.9 = flocking inertia, 0.999 (the cap) ≈ frictionless. Agents that accelerate forever mean momentum is too close to 1 — lower it. (A rule that wants friction as a live Simulator slider can instead scale its own velocity in the graph; that is exactly equivalent to momentum × that factor.)')}
                 {Row('Max Speed', NF('maxSpeed', { min: 0, step: 0.1 }), 'Per-step speed cap (0 = uncapped).')}
                 {Row('Neighbour Query Radius', NF('neighbourQueryRadius', { min: 1, step: 0.5 }), 'Get Nearby Agents radius the spatial-hash bin is sized to cover.')}
                 {/* C1 (P4) — no silent resolution: when the stability bound

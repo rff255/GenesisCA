@@ -2621,6 +2621,123 @@ entries.push({
   name: '[synthetic] Break Bond pair port (the BREAK BETWEEN sign matrix)',
   raw: buildBreakBondPairModel(), setup: setupBondAttrStores, invariant: breakBondPairInvariant,
 });
+
+// ---------------------------------------------------------------------------
+// NEIGHBOUR DENSITY — the optional Radius, and the TWO modes it selects.
+//
+// One graph carries all three shapes at once, so a single run pins the whole
+// activation predicate:
+//   • Radius UNWIRED           → the ENGINE reduction `_agentDensity[idx]`.
+//   • Radius INLINE (3)        → LOWERED to Get Nearby Agents(3) → Array Length.
+//   • Radius WIRED (a model attribute = 2) → the same lowering, radius from the wire.
+//
+// Parity alone is a mirror test here — if BOTH targets lowered the unwired node
+// (or ignored the inline value) they would still agree. The VALUE invariant below
+// therefore recomputes every one of the three from the store's OWN positions /
+// density array, and additionally asserts the fixture DISCRIMINATES (the three
+// answers are not all the same number, so a collapsed mode is visible).
+// ---------------------------------------------------------------------------
+const DENSITY_INLINE_R = 3, DENSITY_WIRED_R = 2, DENSITY_W = 24, DENSITY_H = 24;
+function buildDensityRadiusModel() {
+  const used = new Set();
+  const nid = (p) => { let id; do { id = p + Math.random().toString(36).slice(2, 8); } while (used.has(id)); used.add(id); return id; };
+  const aN = [], aEd = [];
+  const an = (t, c) => { const n = { id: nid('a'), type: 'caNode', position: { x: 0, y: 0 }, data: { nodeType: t, config: c } }; aN.push(n); return n; };
+  const aE = (s, sp, tt, tp, cat) => aEd.push({ id: nid('e'), source: s.id, target: tt.id, sourceHandle: `output_${cat}_${sp}`, targetHandle: `input_${cat}_${tp}` });
+
+  const bs = an('behaviourStep', {});
+  // 1) UNWIRED — must still read the engine reduction.
+  const dEng = an('neighbourDensity', {});
+  const wEng = an('setAttribute', { attributeId: 'dEng' });
+  aE(dEng, 'value', wEng, 'value', 'value');
+  aE(bs, 'do', wEng, 'do', 'flow');
+  // 2) INLINE radius.
+  const dIn = an('neighbourDensity', { _port_radius: String(DENSITY_INLINE_R) });
+  const wIn = an('setAttribute', { attributeId: 'dIn' });
+  aE(dIn, 'value', wIn, 'value', 'value');
+  aE(wEng, 'next', wIn, 'do', 'flow');
+  // 3) WIRED radius — a MODEL ATTRIBUTE, the "receive an attribute for the
+  //    radius" case (and a non-constant source, so the wire is really read).
+  const dWi = an('neighbourDensity', {});
+  const qr = an('getModelAttribute', { attributeId: 'qr' });
+  aE(qr, 'value', dWi, 'radius', 'value');
+  const wWi = an('setAttribute', { attributeId: 'dWi' });
+  aE(dWi, 'value', wWi, 'value', 'value');
+  aE(wIn, 'next', wWi, 'do', 'flow');
+
+  return {
+    schemaVersion: 1,
+    properties: { name: 'Neighbour Density Radius Parity Test', dimension: '2d', gridWidth: DENSITY_W, gridHeight: DENSITY_H, gridDepth: 1, topology: '2d-grid', boundaryTreatment: 'torus', useWasm: false, useWebGPU: false },
+    topologyMode: { gridCells: false, agents: true },
+    centerBased: { enabled: true, maxAgents: 100, maxBonds: 0, worldWidth: DENSITY_W, worldHeight: DENSITY_H, seedCount: 40, seedPattern: 'scatter', defaultRadius: 0.5, growthRate: 0, repulsionStiffness: 0, adhesionStiffness: 0, interactionRange: 1.5, drag: 1, timeStep: 0.1, momentum: 0, maxSpeed: 0, neighbourQueryRadius: 4, useBondingPhysics: false, autoBond: false, agentTarget: 'wasm', agentUpdateMode: 'async',
+      agentCapabilities: { motion: 'force', body: true, collision: 'off', bonds: 'off', autoBond: false, growth: false, division: false, lifespan: false, populationBirth: false, populationDeath: false, sensing: true, sensingHeadingSource: 'velocity', orientation: false, fieldCoupling: false, appearance: true } },
+    attributes: [
+      { id: 'qr', name: 'Query Radius', type: 'float', isModelAttribute: true, defaultValue: String(DENSITY_WIRED_R) },
+    ],
+    modelAttributes: [], neighborhoods: [],
+    agentAttributes: [
+      { id: 'dEng', name: 'D Engine', type: 'float', defaultValue: '0' },
+      { id: 'dIn', name: 'D Inline', type: 'float', defaultValue: '0' },
+      { id: 'dWi', name: 'D Wired', type: 'float', defaultValue: '0' },
+    ],
+    variables: [], agentVariables: [], indicators: [], mappings: [],
+    graphNodes: [], graphEdges: [], agentGraphNodes: aN, agentGraphEdges: aEd, macroDefs: [],
+  };
+}
+
+/** Seed the ENGINE density with a pattern nothing else could produce (so "read
+ *  the reduction" is distinguishable from "count neighbours"), and push two rows
+ *  of agents onto opposite sides of the torus SEAM so the fold the lowered
+ *  Get Nearby Agents applies is load-bearing rather than decorative. */
+function setupDensityStores(stores) {
+  for (const s of stores) {
+    for (let i = 0; i < s.highWater; i++) {
+      s.density[i] = (i % 7) + 100;               // 100..106 — never a real neighbour count here
+      if (i < 8) { s.x[i] = DENSITY_W - 0.6; s.y[i] = 2 + i * 0.7; }
+      else if (i < 16) { s.x[i] = 0.6; s.y[i] = 2 + (i - 8) * 0.7; }
+    }
+  }
+}
+
+/** The VALUE invariant, recomputed from the store's own state (never from the
+ *  emit): the unwired node must equal the engine array element-for-element, and
+ *  each active-radius node must equal an independent torus-folded count at ITS
+ *  radius. The last three checks assert the fixture actually discriminates. */
+function densityRadiusInvariant(st) {
+  const hW = DENSITY_W / 2, hH = DENSITY_H / 2;
+  const count = (i, R) => {
+    let n = 0;
+    for (let j = 0; j < st.highWater; j++) {
+      if (j === i || !st.alive[j]) continue;
+      let dx = st.x[j] - st.x[i], dy = st.y[j] - st.y[i];
+      if (dx > hW) dx -= DENSITY_W; else if (dx < -hW) dx += DENSITY_W;
+      if (dy > hH) dy -= DENSITY_H; else if (dy < -hH) dy += DENSITY_H;
+      if (dx * dx + dy * dy <= R * R) n++;
+    }
+    return n;
+  };
+  let sawInlineNeWired = false, sawEngNeCount = false, sawSeamPair = false;
+  for (let i = 0; i < st.highWater; i++) {
+    if (!st.alive[i]) continue;
+    const cIn = count(i, DENSITY_INLINE_R), cWi = count(i, DENSITY_WIRED_R);
+    if (st.attrRead.dEng[i] !== st.density[i]) return `agent ${i}: unwired density ${st.attrRead.dEng[i]} !== engine reduction ${st.density[i]}`;
+    if (st.attrRead.dIn[i] !== cIn) return `agent ${i}: inline-radius density ${st.attrRead.dIn[i]} !== recount(${DENSITY_INLINE_R}) ${cIn}`;
+    if (st.attrRead.dWi[i] !== cWi) return `agent ${i}: wired-radius density ${st.attrRead.dWi[i]} !== recount(${DENSITY_WIRED_R}) ${cWi}`;
+    if (cIn !== cWi) sawInlineNeWired = true;
+    if (st.density[i] !== cIn) sawEngNeCount = true;
+    // a seam pair: agent i (x ~ 23.4) can only see agent i+8 (x ~ 0.6) via the fold
+    if (i < 8 && cWi > 0) sawSeamPair = true;
+  }
+  if (!sawInlineNeWired) return 'fixture does not discriminate: the two radii give the same count everywhere';
+  if (!sawEngNeCount) return 'fixture does not discriminate: the engine reduction equals the radius count everywhere';
+  if (!sawSeamPair) return 'fixture does not discriminate: no agent sees a partner across the torus seam';
+  return null;
+}
+
+entries.push({
+  name: '[synthetic] Neighbour Density Radius (engine reduction / inline / wired, lowered)',
+  raw: buildDensityRadiusModel(), setup: setupDensityStores, invariant: densityRadiusInvariant,
+});
 entries.push({
   name: '[synthetic] Division partition (two Divide Agent nodes, distinct codes)',
   raw: buildDividePartitionModel(), setup: setupBondAttrStores, invariant: dividePartitionInvariant,

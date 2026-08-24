@@ -2334,8 +2334,18 @@ export function HelpView() {
               state update and the rewrite on the <em>same</em> tick, which is what keeps a
               periodic automaton faithful.</li>
             <li><strong>Get Self Position / Get Radius / Get Bond Degree / Neighbour Density</strong>
-              &mdash; read the agent's geometry and its local crowding (how many other agents are
-              within interaction range).</li>
+              &mdash; read the agent's geometry and its local crowding.{' '}
+              <strong>Neighbour Density</strong> has two modes, decided by its optional
+              <strong> Radius</strong> input. Leave it unwired (or 0) and it reads the ENGINE's own
+              count: the agents inside the interaction cutoff{' '}
+              <code>Interaction Range &times; (r<sub>i</sub> + r<sub>j</sub>)</code> &mdash; a{' '}
+              <em>relative</em> range that scales with the pair's radii &mdash; counted for free by
+              the force pass and therefore <em>one generation stale</em>. Wire a Radius (a model
+              attribute makes it a live slider) or type one, and you get a <em>fresh</em> count,
+              this generation, of the other agents within that <em>absolute</em> distance. Keep it
+              &le; the model's <strong>Neighbour Query Radius</strong>: the spatial hash is sized to
+              that, so a larger radius silently under-counts &mdash; the same rule Get Nearby Agents
+              follows, because that is exactly what the node lowers to.</li>
             <li><strong>Get Self Handle</strong> &mdash; the current agent's own id. Pass it to the
               by-id nodes (Get Agent Attribute, a wired Set Attribute, Get Agent Position,
               Form/Break Bond) so a
@@ -3144,11 +3154,29 @@ export function HelpView() {
               ants cell by cell). All three run on JS, WebAssembly and WebGPU.</li>
             <li><strong>Motion parameters</strong> (shown whenever motion is not Static &mdash; they
               govern how <em>your</em> forces
-              integrate) &mdash; <strong>Momentum</strong> (velocity persistence: 0 = overdamped
-              tissue, ~0.9 = flocking inertia), <strong>Max Speed</strong>, <strong>Neighbour
-              Query Radius</strong> (sizes the spatial hash so Get Nearby Agents within it stays
-              fast), <strong>Time Step</strong> (auto-clamped for stability) and
+              integrate) &mdash; <strong>Momentum (friction)</strong>, <strong>Max Speed</strong>,
+              <strong> Neighbour Query Radius</strong> (sizes the spatial hash so Get Nearby Agents
+              within it stays fast), <strong>Time Step</strong> (auto-clamped for stability) and
               <strong> Drag</strong>.</li>
+            <li><strong>&ldquo;My agents accelerate forever&rdquo; &mdash; lower Momentum. It IS the
+              friction control.</strong> The integrator is
+              <code>v &larr; momentum&middot;v + (&Delta;t/&eta;)&middot;&Sigma;F</code>, so any
+              momentum below 1 decays the velocity geometrically and a constant force settles at the
+              finite terminal speed <code>(&Delta;t/&eta;)&middot;F / (1 &minus; momentum)</code>.
+              0 is fully overdamped (tissue); ~0.9 gives flocking inertia and is what
+              <em> Boids &mdash; Flocking</em> uses with no friction node anywhere; 0.999 &mdash; the
+              cap &mdash; is effectively frictionless (terminal speed 1000&times; the per-step force
+              term), which is what &ldquo;infinite acceleration&rdquo; actually is.{' '}
+              <em>Damping your own velocity in the graph is not a second mechanism.</em> The
+              behaviour runs BEFORE the force pass, so a <strong>Get Velocity &rarr; &times;f &rarr;
+              Set Velocity</strong> chain composes to
+              <code>v &larr; (momentum&middot;f)&middot;v + (&Delta;t/&eta;)&middot;&Sigma;F</code>
+              &mdash; exactly <code>momentum &times; f</code>; friction applied after the force add,
+              <code>(v + kF)&middot;f</code>, is likewise <code>momentum = f</code> with
+              <code> &eta;&prime; = &eta;/f</code>. The reason <em>Particle Life</em> nevertheless
+              does it in the graph is purely authoring: a model attribute is a <em>live Simulator
+              slider</em>, while Momentum lives in the Modeler&rsquo;s Properties panel (it is still
+              live-tunable there &mdash; changing it needs no re-init).</li>
             <li><strong>Use bonding physics</strong> &mdash; the coarse legacy master toggle for the
               built-in engine, <strong>off by default</strong> when you enable Agents. Turn it on to
               reveal (and turn on together): <strong>Forces</strong> (the soft-sphere law:
@@ -3384,8 +3412,9 @@ export function HelpView() {
               field copy &mdash; roughly twice as fast as the CPU field bridge.</li>
             <li>The engine skips work it can prove is dead automatically &mdash; e.g. the
               built-in neighbour-density scan only runs when something actually reads it
-              (a Neighbour Density node, division, or engine physics), so a pure
-              custom-force model pays nothing for it.</li>
+              (a Neighbour Density node <em>with no Radius</em>, division, or engine physics), so a
+              pure custom-force model &mdash; or one whose density nodes all carry their own Radius
+              &mdash; pays nothing for it.</li>
             <li><strong>Direct agent render.</strong> For a model whose agents do
               <em>not</em> exchange a cell field with the grid (an agents-only model, or a
               2D grid+agents model whose agents never read or write a cell attribute) &mdash;

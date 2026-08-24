@@ -5,6 +5,7 @@ import { ColorField } from '../modeler/vpl/widgets/ColorField';
 import { compileGraph, compileAgentGraph, type CompileResult } from '../modeler/vpl/compiler/compile';
 import { expandVectorAttributes, encodeAttrSets, decodeVectorFromValues } from '../modeler/vpl/compiler/vectorAttr';
 import { hasGlyphsInModel } from '../modeler/vpl/compiler/glyphsUsage';
+import { agentGraphReadsEngineDensity } from '../modeler/vpl/compiler/densityExpand';
 import { CURRENT_VIEWER_SENTINEL } from '../modeler/vpl/nodes/SetCellLooksNode';
 import { compileGraphWasm } from '../modeler/vpl/compiler/wasm/compile';
 import { computeLayoutFromModel, buildViewerIds } from '../modeler/vpl/compiler/wasm/layout';
@@ -4558,34 +4559,18 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
     return scan(model.agentGraphNodes);
   }, [model.agentGraphNodes, model.topologyMode?.agents, model.macroDefs]);
 
-  // P1 (the dead density scan): does ANY reachable agent node consume the
-  // per-agent density? `neighbourDensity` reads it directly; `divideAgent`'s
-  // degenerate-axis fallback reads it in the engine. When false AND engine
-  // physics is off, the worker's force pass skips its whole neighbour scan
-  // (~70% of a custom-force model's force-pass cost). Same macro-aware scan
-  // as agentUsesField (the agent compilers flatten macros up front).
-  const agentUsesDensity = useCallback((): boolean => {
-    if (!model.topologyMode?.agents) return false;
-    const DENSITY_NODE_TYPES = new Set(['neighbourDensity', 'divideAgent']);
-    const macroDefs = model.macroDefs || [];
-    const seen = new Set<string>();
-    const scan = (nodes?: typeof model.agentGraphNodes): boolean => {
-      for (const n of nodes || []) {
-        const t = n.data?.nodeType as string;
-        if (DENSITY_NODE_TYPES.has(t)) return true;
-        if (t === 'macro') {
-          const defId = (n.data?.config as Record<string, unknown> | undefined)?.macroDefId as string | undefined;
-          if (defId && !seen.has(defId)) {
-            seen.add(defId);
-            const def = macroDefs.find(d => d.id === defId);
-            if (def && scan(def.nodes as typeof model.agentGraphNodes)) return true;
-          }
-        }
-      }
-      return false;
-    };
-    return scan(model.agentGraphNodes);
-  }, [model.agentGraphNodes, model.topologyMode?.agents, model.macroDefs]);
+  // P1 (the dead density scan): does ANY reachable agent node consume the ENGINE's
+  // per-agent density? `divideAgent`'s degenerate-axis fallback always reads it;
+  // `neighbourDensity` reads it ONLY while its Radius is inactive (an active
+  // Radius lowers the node to a fresh Get Nearby Agents count — densityExpand.ts).
+  // When false AND engine physics is off, the worker's force pass skips its whole
+  // neighbour scan (~70% of a custom-force model's force-pass cost). The macro-aware
+  // walk lives in `agentGraphReadsEngineDensity`, the ONE predicate the SoA field
+  // gate and the C2 pipeline panel read too, so the three cannot disagree.
+  const agentUsesDensity = useCallback(
+    (): boolean => agentGraphReadsEngineDensity(model),
+    [model],
+  );
 
   // Does ANY rule graph read a COMPUTED (graph / linked) indicator via Get
   // Indicator? Those values are produced once per rendered frame; when a rule
