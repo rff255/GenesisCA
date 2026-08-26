@@ -10737,8 +10737,9 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
     editPrefillIdRef.current = -1;
     // A pending capture review belongs to the PREVIOUS model (its filename is
     // derived from that model's name, and the picture is of its board), so it
-    // closes here too — which is also what releases its object URL.
-    closeCaptureReview();
+    // closes here too — which is also what releases its object URL. DISCARD,
+    // not close: resuming here would start playing the model just loaded.
+    discardCaptureReview();
     draw();
   }, [modelVersion, draw]);
 
@@ -12789,8 +12790,39 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
   // through the two setters so it cannot drift from the state.
   const [captureReview, setCaptureReview] = useState<CaptureReviewData | null>(null);
   const captureReviewRef = useRef(false);
-  const openCaptureReview = (d: CaptureReviewData) => { captureReviewRef.current = true; setCaptureReview(d); };
-  const closeCaptureReview = () => { captureReviewRef.current = false; setCaptureReview(null); };
+  // Did the REVIEW pause the simulation? The dialog is a modal the user reads
+  // and clicks through (a native Save As can take seconds), so leaving the world
+  // running behind it burns compute on frames nobody is watching and moves the
+  // board out from under the picture being judged. So opening it pauses — and
+  // closing it puts the play state BACK, because the pause is the review's own
+  // side effect and must not outlive it: otherwise "look at my screenshot"
+  // silently becomes "stop my simulation". Only ever true when WE paused, so a
+  // capture taken while already paused stays paused.
+  const captureAutoPausedRef = useRef(false);
+  const openCaptureReview = (d: CaptureReviewData) => {
+    captureReviewRef.current = true;
+    captureAutoPausedRef.current = playingRef.current;
+    // Routed through setPlaying so the single useEffect([playing]) pause seam
+    // fires in full — cancelStep to cut the in-flight batch short, the rAF
+    // cancel, the lossless-throttle clear. Never bypass it.
+    if (playingRef.current) setPlaying(false);
+    setCaptureReview(d);
+  };
+  /** Drop the review WITHOUT touching play state — for a model load, where the
+   *  auto-pause belonged to the PREVIOUS model's run and resuming would start
+   *  the freshly-loaded one. */
+  const discardCaptureReview = () => {
+    captureReviewRef.current = false;
+    captureAutoPausedRef.current = false;
+    setCaptureReview(null);
+  };
+  /** The user is done with the dialog (Save / Copy / Cancel / Escape all land
+   *  here) — restore the play state the review took. */
+  const closeCaptureReview = () => {
+    const resume = captureAutoPausedRef.current;
+    discardCaptureReview();
+    if (resume) setPlaying(true);
+  };
 
   /** Release the streaming encoder and clear every recording buffer/counter.
    *  Called from start (fresh slate), stop, and every abort site. */
@@ -12995,8 +13027,11 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
    *  WebM, buffered WebM, GIF) funnels through here once its bytes exist.
    *
    *  `review` (the UI default) parks the blob in the review modal, so nothing
-   *  is written until the user has SEEN what was captured and said so; the
-   *  direct write is kept for the unattended Overseer paths. Fire-and-forget by
+   *  is written until the user has SEEN what was captured and said so — and
+   *  PAUSES the simulation while that modal is up, resuming it on close (see
+   *  openCaptureReview). The direct write is kept for the unattended Overseer
+   *  paths, which must keep running: `review` is false there, so neither the
+   *  modal nor the pause can reach them. Fire-and-forget by
    *  design once the dialog is open: the caller's `resetRecordingState()` must
    *  run immediately either way (the review holds only the Blob, never the
    *  frame buffers), and the Overseer must not be blocked on a human. */
