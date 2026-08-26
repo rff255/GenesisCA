@@ -39,6 +39,23 @@
 //     the same def STRIPPED of both records produce byte-identical
 //     `expandMacros` output AND byte-identical compiled JS / WASM / WGSL;
 //     adding, renaming, grouping and deleting a control each leave it unchanged.
+//   Tier G — CASCADES + the closed instance (P3).
+//   Tier H — AUTHORING semantics (P2), through the real reducer.
+//   Tier I — CLASS C, ONE SOURCE (P4). Every (nodeType, key) the ~39-site
+//     extraction moved returns EXACTLY the list the in-node picker renders, on
+//     BOTH graph kinds (D10); the coupled-write keys share their LIST but are
+//     never bindable (P1.2 for class C); a class-C control resolves, writes and
+//     re-derives its widget; and CaNode is pinned to have NO surviving inline
+//     list expression for any of them.
+//   Tier K — THE CHAINING PICK ROWS (P4 / D4). A nested macro INSTANCE offers
+//     its own def's controls; a row that would close a cycle is refused, and the
+//     verdict is the SHIPPED `resolveTarget` seeded with the control being
+//     re-bound.
+//   Tier J — M1 / M2 / the cross-tab clipboard need NO NEW PASS. The reference
+//     bundle is IDENTICAL with and without controls (the reference lives in the
+//     node CONFIG, which M1 already scans); a full planImport → applyImportPlan
+//     keeps them resolving at the node they named; and a pasted CHAIN lands in
+//     the pasted inner def (the preserved-`controlId` argument).
 //
 // Every tier is negative-controlled by SOURCE MUTATION — see the table in
 // docs/PLAN_EXPLICIT_CONTROLS.md §4.
@@ -68,6 +85,10 @@ export { expandMacros } from '../src/modeler/vpl/compiler/macroExpand.ts';
 export { getEffectivePorts } from '../src/modeler/vpl/effectivePorts.ts';
 export { getActiveGraphKind, setActiveGraphKind } from '../src/modeler/vpl/graphState.ts';
 export { writeGraphClipboard, readGraphClipboard } from '../src/modeler/vpl/graphClipboard.ts';
+export { elementSpecFor } from '../src/modeler/vpl/explicitControls.ts';
+export { collectMacroExportDefs, collectMacroReferences, buildReferenceBundle, defaultSelection } from '../src/model/macroReferences.ts';
+export { planImport, applyImportPlan } from '../src/model/macroImportPlan.ts';
+export { collectMacroDefBundle, remapNestedMacroRefs } from '../src/modeler/vpl/graphClipboard.ts';
 export { compileAll, migrateForHarness } from '../src/dev/compileHarness.ts';
 // The REAL reducer, so what the harness exercises is what the app dispatches.
 export { modelReducer } from '../src/model/ModelContext.tsx';
@@ -297,11 +318,12 @@ console.log('\n--- Tier A: resolution --------------------------------------');
     .find(r => r.configKey === '_port_value');
   check('A35 pick mode OFFERS a wired port, flagged', !!wiredRow && wiredRow.wired === true, JSON.stringify(wiredRow));
 
-  // --- class gate (P4) ----------------------------------------------------
-  const withC = M.eligibleControlKeys('setAttribute', nodeOf(model, 'def_a', 'sa').data.config, model, undefined, new Set(['A', 'B', 'C']));
-  check('A36 the default classes offer NO element rows (the P4 gate)', !keysOf('sa').includes('attributeId'));
-  check('A37 elementOptionsFor is the P4 stub (returns null)', M.elementOptionsFor('setAttribute', 'attributeId', model) === null);
-  check('A38 …so enabling class C offers nothing YET', !withC.some(r => r.klass === 'C'));
+  // --- the class gate, FLIPPED by P4 ---------------------------------------
+  const withoutC = M.eligibleControlKeys('setAttribute', nodeOf(model, 'def_a', 'sa').data.config, model, undefined, new Set(['A', 'B']));
+  check('A36 the DEFAULT classes now offer element rows (the P4 flip)', keysOf('sa').includes('attributeId'));
+  check('A37 elementOptionsFor returns the LIST (the P4 extraction)',
+    (M.elementOptionsFor('setAttribute', 'attributeId', model) ?? []).some(o => o.value === 'a_count'));
+  check('A38 …and excluding class C still offers nothing', !withoutC.some(r => r.klass === 'C'));
   check('A39 CLASS_C_KEYS names the 11 model-element keys', M.CLASS_C_KEYS.size === 11 && M.CLASS_C_KEYS.has('attributeId') && M.CLASS_C_KEYS.has('presetId'));
 
   // --- 2D vs 3D (hiddenPorts through getEffectivePorts) -------------------
@@ -500,7 +522,7 @@ console.log('\n--- Tier D: chaining resolution (D4) ------------------------');
   const model = buildModel({ macroDefs: [defA, defB, defC] });
 
   const r = M.resolveTarget(model.macroDefs, 'def_a2', defA.controls[0].target);
-  check('D1 A→B→C resolves to the ULTIMATE address in C', r.ok && r.at.defId === 'def_c' && r.at.nodeId === 'leaf' && r.at.configKey === '_port_min', JSON.stringify(r));
+  check('D1 A→B→C resolves to the ULTIMATE address in C', r.ok && r.at?.defId === 'def_c' && r.at.nodeId === 'leaf' && r.at.configKey === '_port_min', JSON.stringify(r));
   const d = M.resolveControlDescriptor(model, 'def_a2', defA.controls[0]);
   check('D2 …and the descriptor reads C\'s LIVE value', d.value === '42' && d.kind === 'number' && !d.block, JSON.stringify(d));
 
@@ -557,7 +579,7 @@ console.log('\n--- Tier D: chaining resolution (D4) ------------------------');
   const clonedModel = buildModel({ macroDefs: [retarget(cA), retarget(cB), retarget(cC)] });
   const rClone = M.resolveControlDescriptor(clonedModel, cA.id, cA.controls[0]);
   check('D10 cloning A and B in ONE operation keeps the chain resolving', rClone.value === '42' && !rClone.block, JSON.stringify(rClone));
-  check('D11 …landing in the CLONED leaf def, not the original', rClone.resolved.defId === cC.id);
+  check('D11 …landing in the CLONED leaf def, not the original', rClone.resolved?.defId === cC.id);
 }
 
 // ===========================================================================
@@ -1252,6 +1274,350 @@ console.log('\n--- Tier H: authoring semantics (P2) -------------------------');
       cn.includes('return eligibleControlKeys(nodeData.nodeType, nodeData.config, model, connectedInputHandles);'));
     check('H53 …and only for a node that really belongs to the picked def',
       cn.includes("if (!pickDef || !pickDef.nodes.some(n => n.id === id)) return [];"));
+  }
+}
+
+// ===========================================================================
+console.log('\n--- Tier I: class C — ONE source for the element lists (P4) ---');
+// ===========================================================================
+{
+  const { readFileSync } = await import('fs');
+  const src = f => readFileSync(join(ROOT, f), 'utf8');
+  const cn = src(join('src', 'modeler', 'vpl', 'CaNode.tsx'));
+  const model = buildModel({
+    mappings: [
+      { id: 'm_out', name: 'Viz', isAttributeToColor: true },
+      { id: 'm_in', name: 'Brush', isAttributeToColor: false },
+    ],
+    agentMappings: [
+      { id: 'am_out', name: 'Agent Viz', isAttributeToColor: true },
+      { id: 'am_in', name: 'Agent Brush', isAttributeToColor: false },
+    ],
+    indicators: [
+      { id: 'i_std', name: 'Pop', kind: 'standalone', dataType: 'integer' },
+      { id: 'i_freq', name: 'Census', kind: 'linked', linkedAttributeId: 'a_type', linkedAggregation: 'frequency' },
+      { id: 'i_spat', name: 'Chromatogram', kind: 'linked', linkedAttributeId: 'a_type', linkedAggregation: 'frequency', xAxis: 'rows' },
+    ],
+    variables: [
+      { id: 'v_s', name: 'acc', kind: 'scalar', dataType: 'float', initialValue: '0' },
+      { id: 'v_a', name: 'buf', kind: 'array', dataType: 'float', length: 4, initialValue: '0' },
+    ],
+    agentVariables: [{ id: 'av_s', name: 'agAcc', kind: 'scalar', dataType: 'float', initialValue: '0' }],
+    sprites: [{ id: 'sp', name: 'Bird', dataUrl: 'data:,', mimeType: 'image/png' }],
+    presets: [{ id: 'p1', name: 'Slow', createdAt: 0 }],
+  });
+  // A lookup-table + a color model attribute, so the ov* / getModelAttribute
+  // filters have something to include AND something to exclude.
+  model.attributes = [...model.attributes,
+    { ...attr('a_table', 'lookupTable'), isModelAttribute: true },
+    { ...attr('a_tint', 'color'), isModelAttribute: true },
+  ];
+  const ids = (nodeType, key) => (M.elementOptionsFor(nodeType, key, model) ?? []).map(o => o.value);
+
+  // --- THE COVERAGE TABLE: every (nodeType, key) the extraction moved, with
+  //     the id list derived INDEPENDENTLY from the fixture. -------------------
+  M.setActiveGraphKind('cells');
+  const CELLS = [
+    ['getCellAttribute', 'attributeId', ['', 'a_alive', 'a_count', 'a_type', 'a_flow']],
+    ['setAttribute', 'attributeId', ['', 'a_alive', 'a_count', 'a_type', 'a_flow']],
+    ['setCellAtPosition', 'attributeId', ['', 'a_alive', 'a_count', 'a_type', 'a_flow']],
+    ['updateAttribute', 'attributeId', ['', 'a_alive', 'a_count', 'a_type', 'a_flow']],
+    ['getAgentsAttribute', 'attributeId', ['', 'ag_state', 'ag_energy']],
+    ['filterAgents', 'attributeId', ['', 'ag_state', 'ag_energy']],
+    ['getAgentAttribute', 'attributeId', ['', 'ag_state', 'ag_energy']],
+    ['getBondAttribute', 'attributeId', ['', 'bond_w']],
+    ['setBondAttribute', 'attributeId', ['', 'bond_w']],
+    ['divideAgent', 'partitionAttributeId', ['', 'bond_w']],
+    ['neighbourCensus', 'attributeId', ['', 'ag_state']],
+    ['sampleField', 'attributeId', ['', 'a_alive', 'a_count', 'a_type', 'a_flow']],
+    ['secreteToField', 'attributeId', ['', 'a_alive', 'a_count', 'a_type', 'a_flow']],
+    ['getNeighborsAttribute', 'attributeId', ['', 'a_alive', 'a_count', 'a_type', 'a_flow']],
+    ['getNeighborsAttribute', 'neighborhoodId', ['', 'nb']],
+    ['setNeighborhoodAttribute', 'neighborhoodId', ['', 'nb']],
+    ['getNeighborAttributeByIndex', 'attributeId', ['', 'a_alive', 'a_count', 'a_type', 'a_flow']],
+    ['filterNeighbors', 'attributeId', ['', 'a_alive', 'a_count', 'a_type', 'a_flow']],
+    ['getNeighborAttributeByTag', 'neighborhoodId', ['', 'nb']],
+    ['getNeighborAttributeByTag', 'attributeId', ['', 'a_alive', 'a_count', 'a_type', 'a_flow']],
+    ['getAllNeighborIndexes', 'neighborhoodId', ['', 'nb']],
+    ['neighborIndexFromTag', 'neighborhoodId', ['', 'nb']],
+    ['getNeighborIndexesByTags', 'neighborhoodId', ['', 'nb']],
+    ['getModelAttribute', 'attributeId', ['', 'a_speed', 'a_table', 'a_tint']],
+    ['ovSetModelAttribute', 'attributeId', ['', 'a_speed']],   // color + lookupTable + vector excluded
+    ['getAgentsInView', 'facingAttributeId', ['']],            // no vector AGENT attribute in the fixture
+    ['senseHemifield', 'facingAttributeId', ['']],
+    ['setIndicator', 'indicatorId', ['', 'i_std']],
+    ['updateIndicator', 'indicatorId', ['', 'i_std']],
+    ['getIndicator', 'indicatorId', ['', 'i_std', 'i_freq', 'i_spat']],
+    ['ovReadIndicator', 'indicatorId', ['', 'i_std', 'i_freq']],
+    ['ovCollectSpatial', 'indicatorId', ['', 'i_spat']],
+    ['getVariable', 'variableId', ['', 'v_s', 'v_a']],
+    ['setVariable', 'variableId', ['', 'v_s']],
+    ['setArrayElement', 'variableId', ['', 'v_a']],
+    ['setCellLooks', 'mappingId', ['', '__current__', 'm_out']],
+    ['inputColor', 'mappingId', ['', 'm_in']],
+    ['outputMapping', 'mappingId', ['', 'm_out']],
+    ['assertActiveViewer', 'mappingId', ['', 'm_out']],
+    ['agentOutputMapping', 'mappingId', ['', 'am_out']],
+    ['agentInputMapping', 'mappingId', ['', 'am_in']],
+    ['setAgentSprite', 'spriteId', ['', 'sp']],
+    ['ovRandomizeTable', 'tableId', ['', 'a_table']],
+    ['lookupInteraction', 'tableId', ['', 'a_table']],
+    ['interactionTableMap', 'tableId', ['', 'a_table']],
+    ['ovLoadPreset', 'presetId', ['', 'p1']],
+    ['getConstant', 'tagAttributeId', ['', 'a_type']],
+    ['statement', 'tagAttributeId', ['', 'a_type']],
+    ['switch', 'tagAttributeId', ['', 'a_type']],
+  ];
+  let bad = 0;
+  for (const [nt, key, want] of CELLS) if (!eq(ids(nt, key), want)) { bad++; console.log(`      ${nt}.${key} = ${JSON.stringify(ids(nt, key))} want ${JSON.stringify(want)}`); }
+  check(`I1 all ${CELLS.length} (nodeType, key) element lists are exact on the CELLS graph`, bad === 0);
+  check('I2 …and every one of them really resolves (no missing table row)',
+    CELLS.every(([nt, key]) => M.elementOptionsFor(nt, key, model) !== null));
+
+  // --- D10: the SAME call, on the Agents graph, gives the AGENT lists --------
+  M.setActiveGraphKind('agents');
+  check('I3 an OWN-attribute list follows getActiveGraphKind() (Agents)',
+    eq(ids('setAttribute', 'attributeId'), ['', 'ag_state', 'ag_energy']));
+  check('I4 …the VARIABLE list too', eq(ids('getVariable', 'variableId'), ['', 'av_s']));
+  check('I5 …and setCellLooks lists the AGENT views (sentinel kept)',
+    eq(ids('setCellLooks', 'mappingId'), ['', '__current__', 'am_out']));
+  check('I6 a graph-INDEPENDENT list is unchanged by the swap', eq(ids('getAllNeighborIndexes', 'neighborhoodId'), ['', 'nb']));
+  M.setActiveGraphKind('cells');
+
+  // --- the option METADATA a class-C list can carry -------------------------
+  const indOpts = M.elementOptionsFor('getIndicator', 'indicatorId', model);
+  check('I7 Get Indicator lists a non-scalar indicator DISABLED with its reason',
+    indOpts.find(o => o.value === 'i_freq')?.disabled === true && !!indOpts.find(o => o.value === 'i_freq')?.title);
+  check('I8 …and a scalar one selectable', indOpts.find(o => o.value === 'i_std')?.disabled === undefined);
+  check('I9 the leading PLACEHOLDER is part of the shared list',
+    indOpts[0].value === '' && M.elementOptionsFor('getNeighborsAttribute', 'neighborhoodId', model)[0].label === 'Neighborhood...');
+
+  // --- COUPLED keys: list shared, key NOT bindable (P1.2 for class C) -------
+  const COUPLED = [
+    ['updateAttribute', 'attributeId'], ['updateIndicator', 'indicatorId'],
+    ['getModelAttribute', 'attributeId'], ['getConstant', 'tagAttributeId'],
+    ['statement', 'tagAttributeId'], ['switch', 'tagAttributeId'],
+    ['getNeighborIndexesByTags', 'neighborhoodId'],
+  ];
+  check('I10 every coupled-write key is FLAGGED coupled', COUPLED.every(([nt, k]) => M.elementSpecFor(nt, k)?.coupled === true));
+  check('I11 …its LIST is still shared with the in-node picker', COUPLED.every(([nt, k]) => (M.elementOptionsFor(nt, k, model) ?? []).length > 0));
+  check('I12 …and it is NEVER offered as a control', COUPLED.every(([nt, k]) =>
+    !M.eligibleControlKeys(nt, {}, model).some(r => r.configKey === k)));
+  {
+    // A control naming one REPORTS rather than half-writing a state the in-node
+    // editor never produces.
+    const def = { ...buildDefA(), controls: [ctl('c_bad', 'Attr', cfgTarget('gmA', 'attributeId'))] };
+    def.nodes = [...def.nodes, node('gmA', 'getModelAttribute', { attributeId: 'a_speed' })];
+    const m2 = withDef(model, def);
+    const d = M.resolveControlDescriptor(m2, 'def_a', def.controls[0]);
+    check('I13 a control bound to a coupled key reports orphan-key', d.block === 'orphan-key' && !!d.reason);
+    check('I14 …and its write is inert', M.applyControlValue(m2, 'def_a', def.controls[0], 'a_tint') === null);
+  }
+
+  // --- a live class-C control end to end ------------------------------------
+  {
+    const def = { ...buildDefA(), controls: [ctl('c_attr', 'Target attribute', cfgTarget('sa', 'attributeId'))] };
+    const m2 = withDef(model, def);
+    const d = M.resolveControlDescriptor(m2, 'def_a', def.controls[0]);
+    check('I15 a class-C control resolves as an `element` with the live value', d.kind === 'element' && d.value === 'a_count' && !d.block);
+    check('I16 …carrying the SAME list the in-node picker renders',
+      eq((d.options ?? []).map(o => o.value), ids('setAttribute', 'attributeId')));
+    const patch = M.applyControlValue(m2, 'def_a', def.controls[0], 'a_type');
+    const next = patch && M.modelReducer({ model: m2, isDirty: false, modelVersion: 0 }, { type: 'UPDATE_MACRO', id: patch.defId, changes: { nodes: patch.nodes } });
+    check('I17 …and a write lands on the internal node', nodeOf(next.model, 'def_a', 'sa').data.config.attributeId === 'a_type');
+    check('I18 …the ADAPTIVE value widget then follows the new type (tag)',
+      M.resolveControlDescriptor(next.model, 'def_a', ctl('c_v', 'V', cfgTarget('sa', '_port_value'))).kind === 'tag');
+  }
+
+  // --- ONE SOURCE, pinned in the SHIPPED CaNode ----------------------------
+  check('I19 CaNode renders every element picker from `elementOptionsFor`',
+    cn.includes('elementOptionsFor(nodeData.nodeType, configKey, model)'));
+  const optionCalls = (cn.match(/\{elementOptions\('/g) ?? []).length;
+  check(`I20 …at all 39 picker sites (found ${optionCalls})`, optionCalls === 39);
+  for (const [re, what] of [
+    [/<option value="">Attribute\.\.\.<\/option>/, 'Attribute...'],
+    [/<option value="">Neighborhood\.\.\.<\/option>/, 'Neighborhood...'],
+    [/<option value="">Bond attribute\.\.\.<\/option>/, 'Bond attribute...'],
+    [/<option value="">Select Mapping\.\.\.<\/option>/, 'Select Mapping...'],
+    [/<option value="">Select variable\.\.\.<\/option>/, 'Select variable...'],
+    [/<option value="">Select Sprite\.\.\.<\/option>/, 'Select Sprite...'],
+    [/<option value="">Tag attr\.\.\.<\/option>/, 'Tag attr...'],
+    [/<option value="">Select preset\.\.\.<\/option>/, 'Select preset...'],
+    [/indicatorScalarBlocker/, 'the Get Indicator blocker expression'],
+    [/CURRENT_VIEWER_SENTINEL}>Current Simulator Selected/, 'the setCellLooks sentinel option'],
+  ]) check(`I21 …with NO surviving inline list for “${what}”`, !re.test(cn));
+}
+
+// ===========================================================================
+console.log('\n--- Tier K: the CHAINING pick rows (P4 / D4) ------------------');
+// ===========================================================================
+{
+  const { readFileSync } = await import('fs');
+  const cn = readFileSync(join(ROOT, 'src', 'modeler', 'vpl', 'CaNode.tsx'), 'utf8');
+
+  // A→B: `outer` holds an instance of `inner`; binding in A offers B's controls.
+  const inner = {
+    id: 'def_in', name: 'Inner', nodes: [node('n1', 'getRandom', { randomType: 'float', _port_max: '9' })],
+    edges: [], exposedInputs: [], exposedOutputs: [],
+    controls: [ctl('ci', 'Max', cfgTarget('n1', '_port_max'))],
+  };
+  const outer = {
+    id: 'def_out', name: 'Outer', nodes: [node('inst', 'macro', { macroDefId: 'def_in' })],
+    edges: [], exposedInputs: [], exposedOutputs: [],
+  };
+  const model = { ...buildModel(), macroDefs: [inner, outer] };
+
+  /** The row computation CaNode performs, with the VERDICT from the SHIPPED
+   *  resolver — so a change to `resolveTarget` moves these checks. */
+  const rowsFor = (m, pick, nodeId) => {
+    const defs = m.macroDefs;
+    const pickDef = defs.find(d => d.id === pick.defId);
+    if (!pickDef || !pickDef.nodes.some(n => n.id === nodeId)) return [];
+    const host = pickDef.nodes.find(n => n.id === nodeId);
+    const innerDef = defs.find(d => d.id === host?.data?.config?.macroDefId);
+    return (innerDef?.controls ?? []).map(c => {
+      const seen = pick.controlId === 'new' ? new Set() : new Set([`${pick.defId}::${pick.controlId}`]);
+      const res = M.resolveTarget(defs, pick.defId, { kind: 'control', nodeId, controlId: c.id }, seen);
+      return { id: c.id, name: c.name, cycle: !res.ok && res.block === 'cycle' };
+    });
+  };
+
+  const rows = rowsFor(model, { defId: 'def_out', controlId: 'new' }, 'inst');
+  check('K1 a nested macro instance offers the INNER def\'s controls', rows.length === 1 && rows[0].id === 'ci' && rows[0].name === 'Max');
+  check('K2 …and none of them is flagged circular', rows.every(r => !r.cycle));
+  check('K3 a node that is not in the picked def offers nothing', rowsFor(model, { defId: 'def_out', controlId: 'new' }, 'nope').length === 0);
+  check('K4 a macro instance pointing at NO def offers nothing',
+    rowsFor({ ...model, macroDefs: [inner, { ...outer, nodes: [node('inst', 'macro', {})] }] }, { defId: 'def_out', controlId: 'new' }, 'inst').length === 0);
+  check('K5 a macro whose def declares no controls offers nothing',
+    rowsFor({ ...model, macroDefs: [{ ...inner, controls: undefined }, outer] }, { defId: 'def_out', controlId: 'new' }, 'inst').length === 0);
+
+  // Binding writes the CHAINED target through the same one-dispatch builder.
+  {
+    const edit = { kind: 'control-add', control: ctl('co', 'Inner max', { kind: 'control', nodeId: 'inst', controlId: 'ci' }) };
+    const changes = M.applyInterfaceEdit(outer, edit);
+    const m2 = { ...model, macroDefs: [inner, { ...outer, ...changes }] };
+    const d = M.resolveControlDescriptor(m2, 'def_out', changes.controls[0]);
+    check('K6 a bound chained control resolves LIVE, into the NESTED def', !d.block && d.value === '9' && d.resolved?.defId === 'def_in');
+
+    // ✎ RE-BIND: offering the outer control's OWN chain back to itself must be
+    // refused. `mutual` re-exposes `co` from `inner`, so binding `co` → `cm`
+    // would close the loop `co → cm → co`.
+    const innerMut = { ...inner, nodes: [...inner.nodes, node('back', 'macro', { macroDefId: 'def_out' })],
+      controls: [...inner.controls, ctl('cm', 'Loop', { kind: 'control', nodeId: 'back', controlId: 'co' })] };
+    const m3 = { ...model, macroDefs: [innerMut, { ...outer, ...changes }] };
+    const reRows = rowsFor(m3, { defId: 'def_out', controlId: 'co' }, 'inst');
+    const loopRow = reRows.find(r => r.id === 'cm');
+    check('K7 re-binding REFUSES a row that would close a cycle', !!loopRow && loopRow.cycle === true);
+    // …and the SEED is what catches it: the same row resolves cleanly without
+    // it, so the `${defId}::${controlId}` pre-seed in CaNode (pinned by K12) is
+    // load-bearing rather than decorative.
+    check('K7b …and the ✎ SEED is what catches it (unseeded, the same row resolves)',
+      M.resolveTarget(m3.macroDefs, 'def_out', { kind: 'control', nodeId: 'inst', controlId: 'cm' }, new Set()).ok === true);
+    check('K8 …while the harmless sibling row stays bindable', reRows.find(r => r.id === 'ci')?.cycle === false);
+    check('K9 …and the same row IS offered when adding a NEW control (no loop yet)',
+      rowsFor(m3, { defId: 'def_out', controlId: 'new' }, 'inst').find(r => r.id === 'cm')?.cycle === false);
+  }
+
+  // --- pinned in the SHIPPED CaNode (a React component the harness cannot mount)
+  check('K10 the chaining rows come from the NESTED def\'s controls, not eligibleControlKeys',
+    /const pickControlRows = useMemo\(\(\) => \{[\s\S]{0,900}?\(inner\?\.controls \?\? \[\]\)\.map/.test(cn));
+  check('K11 …only for a `macro` node that belongs to the picked def',
+    /if \(!controlPick \|\| nodeData\.nodeType !== 'macro'\) return \[\];/.test(cn)
+    && /if \(!pickDef \|\| !pickDef\.nodes\.some\(n => n\.id === id\)\) return \[\];[\s\S]{0,400}?macroDefId/.test(cn));
+  check('K12 …the cycle verdict is the SHIPPED resolveTarget, seeded on the ✎ path',
+    /new Set<string>\(\[`\$\{controlPick\.defId\}::\$\{controlPick\.controlId\}`\]\)/.test(cn)
+    && /res = resolveTarget\(defs, controlPick\.defId, \{ kind: 'control', nodeId: id, controlId: c\.id \}, seen\)/.test(cn));
+  check('K13 …a circular row is rendered DISABLED and cannot bind',
+    /disabled=\{r\.cycle\}/.test(cn) && /if \(!r\.cycle\) bindPickTarget\(\{ kind: 'control', nodeId: id, controlId: r\.id \}/.test(cn));
+  check('K14 …and both row kinds bind through the ONE dispatch path',
+    /const bindPick = useCallback\(\s*\(configKey: string, label: string\) => bindPickTarget\(\{ kind: 'config', nodeId: id, configKey \}, label\)/.test(cn));
+}
+
+// ===========================================================================
+console.log('\n--- Tier J: M1 / M2 / clipboard need NO new pass (P4) ---------');
+// ===========================================================================
+{
+  const model = buildModel();
+  // A def whose class-C control names an attribute the node config ALREADY
+  // names — the whole M1 argument: the reference lives in the CONFIG, which M1
+  // already scans, so a control adds no fourth carrier.
+  const plain = buildDefA();
+  const withCtl = {
+    ...buildDefA(),
+    controls: [
+      ctl('c1', 'Target attribute', cfgTarget('sa', 'attributeId')),
+      ctl('c2', 'Value', cfgTarget('sa', '_port_value'), { groupId: 'g1' }),
+    ],
+    groups: [{ id: 'g1', name: 'Tuning' }],
+  };
+  const refsOf = def => {
+    const c = M.collectMacroReferences(M.collectMacroExportDefs(def, [def]), model);
+    return c.refs.map(r => `${r.space}:${r.id}`).sort();
+  };
+  check('J1 M1 collects the SAME references with and without controls', eq(refsOf(plain), refsOf(withCtl)));
+  check('J2 …and it really collected something (the check is not vacuous)', refsOf(plain).length > 0);
+
+  // M2 passes 2 and 4 rename `_port_bondAttr_*` and permute `partTag_*`; no
+  // control may name either, which is what keeps those passes control-blind.
+  check('J3 every key shape M2 renames/permutes is excluded from binding',
+    M.isExcludedControlKey('_port_bondAttr_bond_w') && M.isExcludedControlKey('partTag_0') && M.isExcludedControlKey('partTag_12'));
+
+  // --- a FULL planImport → applyImportPlan on a def with controls -----------
+  {
+    const file = M.buildMacroFile(withCtl, [withCtl], model);
+    const parsed = M.parseMacroFile(JSON.stringify(file));
+    const plan = M.planImport(parsed, model);
+    const applied = M.applyImportPlan(plan, model);
+    const imported = applied.defs[0];
+    check('J4 M2 imports the def WITH its controls + groups',
+      (imported.controls ?? []).length === 2 && (imported.groups ?? []).length === 1);
+    check('J5 …ids / names / groupId PRESERVED', imported.controls[0].id === 'c1' && imported.controls[1].groupId === 'g1' && imported.groups[0].id === 'g1');
+    check('J6 …target.nodeId REMAPPED to the fresh node (R2)',
+      imported.controls[0].target.nodeId !== 'sa' && imported.nodes.some(n => n.id === imported.controls[0].target.nodeId));
+    const m2 = { ...model, macroDefs: [...model.macroDefs, ...applied.defs] };
+    const d = M.resolveControlDescriptor(m2, imported.id, imported.controls[0]);
+    check('J7 …and the imported control RESOLVES, to a setAttribute node', !d.block && d.kind === 'element');
+    check('J8 …at the node it named, not another one',
+      m2.macroDefs.find(x => x.id === imported.id).nodes.find(n => n.id === d.resolved?.nodeId)?.data.nodeType === 'setAttribute');
+    check('J9 M2 raised no extra rows for the controls', plan.rows.every(r => r.space !== 'controls'));
+  }
+
+  // --- the cross-tab clipboard ---------------------------------------------
+  {
+    // A→B chain: the outer def's control points at the inner def's control.
+    const inner = {
+      id: 'def_in', name: 'Inner', nodes: [node('n1', 'getRandom', { randomType: 'float', _port_max: '3' })],
+      edges: [], exposedInputs: [], exposedOutputs: [],
+      controls: [ctl('ci', 'Max', cfgTarget('n1', '_port_max'))],
+    };
+    const outer = {
+      id: 'def_out', name: 'Outer', nodes: [node('mi2', 'macro', { macroDefId: 'def_in' })],
+      edges: [], exposedInputs: [], exposedOutputs: [],
+      controls: [ctl('co', 'Inner max', { kind: 'control', nodeId: 'mi2', controlId: 'ci' })],
+    };
+    const m3 = { ...model, macroDefs: [inner, outer] };
+    const instance = node('inst', 'macro', { macroDefId: 'def_out' });
+    const bundle = M.collectMacroDefBundle([instance], m3.macroDefs);
+    check('J10 the clipboard bundles BOTH defs, controls intact',
+      bundle.length === 2 && bundle.every(d => (d.controls ?? []).length === 1));
+    store.clear();
+    M.writeGraphClipboard({ kind: 'cells', nodes: [instance], edges: [], macroDefs: bundle });
+    const read = M.readGraphClipboard().payload;
+    check('J11 …and they survive the JSON round trip',
+      read.macroDefs.length === 2 && read.macroDefs.every(d => (d.controls ?? []).length === 1));
+
+    // The paste: clone both, then retarget the nested macroDefId — the shape
+    // GraphEditor's paste uses. A PRESERVED controlId is what lands the chain.
+    const cInner = M.cloneMacroWithFreshIds(read.macroDefs.find(d => d.id === 'def_in'));
+    const cOuterRaw = M.cloneMacroWithFreshIds(read.macroDefs.find(d => d.id === 'def_out'));
+    const cOuter = M.remapNestedMacroRefs(cOuterRaw, new Map([['def_in', cInner.id]]));
+    const m4 = { ...model, macroDefs: [cInner, cOuter] };
+    const res = M.resolveTarget(m4.macroDefs, cOuter.id, cOuter.controls[0].target);
+    check('J12 a pasted CHAIN still resolves, into the pasted INNER def',
+      res.ok && res.at.defId === cInner.id && res.at.configKey === '_port_max');
+    check('J13 …at the inner def\'s own remapped node', res.ok && cInner.nodes.some(n => n.id === res.at.nodeId));
+    const d = M.resolveControlDescriptor(m4, cOuter.id, cOuter.controls[0]);
+    check('J14 …and the outer instance renders it live', !d.block && d.value === '3');
   }
 }
 

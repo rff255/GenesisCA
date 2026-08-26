@@ -560,6 +560,18 @@
   background: var(--color-overlay-hover-medium);
 }
 
+/* A chained row that would close a CYCLE — offered so the author can SEE why it
+   is not available (the enabled-control doctrine's *temporarily unavailable ⇒
+   grey it in place, with the reason on the tooltip* arm), never bindable. */
+.pickRow:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.pickRow:disabled:hover {
+  background: transparent;
+}
+
 .pickRowLabel {
   flex: 1;
   white-space: nowrap;

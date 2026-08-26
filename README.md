@@ -109,7 +109,7 @@ A high-level tour. Every feature has a detailed reference in the **in-app Help t
 
 ### Design rules visually, not in code
 
-Build a model's update rule as a node graph, wire reads, math, conditions and writes together and it compiles as you edit, with no programming and no build step. Groups, comments, reusable macros, search, undo/redo and a keyboard-driven quick-add menu keep large graphs workable.
+Build a model's update rule as a node graph, wire reads, math, conditions and writes together and it compiles as you edit, with no programming and no build step. Groups, comments, reusable macros — which can promote their internal settings to named controls on the collapsed node, so a macro reads as a component with knobs — search, undo/redo and a keyboard-driven quick-add menu keep large graphs workable.
 
 ![Modeler](docs/screenshots/Features/node-graph-canvas.png)
 > *Node-graph editor with context menu open. Amphiphile micelle formation rule*

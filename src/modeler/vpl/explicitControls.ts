@@ -31,7 +31,11 @@ import type { CAModel, MacroDef, MacroControl, MacroInterfaceGroup, ControlTarge
 import { getNodeDef } from './nodes/registry';
 import { getEffectivePorts } from './effectivePorts';
 import { getActiveGraphKind, displayNodeLabel } from './graphState';
-import { cellFieldAttrsOf } from '../../model/attributeScope';
+import { cellFieldAttrsOf, cellAttrsOf, bondAttrsOf } from '../../model/attributeScope';
+import { censusAttributes } from './compiler/censusExpand';
+import { indicatorScalarBlocker } from '../../model/indicatorValue';
+import { typeDisplayName } from '../../model/typeLabels';
+import { CURRENT_VIEWER_SENTINEL } from './nodes/SetCellLooksNode';
 import { vectorPortDims } from './compiler/vectorAttr';
 import { MULTI_ATTR_SET_TYPES, resolveSlotAttr } from './compiler/multiAttrExpand';
 import { INTERPOLATION_METHODS } from './nodes/interpolationMethods';
@@ -48,7 +52,16 @@ export type ControlWidgetKind =
 
 export type ControlClass = 'A' | 'B' | 'C';
 
-export interface ControlOption { value: string; label: string }
+export interface ControlOption {
+  value: string;
+  label: string;
+  /** rendered as an UNSELECTABLE row (`getIndicator`'s frequency-shaped and
+   *  spatial indicators, which are listed with their reason rather than omitted
+   *  — omitting them is what made that node look broken on agent/GRA models). */
+  disabled?: boolean;
+  /** the option's own tooltip — carries `disabled`'s reason. */
+  title?: string;
+}
 
 /** ONE eligible parameter of ONE node — what pick mode offers. */
 export interface ControlKeyDescriptor {
@@ -702,28 +715,216 @@ export const CLASS_C_KEYS: ReadonlySet<string> = new Set([
   'tableId', 'tagAttributeId', 'facingAttributeId', 'partitionAttributeId', 'presetId',
 ]);
 
+export interface ElementKeySpec {
+  /** the parameter's own name — the pick-mode row text and the default control
+   *  name. In-node these pickers carry no visible label (the placeholder option
+   *  doubles as one), so this is where the human name for them lives. */
+  label: string;
+  /** THE list, INCLUDING the leading placeholder row (and, for `setCellLooks`,
+   *  the `Current Simulator Selected` sentinel). Returning the whole list is
+   *  what lets CaNode render `options.map(…)` with nothing inline left to drift. */
+  options: (model: CAModel) => ControlOption[];
+  /**
+   * The in-node picker writes SIBLING keys too, so a one-key control cannot
+   * drive it faithfully — it would produce a state the in-node editor never
+   * produces, silently. (`updateAttribute.attributeId` re-seeds `operation` +
+   * `_tagLen`; `getModelAttribute.attributeId` re-seeds `isColorAttr`; every
+   * `tagAttributeId` resets the operand/value keys it indexes.)
+   *
+   * This is P1.2's COUPLED-WRITE rule, which class B expresses by simply not
+   * naming the key. Class C cannot do that: the LIST is still shared with the
+   * in-node picker (that sharing IS the extraction), so the key is present and
+   * flagged UNBINDABLE instead — `eligibleControlKeys` skips it and `describeKey`
+   * refuses it, so a hand-edited control naming one reports `orphan-key` rather
+   * than writing half a state.
+   */
+  coupled?: boolean;
+}
+
+const ELEMENT_CONFIG_KEYS = new Map<string, Map<string, ElementKeySpec>>();
+
+/** Register ONE spec against every node type that renders that same picker. */
+function regElement(nodeTypes: readonly string[], configKey: string, spec: ElementKeySpec): void {
+  for (const t of nodeTypes) {
+    let m = ELEMENT_CONFIG_KEYS.get(t);
+    if (!m) { m = new Map(); ELEMENT_CONFIG_KEYS.set(t, m); }
+    m.set(configKey, spec);
+  }
+}
+
+/** `[placeholder, …named records]` — the shape ~20 of the pickers share. */
+const idOpts = (placeholder: string, items: ReadonlyArray<{ id: string; name: string }>): ControlOption[] =>
+  [opt('', placeholder), ...items.map(i => opt(i.id, i.name))];
+
+const cellAttrsNonModel = (model: CAModel) => model.attributes.filter(a => !a.isModelAttribute);
+const lookupTables = (model: CAModel) => model.attributes.filter(a => a.isModelAttribute && a.type === 'lookupTable');
+/** `tagAttrScopeFor` restricted to TAG attributes, with the `(model)` suffix the
+ *  Compare / Switch pickers draw (Get Constant's does not — kept verbatim). */
+const tagAttrOpts = (model: CAModel, suffix: boolean): ControlOption[] => [
+  opt('', 'Tag attr...'),
+  ...tagAttrScopeFor(model).filter(a => a.type === 'tag')
+    .map(a => opt(a.id, `${a.name}${suffix && a.isModelAttribute ? ' (model)' : ''}`)),
+];
+
+// --- attributes -------------------------------------------------------------
+// The active graph's OWN attribute set (D10 — `ownAttrListFor` reads
+// `getActiveGraphKind()`, so the control's list is the in-node picker's list by
+// construction, on either graph).
+regElement(['getCellAttribute', 'setAttribute', 'setCellAtPosition'], 'attributeId',
+  { label: 'Attribute', options: m => idOpts('Select...', ownAttrListFor(m)) });
+regElement(['updateAttribute'], 'attributeId',
+  { label: 'Attribute', options: m => idOpts('Select...', ownAttrListFor(m)), coupled: true });
+regElement(['getAgentsAttribute', 'filterAgents', 'getAgentAttribute'], 'attributeId',
+  { label: 'Agent attribute', options: m => idOpts('Agent attribute...', m.agentAttributes ?? []) });
+regElement(['getBondAttribute', 'setBondAttribute'], 'attributeId',
+  { label: 'Bond attribute', options: m => idOpts('Bond attribute...', bondAttrsOf(m)) });
+regElement(['divideAgent'], 'partitionAttributeId',
+  { label: 'Partition bond attribute', options: m => idOpts('Bond attribute...', bondAttrsOf(m)) });
+regElement(['neighbourCensus'], 'attributeId',
+  { label: 'Census attribute', options: m => idOpts('Agent attribute (tag / binary)...', censusAttributes(m)) });
+regElement(['sampleField', 'fieldGradient', 'readCellsUnder', 'affectCellsUnder', 'secreteToField'], 'attributeId',
+  { label: 'Field attribute', options: m => idOpts('Field (cell) attribute...', cellAttrsOf(m)) });
+regElement(['getNeighborsAttribute', 'setNeighborhoodAttribute', 'getNeighborAttributeByIndex',
+  'getNeighborsAttrByIndexes', 'setNeighborAttributeByIndex', 'filterNeighbors', 'getNeighborAttributeByTag'], 'attributeId',
+  { label: 'Attribute', options: m => idOpts('Attribute...', cellAttrsNonModel(m)) });
+regElement(['getModelAttribute'], 'attributeId',
+  { label: 'Model attribute', options: m => idOpts('Select...', m.attributes.filter(a => a.isModelAttribute)), coupled: true });
+regElement(['ovSetModelAttribute'], 'attributeId', {
+  label: 'Model attribute',
+  options: m => idOpts('Select model attribute...', m.attributes.filter(a =>
+    a.isModelAttribute && a.type !== 'color' && a.type !== 'lookupTable' && a.type !== 'vector')),
+});
+regElement(['getAgentsInView', 'senseHemifield'], 'facingAttributeId',
+  { label: 'Facing attribute', options: m => idOpts('Vector attribute…', (m.agentAttributes ?? []).filter(a => a.type === 'vector')) });
+// Every `tagAttributeId` picker re-seeds the operand / value key it indexes.
+regElement(['getConstant'], 'tagAttributeId',
+  { label: 'Tag attribute', options: m => tagAttrOpts(m, false), coupled: true });
+regElement(['statement', 'switch'], 'tagAttributeId',
+  { label: 'Tag attribute', options: m => tagAttrOpts(m, true), coupled: true });
+
+// --- neighborhoods ----------------------------------------------------------
+regElement(['getNeighborsAttribute', 'setNeighborhoodAttribute', 'getNeighborAttributeByTag',
+  'getAllNeighborIndexes', 'neighborIndexFromTag'], 'neighborhoodId',
+  { label: 'Neighborhood', options: m => idOpts('Neighborhood...', m.neighborhoods) });
+// Get Neighbor Indexes By Tags re-seeds `tagCount` with the neighbourhood.
+regElement(['getNeighborIndexesByTags'], 'neighborhoodId',
+  { label: 'Neighborhood', options: m => idOpts('Neighborhood...', m.neighborhoods), coupled: true });
+
+// --- mappings ---------------------------------------------------------------
+regElement(['setCellLooks'], 'mappingId', {
+  label: 'Mapping',
+  // On the Agents graph this colours an AGENT for an agent viewer, so the agent
+  // views are listed; the sentinel works on both.
+  options: m => [
+    opt('', 'Select Mapping...'),
+    opt(CURRENT_VIEWER_SENTINEL, 'Current Simulator Selected'),
+    ...(getActiveGraphKind() === 'agents' ? (m.agentMappings ?? []) : m.mappings)
+      .filter(x => x.isAttributeToColor).map(x => opt(x.id, x.name)),
+  ],
+});
+regElement(['inputColor'], 'mappingId',
+  { label: 'Mapping', options: m => idOpts('Select Mapping...', m.mappings.filter(x => !x.isAttributeToColor)) });
+regElement(['outputMapping', 'assertActiveViewer'], 'mappingId',
+  { label: 'Mapping', options: m => idOpts('Select Mapping...', m.mappings.filter(x => x.isAttributeToColor)) });
+regElement(['agentOutputMapping'], 'mappingId',
+  { label: 'Agent view', options: m => idOpts('Select Agent View...', (m.agentMappings ?? []).filter(x => x.isAttributeToColor)) });
+regElement(['agentInputMapping'], 'mappingId',
+  { label: 'Agent input mapping', options: m => idOpts('Select Agent Input Mapping...', (m.agentMappings ?? []).filter(x => !x.isAttributeToColor)) });
+
+// --- indicators -------------------------------------------------------------
+regElement(['setIndicator'], 'indicatorId',
+  { label: 'Indicator', options: m => idOpts('Select...', (m.indicators ?? []).filter(i => i.kind === 'standalone')) });
+regElement(['updateIndicator'], 'indicatorId',
+  { label: 'Indicator', options: m => idOpts('Select...', (m.indicators ?? []).filter(i => i.kind === 'standalone')), coupled: true });
+regElement(['getIndicator'], 'indicatorId', {
+  label: 'Indicator',
+  // Frequency-shaped and spatial indicators are listed DISABLED WITH THE REASON
+  // rather than omitted — see model/indicatorValue.ts.
+  options: m => [opt('', 'Select...'), ...(m.indicators ?? []).map(i => {
+    const blocker = indicatorScalarBlocker(i);
+    const kindTag = i.kind === 'standalone' ? '' : i.kind === 'graph' ? ' (graph)' : ' (linked)';
+    const o: ControlOption = { value: i.id, label: `${i.name}${kindTag}${blocker ? ' — ' + blocker : ''}` };
+    if (blocker) { o.disabled = true; o.title = blocker; }
+    return o;
+  })],
+});
+regElement(['ovReadIndicator'], 'indicatorId', {
+  label: 'Indicator',
+  options: m => idOpts('Select indicator...', (m.indicators ?? []).filter(i =>
+    !(i.kind === 'linked' && i.xAxis && i.xAxis !== 'generation'))),
+});
+regElement(['ovCollectSpatial'], 'indicatorId', {
+  label: 'Spatial indicator',
+  // The inverse filter of ovReadIndicator: SPATIAL indicators only.
+  options: m => idOpts('Select spatial indicator...', (m.indicators ?? []).filter(i =>
+    i.kind === 'linked' && !!i.xAxis && i.xAxis !== 'generation')),
+});
+
+// --- variables / sprites / tables / presets ---------------------------------
+/** Set Variable wants scalars, Set Array Element wants arrays, Get Variable
+ *  accepts either; the Agents graph lists the AGENT variable set. */
+const varOpts = (want: 'array' | 'scalar' | null) => (m: CAModel): ControlOption[] => {
+  const list = getActiveGraphKind() === 'agents' ? (m.agentVariables ?? []) : (m.variables ?? []);
+  return [opt('', 'Select variable...'), ...list.filter(v => !want || v.kind === want).map(v => opt(
+    v.id,
+    `${v.name} (${v.kind === 'array' ? `${typeDisplayName(v.dataType)}[${v.length ?? '?'}]` : typeDisplayName(v.dataType)})`,
+  ))];
+};
+regElement(['getVariable'], 'variableId', { label: 'Variable', options: varOpts(null) });
+regElement(['setVariable'], 'variableId', { label: 'Variable', options: varOpts('scalar') });
+regElement(['setArrayElement'], 'variableId', { label: 'Variable', options: varOpts('array') });
+regElement(['setAgentSprite'], 'spriteId',
+  { label: 'Sprite', options: m => idOpts('Select Sprite...', m.sprites ?? []) });
+regElement(['ovRandomizeTable'], 'tableId',
+  { label: 'Lookup table', options: m => idOpts('Select Lookup Table...', lookupTables(m)) });
+regElement(['lookupInteraction', 'interactionTableMap'], 'tableId',
+  { label: 'Lookup table', options: m => idOpts('Lookup Table...', lookupTables(m)) });
+regElement(['ovLoadPreset'], 'presetId',
+  { label: 'Preset', options: m => idOpts('Select preset...', m.presets ?? []) });
+
+/** The spec for one (nodeType, configKey), or `undefined` when that node type
+ *  renders no such picker. */
+export function elementSpecFor(nodeType: string, configKey: string): ElementKeySpec | undefined {
+  return ELEMENT_CONFIG_KEYS.get(nodeType)?.get(configKey);
+}
+
+/** Every model-element key a node type declares, in table order. */
+function elementKeysFor(nodeType: string): string[] {
+  return [...(ELEMENT_CONFIG_KEYS.get(nodeType)?.keys() ?? [])];
+}
+
 /**
- * The model-element option list for one (nodeType, configKey).
+ * THE model-element option list for one (nodeType, configKey) — `null` when
+ * that node type renders no such picker.
  *
- * ⚠ **P4 fills this in.** It returns `null` today, which is the "no list known"
- * answer every caller already handles; class C is correspondingly gated off by
- * `eligibleControlKeys`' default `classes`. The signature ships now so the
- * resolver's contract — and every call site — is frozen before P4 moves the ~32
- * JSX list expressions into it (V2's reasoning, applied to class C).
+ * **DUAL CONSUMPTION (R5).** `CaNode` renders its ~32 in-node pickers from this
+ * exact call, so a control bound to one of those keys cannot offer a list the
+ * node itself would not. The COUPLED specs are included here for that reason —
+ * their list is shared even though the key is not bindable.
+ *
+ * The graph-kind-dependent lists (`ownAttrListFor`, the variable set, the
+ * `setCellLooks` mappings) read `getActiveGraphKind()` inside the resolver, so
+ * D10 holds by construction rather than by convention. ⚠ **R6 stands and is
+ * DOCUMENTED, not fixed**: a universal macro instanced on Cells *and* Agents
+ * therefore offers two different lists for one shared value — pre-existing (it
+ * is what already happens when you open the macro from each graph) and it
+ * degrades loudly, since a dangling id badges through `detectMissingConfig` and
+ * bubbles onto the instance.
  */
 export function elementOptionsFor(
-  _nodeType: string,
-  _configKey: string,
-  _model: CAModel,
+  nodeType: string,
+  configKey: string,
+  model: CAModel,
 ): ReadonlyArray<ControlOption> | null {
-  return null;
+  const spec = elementSpecFor(nodeType, configKey);
+  return spec ? spec.options(model) : null;
 }
 
 // ---------------------------------------------------------------------------
 // Eligibility — what pick mode offers
 // ---------------------------------------------------------------------------
 
-const DEFAULT_CLASSES: ReadonlySet<ControlClass> = new Set<ControlClass>(['A', 'B']);
+const DEFAULT_CLASSES: ReadonlySet<ControlClass> = new Set<ControlClass>(['A', 'B', 'C']);
 
 /**
  * Every parameter of ONE node a control may bind, in render order: the inline
@@ -779,17 +980,15 @@ export function eligibleControlKeys(
   }
 
   if (classes.has('C')) {
-    // ⚠ P4: `defaultConfig` is a PLACEHOLDER key source — many `*Id` keys are
-    // never declared there (a node type that leaves its picker unset simply has
-    // no default). The extraction must decide the per-nodeType key set from the
-    // ~32 JSX picker blocks it moves, exactly as `SCALAR_CONFIG_KEYS` does for
-    // class B. Unreachable today: `elementOptionsFor` returns null.
-    for (const key of Object.keys(def.defaultConfig)) {
-      if (!CLASS_C_KEYS.has(key)) continue;
+    // The key set comes from `ELEMENT_CONFIG_KEYS` — the table the ~32 in-node
+    // pickers were extracted into — NOT from `def.defaultConfig`, which is a
+    // placeholder key source (a node type that leaves its picker unset declares
+    // no default for it, so half these keys never appear there).
+    for (const key of elementKeysFor(nodeType)) {
       if (isExcludedControlKey(key)) continue;
-      const options = elementOptionsFor(nodeType, key, model);
-      if (!options) continue;   // P4 fills the table; until then nothing is offered
-      out.push({ configKey: key, label: key, kind: 'element', klass: 'C', options });
+      const spec = elementSpecFor(nodeType, key)!;
+      if (spec.coupled) continue;      // the in-node picker writes siblings too
+      out.push({ configKey: key, label: spec.label, kind: 'element', klass: 'C', options: spec.options(model) });
     }
   }
 
@@ -944,11 +1143,13 @@ function describeKey(
     return options ? { kind, value, options } : { kind, value };
   }
 
-  // --- class C (P4) -------------------------------------------------------
-  if (CLASS_C_KEYS.has(configKey)) {
-    const options = elementOptionsFor(nodeType, configKey, model);
-    if (!options) return null;
-    return { kind: 'element', value: String(config[configKey] ?? ''), options };
+  // --- class C ------------------------------------------------------------
+  // A COUPLED key is refused here as well as in `eligibleControlKeys`, so a
+  // hand-edited (or older) control naming one reports `orphan-key` rather than
+  // writing half a state the in-node editor never produces.
+  const espec = elementSpecFor(nodeType, configKey);
+  if (espec && !espec.coupled) {
+    return { kind: 'element', value: String(config[configKey] ?? ''), options: espec.options(model) };
   }
 
   return null;

@@ -1332,6 +1332,69 @@ export function HelpView() {
             it steps one macro level up instead of leaving GenesisCA.
           </p>
 
+          <h3 className={styles.h3}>Explicit Parameters &mdash; the macro&apos;s own interface</h3>
+          <p className={styles.p}>
+            A macro node normally shows only its <em>ports</em>, so a setting buried inside
+            the subgraph &mdash; a neighborhood, a threshold, an attribute pick &mdash; can
+            only be changed by entering the macro and hunting for the node that owns it.
+            <strong> Explicit Parameters</strong> promote a chosen internal setting to a
+            named row on the <em>closed</em> macro node, so a macro reads as a component
+            with knobs.
+          </p>
+          <ul className={styles.list}>
+            <li>
+              <strong>To promote one:</strong> enter the macro, and on the <strong>Macro
+              Input</strong> or <strong>Macro Output</strong> boundary node use
+              <strong> + Explicit Parameter</strong>. The button arms <em>pick mode</em>:
+              every eligible setting on every node in the macro lights up &mdash; click the
+              one you want. Rename the row, or press <strong>&#9998;</strong> to re-bind it
+              to a different setting, or <strong>x</strong> to remove it (nothing inside the
+              macro is deleted; only the shortcut goes away).
+            </li>
+            <li>
+              <strong>It is a remote control, not a copy.</strong> The row edits the
+              parameter <em>where it lives</em>, so changing it on the closed instance and
+              changing it inside the macro are the same edit &mdash; open the macro and
+              you&apos;ll see the new value already there, and vice versa. Nothing is
+              duplicated, so nothing can fall out of sync.
+            </li>
+            <li>
+              <strong>What can be promoted:</strong> a node&apos;s inline port values, its
+              plain settings (operations, counts, modes, checkboxes), and its model-element
+              pickers (attribute / neighborhood / mapping / indicator / variable / sprite /
+              table / preset). A handful of settings are deliberately not offered &mdash;
+              the ones whose in-node editor changes <em>several</em> things at once (picking
+              a tag attribute also resets the value beside it, for instance), which a
+              single-value shortcut could not do faithfully.
+            </li>
+            <li>
+              <strong>Groups</strong> (<strong>+ Group</strong> on the same boundary node)
+              are named sections. Assign a port or a parameter to a group and the closed
+              instance renders it under that heading &mdash; the group order is the section
+              order. Grouping a port only reorders it; no wire is touched.
+            </li>
+            <li>
+              <strong>Chaining:</strong> if your macro contains <em>another</em> macro, pick
+              mode also offers that inner macro&apos;s own parameters, so an outer macro can
+              re-expose an inner knob at the top level. Circular chains are detected and
+              refused (the offending row shows as disabled rather than silently
+              disappearing).
+            </li>
+            <li>
+              <strong>If something breaks</strong> &mdash; the target node is deleted, the
+              setting disappears, or the parameter gets wired inside the macro &mdash; the
+              row stays visible but <em>disabled with the reason</em>, and genuinely broken
+              rows raise the macro node&apos;s amber <strong>!</strong> badge. Nothing is
+              silently dropped. While you have the macro <em>open for editing</em>, its rows
+              on the instance are disabled too (edit them inside).
+            </li>
+            <li>
+              Explicit Parameters travel with the macro: linked copies share them,
+              independent copies and <code>.gcamacro</code> exports carry them (groups and
+              chains included) into any other project.
+            </li>
+          </ul>
+
           <h3 className={styles.h3}>Linked vs Independent Copies</h3>
           <p className={styles.p}>
             A macro can be reused as a <strong>linked</strong> (mirror) copy or an
