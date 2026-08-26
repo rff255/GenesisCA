@@ -24,13 +24,20 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { SpriteSheetSpec } from '../model/types';
 import { NumberField } from '../modeler/vpl/widgets/InlineWidgets';
 import {
-  pruneSheetFrames, sheetCellRect, sheetFrameIndices, sheetGrid, sheetWithFrames,
+  derivedCellSize, pruneSheetFrames, sheetCellRect, sheetFrameIndices, sheetGrid,
+  sheetWithCellSize, sheetWithFrames,
   type SheetGrid, type SheetRect,
 } from '../model/spriteSheet';
 
 /** Source viewport (fixed px) — see the layout rule above. */
 const VIEWPORT_W = 460;
 const VIEWPORT_H = 400;
+/** Hit radius (canvas px) for the first-cell resize handle — screen space, so it
+ *  stays grabbable at any zoom. */
+const HANDLE_HIT = 11;
+/** How far a press on the first cell must travel before it becomes a MOVE rather
+ *  than the click that toggles that cell into the animation. */
+const GIZMO_DRAG_PX = 3;
 /** Strip thumbnail edge (px). */
 const THUMB = 40;
 /** Cap the rendered strip so a 30×30 sheet selected whole cannot mount 900 canvases. */
@@ -69,6 +76,14 @@ export function SpriteSheetDialog({ dataUrl, initial, title = 'Sprite sheet', co
   const [marginY, setMarginY] = useState(() => Math.max(0, Math.floor(initial.marginY || 0)));
   const [spacingX, setSpacingX] = useState(() => Math.max(0, Math.floor(initial.spacingX || 0)));
   const [spacingY, setSpacingY] = useState(() => Math.max(0, Math.floor(initial.spacingY || 0)));
+  /** EXPLICIT cell size, or `null` = DERIVED from the image (the historical path).
+   *  Kept as a nullable rather than always-a-number so "derived" survives a cols/rows
+   *  edit — an explicit size that merely happened to equal the derived one would
+   *  otherwise freeze the grid the first time the user touched anything. */
+  const [cellW, setCellW] = useState<number | null>(
+    () => (Number.isFinite(initial.cellW as number) && (initial.cellW as number) > 0 ? Math.max(1, Math.floor(initial.cellW as number)) : null));
+  const [cellH, setCellH] = useState<number | null>(
+    () => (Number.isFinite(initial.cellH as number) && (initial.cellH as number) > 0 ? Math.max(1, Math.floor(initial.cellH as number)) : null));
   const [sel, setSel] = useState<number[]>(() => sheetFrameIndices(initial));
   /** How many indices the last grid change dropped (shown once, cleared on edit). */
   const [prunedCount, setPrunedCount] = useState(0);
@@ -93,10 +108,17 @@ export function SpriteSheetDialog({ dataUrl, initial, title = 'Sprite sheet', co
 
   // The spec the viewport + strip + preview all derive from.
   const spec = useMemo<SpriteSheetSpec>(
-    () => ({ cols, rows, marginX, marginY, spacingX, spacingY }),
-    [cols, rows, marginX, marginY, spacingX, spacingY],
+    () => ({
+      cols, rows, marginX, marginY, spacingX, spacingY,
+      ...(cellW !== null ? { cellW } : {}), ...(cellH !== null ? { cellH } : {}),
+    }),
+    [cols, rows, marginX, marginY, spacingX, spacingY, cellW, cellH],
   );
   const grid: SheetGrid = useMemo(() => sheetGrid(spec, iw, ih), [spec, iw, ih]);
+  /** What the size WOULD be with no explicit override — the reset target, and what
+   *  the fold compares against. */
+  const derived = useMemo(() => derivedCellSize(spec, iw, ih), [spec, iw, ih]);
+  const sizeIsExplicit = cellW !== null || cellH !== null;
 
   /** A grid change can strand indices past the new cell count — DROP them (a clamp
    *  would silently animate the wrong cell) and say how many went.
@@ -183,6 +205,22 @@ export function SpriteSheetDialog({ dataUrl, initial, title = 'Sprite sheet', co
       ctx.fillStyle = '#14161c';
       ctx.fillText(label, s.x + 5, s.y + 3);
     }
+    // THE FIRST-CELL GIZMO — drag its body to move the grid origin (the margins),
+    // drag its corner to scale the cell. Drawn LAST so it is never buried under a
+    // selection outline, and with a centre cross when the cell is too small to grab
+    // by its edges (the image dialog's own rule).
+    const g0 = toScreen(sheetCellRect(grid, 0));
+    ctx.strokeStyle = '#f0a020'; ctx.lineWidth = 2;
+    ctx.strokeRect(g0.x, g0.y, g0.w, g0.h);
+    ctx.fillStyle = '#f0a020';
+    ctx.fillRect(g0.x + g0.w - 5, g0.y + g0.h - 5, 10, 10);
+    if (g0.w < 16 || g0.h < 16) {
+      const mx = g0.x + g0.w / 2, my = g0.y + g0.h / 2;
+      ctx.beginPath();
+      ctx.moveTo(mx - 7, my); ctx.lineTo(mx + 7, my);
+      ctx.moveTo(mx, my - 7); ctx.lineTo(mx, my + 7);
+      ctx.lineWidth = 1.5; ctx.stroke();
+    }
   }, [img, iw, ih, view, grid, cellCount, ordinalsByCell]);
 
   // Wheel zoom (native + non-passive so the page does not scroll).
@@ -217,30 +255,87 @@ export function SpriteSheetDialog({ dataUrl, initial, title = 'Sprite sheet', co
     setSel(prev => (prev.includes(cell) ? prev.filter(c => c !== cell) : [...prev, cell]));
   }, []);
 
-  const dragRef = useRef<{ kind: 'pan'; lastX: number; lastY: number; moved: boolean } | null>(null);
+  type Drag =
+    | { kind: 'pan'; lastX: number; lastY: number }
+    /** A press on the first cell's BODY. Provisional: it becomes a grid-origin move
+     *  only past `GIZMO_DRAG_PX`; released under that it toggles cell 0. */
+    | { kind: 'origin'; sx: number; sy: number; mx: number; my: number; moved: boolean }
+    | { kind: 'size'; mx: number; my: number };
+
+  const dragRef = useRef<Drag | null>(null);
+
+  /** Capture only for a real DRAG, and never let it throw: capturing on every press
+   *  is what makes this canvas undrivable from a synthetic pointer event, and a
+   *  synthetic pointerId the browser never issued throws outright. A drag genuinely
+   *  wants capture (the pointer leaves the canvas); a plain click does not. */
+  const tryCapture = (el: HTMLCanvasElement, id: number) => {
+    try { el.setPointerCapture(id); } catch { /* synthetic pointer — nothing to capture */ }
+  };
+
   const onDown = (e: React.PointerEvent<HTMLCanvasElement>) => {
     if (!img) return;
-    // Capture only for the PAN drag — a click needs none, and capturing on every
-    // press is what makes this canvas undrivable from a synthetic pointer event
-    // (setPointerCapture throws on a pointerId the browser never issued).
     if (e.button === 1 || e.button === 2) {
-      e.currentTarget.setPointerCapture(e.pointerId);
-      dragRef.current = { kind: 'pan', lastX: e.clientX, lastY: e.clientY, moved: false };
+      tryCapture(e.currentTarget, e.pointerId);
+      dragRef.current = { kind: 'pan', lastX: e.clientX, lastY: e.clientY };
       return;
     }
     if (e.button !== 0) return;
     const rect = e.currentTarget.getBoundingClientRect();
-    const p = { x: (e.clientX - rect.left - view.ox) / view.scale, y: (e.clientY - rect.top - view.oy) / view.scale };
+    const cvx = e.clientX - rect.left, cvy = e.clientY - rect.top;    // canvas px
+    const p = { x: (cvx - view.ox) / view.scale, y: (cvy - view.oy) / view.scale }; // source px
+    // Hit priority: first-cell HANDLE → first-cell BODY → the existing cell toggle.
+    // The handle is tested in SCREEN space so its grab radius is constant at any zoom.
+    const c0 = sheetCellRect(grid, 0);
+    const hx = (c0.x + c0.w) * view.scale + view.ox, hy = (c0.y + c0.h) * view.scale + view.oy;
+    if (Math.abs(cvx - hx) < HANDLE_HIT && Math.abs(cvy - hy) < HANDLE_HIT) {
+      tryCapture(e.currentTarget, e.pointerId);
+      dragRef.current = { kind: 'size', mx: c0.x, my: c0.y };
+      return;
+    }
+    if (p.x >= c0.x && p.x < c0.x + c0.w && p.y >= c0.y && p.y < c0.y + c0.h) {
+      tryCapture(e.currentTarget, e.pointerId);
+      dragRef.current = { kind: 'origin', sx: cvx, sy: cvy, mx: marginX, my: marginY, moved: false };
+      return;
+    }
     const cell = cellAt(p.x, p.y);
     if (cell !== null) toggleCell(cell);
   };
+
   const onMove = (e: React.PointerEvent<HTMLCanvasElement>) => {
     const d = dragRef.current; if (!d) return;
-    const dx = e.clientX - d.lastX, dy = e.clientY - d.lastY;
-    d.lastX = e.clientX; d.lastY = e.clientY; d.moved = true;
-    setView(v => ({ ...v, ox: v.ox + dx, oy: v.oy + dy }));
+    if (d.kind === 'pan') {
+      const dx = e.clientX - d.lastX, dy = e.clientY - d.lastY;
+      d.lastX = e.clientX; d.lastY = e.clientY;
+      setView(v => ({ ...v, ox: v.ox + dx, oy: v.oy + dy }));
+      return;
+    }
+    const rect = e.currentTarget.getBoundingClientRect();
+    const cvx = e.clientX - rect.left, cvy = e.clientY - rect.top;
+    if (d.kind === 'origin') {
+      if (!d.moved && Math.abs(cvx - d.sx) < GIZMO_DRAG_PX && Math.abs(cvy - d.sy) < GIZMO_DRAG_PX) return;
+      d.moved = true;
+      setPrunedCount(0);
+      // Against the drag's OWN start values (never the live ones), so dragging back
+      // and forth lands exactly where it started instead of accumulating rounding.
+      setMarginX(clamp(Math.round(d.mx + (cvx - d.sx) / view.scale), 0, Math.max(0, iw - 1)));
+      setMarginY(clamp(Math.round(d.my + (cvy - d.sy) / view.scale), 0, Math.max(0, ih - 1)));
+      return;
+    }
+    // Resize: the handle IS the cell's bottom-right corner, so the size is just the
+    // cursor's offset from the (fixed) origin. Per-axis — sprite cells are rectangular.
+    const px = (cvx - view.ox) / view.scale, py = (cvy - view.oy) / view.scale;
+    setPrunedCount(0);
+    setCellW(clamp(Math.round(px - d.mx), 1, Math.max(1, iw)));
+    setCellH(clamp(Math.round(py - d.my), 1, Math.max(1, ih)));
   };
-  const onUp = () => { dragRef.current = null; };
+
+  const onUp = () => {
+    const d = dragRef.current;
+    dragRef.current = null;
+    // A press on the first cell that never travelled is a CLICK — toggle cell 0, so
+    // the gizmo does not make it the one cell that can never enter the animation.
+    if (d && d.kind === 'origin' && !d.moved) toggleCell(0);
+  };
 
   // ---- Selection edits ----
   const allCells = useMemo(() => Array.from({ length: cellCount }, (_, i) => i), [cellCount]);
@@ -311,11 +406,12 @@ export function SpriteSheetDialog({ dataUrl, initial, title = 'Sprite sheet', co
               style={{ width: VIEWPORT_W, height: VIEWPORT_H, border: '1px solid #2a3a50', touchAction: 'none', cursor: 'pointer', imageRendering: 'pixelated', background: '#0a0b0e', display: 'block' }}
               onPointerDown={onDown} onPointerMove={onMove} onPointerUp={onUp} onPointerCancel={onUp}
               onContextMenu={e => e.preventDefault()}
-              title="Click a cell to add it to the animation (click again to remove it). Drag with the middle/right button to pan, wheel to zoom."
+              title="Click a cell to add it to the animation (click again to remove it). Drag the orange first cell to move the grid, its corner to resize the cells. Drag with the middle/right button to pan, wheel to zoom."
             />
             <div style={{ ...hint, marginTop: 4 }}>
               Click a cell to add it as the next frame; click a selected cell to remove it. The number on a
-              cell is its position in the animation.
+              cell is its position in the animation.<br />
+              <span style={{ color: '#f0a020' }}>▭ First cell</span> — drag it to align the grid (sets the margin), drag its corner to resize the cells.
             </div>
           </div>
 
@@ -338,6 +434,17 @@ export function SpriteSheetDialog({ dataUrl, initial, title = 'Sprite sheet', co
               <span style={hint}>margin</span>
               <NumberField style={num} integer min={0} value={marginX} onNumber={n => { setPrunedCount(0); setMarginX(Math.max(0, Math.round(n))); }} title="Margin X" />
               <NumberField style={num} integer min={0} value={marginY} onNumber={n => { setPrunedCount(0); setMarginY(Math.max(0, Math.round(n))); }} title="Margin Y" />
+            </div>
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', marginTop: 6 }}
+              title="Cell size in image pixels. Empty of an override this is DERIVED from the image, the margins and the gaps — set it (or drag the orange cell's corner) when the sheet has dead space on the right/bottom.">
+              <span style={hint}>cell</span>
+              <NumberField style={num} integer min={1} value={grid.cellW}
+                onNumber={n => { setPrunedCount(0); setCellW(clamp(Math.round(n), 1, Math.max(1, iw))); }} title="Cell width" />
+              <NumberField style={num} integer min={1} value={grid.cellH}
+                onNumber={n => { setPrunedCount(0); setCellH(clamp(Math.round(n), 1, Math.max(1, ih))); }} title="Cell height" />
+              <button style={{ ...btn, visibility: sizeIsExplicit ? 'visible' : 'hidden' }}
+                onClick={() => { setPrunedCount(0); setCellW(null); setCellH(null); }}
+                title={`Back to the derived size (${derived.cellW}×${derived.cellH})`}>↺</button>
             </div>
             <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', marginTop: 6 }} title="Pixel gap between adjacent cells">
               <span style={hint}>gap</span>
@@ -397,7 +504,10 @@ export function SpriteSheetDialog({ dataUrl, initial, title = 'Sprite sheet', co
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 14 }}>
           <button onClick={onCancel} style={{ padding: '6px 14px', cursor: 'pointer' }}>Cancel</button>
           <button
-            onClick={() => onApply(sheetWithFrames({ ...spec }, sel))}
+            // Both folds, so a spec only ever carries what it genuinely needs: a
+            // row-major selection keeps the legacy `count` shape, and a cell size
+            // that equals the derived one is not stored at all.
+            onClick={() => onApply(sheetWithCellSize(sheetWithFrames({ ...spec }, sel), cellW, cellH, iw, ih))}
             disabled={applyDisabled}
             style={{ padding: '6px 14px', cursor: applyDisabled ? 'not-allowed' : 'pointer', background: applyDisabled ? '#333' : 'var(--color-accent, #4cc9f0)', color: applyDisabled ? '#888' : '#08121a', border: 'none', borderRadius: 4, fontWeight: 600 }}
             title={applyDisabled ? 'Select at least one frame.' : undefined}

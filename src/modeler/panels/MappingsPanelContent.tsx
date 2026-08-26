@@ -8,7 +8,7 @@ import { setCurrentModelElementDrag } from '../vpl/graphState';
 import { defaultGradientStops, defaultTagColor } from '../vpl/compiler/linkedOutputMappings';
 import { GradientStopsEditor, type GradStop } from '../vpl/widgets/GradientStopsEditor';
 import { INTERPOLATION_METHODS } from '../vpl/nodes/interpolationMethods';
-import type { Mapping, RGB, ColorStop, Attribute, CAModel, InputMappingParam, InputParamType } from '../../model/types';
+import type { Mapping, RGB, ColorStop, Attribute, CAModel, InputMappingParam, InputParamType, SpriteAsset } from '../../model/types';
 import { inputBrushKindOf, inputParamsOf, materialiseInputParams, mintParamKey, paramFallbackValue, paramTagOptions } from '../../model/inputMappingParams';
 import { is3dModelLike } from '../vpl/compiler/niCodec';
 import { typeDisplayName } from '../../model/typeLabels';
@@ -17,7 +17,7 @@ import styles from './PanelContent.module.css';
 import { ColorField } from '../vpl/widgets/ColorField';
 import { hexToRgba, rgbaToHex, isOpaque, OPAQUE } from '../../model/colorHex';
 import { SpriteSheetDialog } from '../../components/SpriteSheetDialog';
-import { sheetCellCount, sheetFrameIndices } from '../../model/spriteSheet';
+import { sheetCellCount, sheetFrameIndices, sheetFrameRects } from '../../model/spriteSheet';
 
 // (The local 6-digit-only rgbToHex/hexToRgb pair that used to live here is gone —
 //  ColorSwatch now routes through the shared alpha-aware helpers in colorHex.ts.
@@ -63,13 +63,74 @@ function CompassDial({ value, onChange }: { value: number; onChange: (deg: numbe
   );
 }
 
-/** Renders a sprite's (first) frame on a small canvas; clicking a pixel reports
+/** THE sprite's FIRST animation frame, as an `<img>`-ready `src`.
+ *
+ *  A SHEET is one big grid image, so showing `dataUrl` puts the whole sheet in a
+ *  24 px box — unreadable, and (in the chroma-key picker) it makes the user pick the
+ *  key colour off whatever happens to sit at the sheet's top-left rather than off
+ *  real frame pixels. So a sheet is CROPPED to `sheetFrameRects(...)[0]` — the first
+ *  cell of the ANIMATION SELECTION (not cell 0), so a hand-picked selection previews
+ *  what actually plays first.
+ *
+ *  A frame SEQUENCE is already `frames[0]`; a plain image (an animated GIF/WebP
+ *  included, which keeps animating in an `<img>`) is itself.
+ *
+ *  Chroma-key removal is deliberately NOT applied — the picker must show the raw
+ *  key colour, and the other two sites want the artwork as imported.
+ *
+ *  Returns `''` while a sheet crop is in flight, so a caller renders a blank box
+ *  rather than flashing the whole sheet for a frame. */
+function useSpriteFrameSrc(sprite: SpriteAsset): string {
+  const { dataUrl, sheet } = sprite;
+  const [cropped, setCropped] = useState<string | null>(null);
+  // The spec is compared by VALUE: a grid or selection edit must re-crop, while an
+  // unrelated re-render (a rename, a scale tweak) must not.
+  const sheetKey = sheet ? JSON.stringify(sheet) : '';
+  useEffect(() => {
+    if (!sheetKey) { setCropped(null); return; }
+    const spec = JSON.parse(sheetKey);
+    let cancelled = false;
+    const img = new Image();
+    img.onload = () => {
+      if (cancelled) return;
+      const r = sheetFrameRects(spec, img.naturalWidth, img.naturalHeight)[0];
+      const cv = document.createElement('canvas');
+      const ctx = r ? cv.getContext('2d') : null;
+      if (!r || !ctx) { setCropped(''); return; }
+      cv.width = Math.max(1, Math.round(r.w));
+      cv.height = Math.max(1, Math.round(r.h));
+      ctx.imageSmoothingEnabled = false;
+      // A cell may hang off the image once the size is explicit — drawImage crops
+      // with transparent padding, which is the honest result.
+      ctx.drawImage(img, r.x, r.y, r.w, r.h, 0, 0, cv.width, cv.height);
+      try { setCropped(cv.toDataURL()); } catch { setCropped(''); }
+    };
+    img.onerror = () => { if (!cancelled) setCropped(''); };
+    img.src = dataUrl;
+    return () => { cancelled = true; };
+  }, [dataUrl, sheetKey]);
+  if (sheetKey) return cropped ?? '';
+  return (sprite.frames && sprite.frames[0]) || dataUrl;
+}
+
+/** The ONE sprite preview image — every site renders the first frame through this
+ *  rather than crop the sheet three different ways. */
+function SpriteFramePreview({ sprite, alt, style }: { sprite: SpriteAsset; alt: string; style: React.CSSProperties }) {
+  const src = useSpriteFrameSrc(sprite);
+  // No flash of the whole sheet while the crop resolves.
+  if (!src) return <div style={style} />;
+  return <img src={src} alt={alt} style={style} />;
+}
+
+/** Renders a sprite's FIRST frame on a small canvas; clicking a pixel reports
  *  its colour. Lets the user pick the chroma-key background by clicking the image
  *  directly instead of the native colour picker (which covers the sprite). */
-function SpriteBgPicker({ dataUrl, onPick }: { dataUrl: string; onPick: (hex: string) => void }) {
+function SpriteBgPicker({ sprite, onPick }: { sprite: SpriteAsset; onPick: (hex: string) => void }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [ready, setReady] = useState(false);
+  const dataUrl = useSpriteFrameSrc(sprite);
   useEffect(() => {
+    if (!dataUrl) { setReady(false); return; }
     const img = new Image();
     img.onload = () => {
       const cv = canvasRef.current; if (!cv) return;
@@ -291,7 +352,7 @@ function TagOptionsInput({ options, onCommit }: {
   const commit = () => {
     const parsed = draft.split(',').map(s => s.trim()).filter(Boolean);
     lastExternalRef.current = parsed.join(', ');
-    if (parsed.join(' ') !== options.join(' ')) onCommit(parsed);
+    if (parsed.join('\u0000') !== options.join('\u0000')) onCommit(parsed);
     else setDraft(lastExternalRef.current);   // normalise spacing on commit
   };
   return (
@@ -1041,9 +1102,10 @@ export function MappingsPanelContent({ mode = 'list' }: PanelContentProps = {}) 
                   onDragEnd={handleMappingDragEnd}
                   title={`Drag to the Agents canvas to add a Set Agent Sprite using '${s.name}'`}
                 >
-                  {/* The thumbnail IS the row's identity — a sprite is a picture. */}
-                  <img
-                    src={s.dataUrl}
+                  {/* The thumbnail IS the row's identity — a sprite is a picture, so
+                      a sheet shows its first FRAME, never the whole grid image. */}
+                  <SpriteFramePreview
+                    sprite={s}
                     alt=""
                     style={{ width: 24, height: 24, objectFit: 'contain', background: '#0a0b0e', borderRadius: 3, imageRendering: 'pixelated', flex: '0 0 auto', pointerEvents: 'none' }}
                   />
@@ -1194,8 +1256,8 @@ export function MappingsPanelContent({ mode = 'list' }: PanelContentProps = {}) 
             <div className={styles.detailTitle}>Edit: {s.name}</div>
             <div className={styles.fieldGroup}>
               <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                <img
-                  src={s.dataUrl}
+                <SpriteFramePreview
+                  sprite={s}
                   alt={s.name}
                   style={{ width: 48, height: 48, objectFit: 'contain', background: '#0a0b0e', borderRadius: 4, imageRendering: 'pixelated', flex: '0 0 auto' }}
                 />
@@ -1284,10 +1346,11 @@ export function MappingsPanelContent({ mode = 'list' }: PanelContentProps = {}) 
                         onNumber={n => updateSprite(s.id, { removeBgTolerance: Math.max(0, Math.min(255, Math.round(n))) })} title="Per-channel tolerance (0–255)" />
                     </div>
                     {/* Click the image directly to pick the background colour (the native
-                        colour picker otherwise covers the sprite). Uses the original
-                        image, so magenta/green shows even after keying. */}
+                        colour picker otherwise covers the sprite). Shows the FIRST FRAME
+                        un-keyed, so magenta/green is still there to click — and for a
+                        sheet that means real frame pixels, not the sheet's top-left. */}
                     <div style={{ marginTop: 4, fontSize: '0.6rem', color: '#7a8a9a' }}>or click the image to pick it:</div>
-                    <SpriteBgPicker dataUrl={(s.frames && s.frames[0]) || s.dataUrl} onPick={hex => updateSprite(s.id, { removeBgColor: hex })} />
+                    <SpriteBgPicker sprite={s} onPick={hex => updateSprite(s.id, { removeBgColor: hex })} />
                   </div>
                 )}
               </div>

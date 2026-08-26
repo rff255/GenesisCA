@@ -3160,8 +3160,29 @@ export function HelpView() {
             editor.
           </p>
           <p className={styles.p}>
+            You do not have to align the grid by typing: the <strong>first cell</strong> is drawn as
+            an orange rectangle you can <strong>drag to move the grid</strong> (it writes the margin)
+            and whose <strong>corner resizes the cells</strong>. The number fields stay in sync both
+            ways &mdash; drag and they follow, type and the rectangle moves. Clicking the first cell
+            without dragging still adds/removes it from the animation, as any other cell.
+          </p>
+          <p className={styles.p}>
+            The <strong>cell</strong> size is normally <em>derived</em> from the image, the margins
+            and the gaps, so it changes with the column / row counts. Setting it (or dragging the
+            corner) makes it <strong>explicit</strong>, which is what lets you grid a sheet that has
+            <strong> dead space</strong> on the right or bottom &mdash; a case no combination of
+            columns and rows can express, since the derived size always divides the <em>whole</em>
+            image. <strong>&#8634;</strong> puts it back to the derived size; a cell that then hangs
+            off the image edge simply decodes with transparent padding.
+          </p>
+          <p className={styles.p}>
             The library works like the mapping lists above it: each sprite is a
-            <strong> row</strong> with its thumbnail, name and frame count, and
+            <strong> row</strong> with its thumbnail, name and frame count &mdash; and every
+            preview (the row, the editor image, the chroma-key picker) shows the sprite&rsquo;s
+            <strong> first animation frame</strong>, so a sheet reads as the frame that plays
+            first rather than as the whole grid image squeezed into a 24&nbsp;px box. It is the
+            first frame of your <em>selection</em>, not necessarily the sheet&rsquo;s first cell,
+            and
             <strong> clicking a row opens its editor in the second panel</strong>. There you
             set the size, whether the frames <strong>loop</strong>, the sheet grid + frame
             selection (via <strong>Edit sheet grid&hellip;</strong>), the

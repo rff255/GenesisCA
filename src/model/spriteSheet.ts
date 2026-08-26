@@ -29,6 +29,14 @@
  * `frames` SUPERSEDES `count` when present (an explicit list already says how
  * many frames there are); the editor clears `count` when it writes a list.
  *
+ * THE CELL SIZE is likewise optional: `cellW`/`cellH` ABSENT ⇒ DERIVED from the
+ * image extent (the historical arithmetic, byte-for-byte), present ⇒ used as-is.
+ * Explicit sizes exist because the derived one is locked to the FULL image, so a
+ * sheet with trailing dead space could not be gridded by cols/rows alone — and
+ * because the dialog's first-cell gizmo scales smoothly, which integer cell COUNTS
+ * cannot express. `sheetWithCellSize` folds a size equal to the derived one back
+ * to absent, mirroring `sheetWithFrames`.
+ *
  * This module is dependency-free and DOM-free so both the decoder
  * (`spriteRegistry.ts`, browser) and the harness (Node) run the same code.
  */
@@ -41,16 +49,37 @@ export interface SheetRect { x: number; y: number; w: number; h: number }
 /** The resolved grid: cell counts + the derived cell size in image pixels. */
 export interface SheetGrid { cols: number; rows: number; cellW: number; cellH: number; marginX: number; marginY: number; spacingX: number; spacingY: number }
 
+/** The DERIVED cell size — image minus margins and inter-cell gaps, divided by the
+ *  cell count. Exactly the historical `sliceSheet` arithmetic, and what a sheet
+ *  with no explicit `cellW`/`cellH` still resolves to. */
+export function derivedCellSize(sheet: SpriteSheetSpec, imgW: number, imgH: number): { cellW: number; cellH: number } {
+  const cols = Math.max(1, Math.floor(sheet.cols || 1));
+  const rows = Math.max(1, Math.floor(sheet.rows || 1));
+  const marginX = sheet.marginX || 0, marginY = sheet.marginY || 0;
+  const spacingX = sheet.spacingX || 0, spacingY = sheet.spacingY || 0;
+  return {
+    cellW: Math.max(1, Math.floor((imgW - marginX - (cols - 1) * spacingX) / cols)),
+    cellH: Math.max(1, Math.floor((imgH - marginY - (rows - 1) * spacingY) / rows)),
+  };
+}
+
 /** Resolve the grid geometry for a sheet over an image of the given size.
- *  The cell size is DERIVED (image minus margins and inter-cell gaps, divided by
- *  the cell count) — exactly the historical `sliceSheet` arithmetic. */
+ *
+ *  The cell size is EXPLICIT when the spec carries one (the first-cell gizmo wrote
+ *  it), else DERIVED — and ABSENT is the historical path byte-for-byte, so every
+ *  sheet authored before the gizmo slices exactly as it always did. An explicit
+ *  size is sanitised the same way (`max(1, floor(·))`), so a hand-edited 0 / NaN
+ *  can never produce a zero-area cell. */
 export function sheetGrid(sheet: SpriteSheetSpec, imgW: number, imgH: number): SheetGrid {
   const cols = Math.max(1, Math.floor(sheet.cols || 1));
   const rows = Math.max(1, Math.floor(sheet.rows || 1));
   const marginX = sheet.marginX || 0, marginY = sheet.marginY || 0;
   const spacingX = sheet.spacingX || 0, spacingY = sheet.spacingY || 0;
-  const cellW = Math.max(1, Math.floor((imgW - marginX - (cols - 1) * spacingX) / cols));
-  const cellH = Math.max(1, Math.floor((imgH - marginY - (rows - 1) * spacingY) / rows));
+  const derived = derivedCellSize(sheet, imgW, imgH);
+  const cellW = Number.isFinite(sheet.cellW as number) && (sheet.cellW as number) > 0
+    ? Math.max(1, Math.floor(sheet.cellW as number)) : derived.cellW;
+  const cellH = Number.isFinite(sheet.cellH as number) && (sheet.cellH as number) > 0
+    ? Math.max(1, Math.floor(sheet.cellH as number)) : derived.cellH;
   return { cols, rows, cellW, cellH, marginX, marginY, spacingX, spacingY };
 }
 
@@ -125,6 +154,25 @@ export function sheetFrameRects(sheet: SpriteSheetSpec, imgW: number, imgH: numb
  *  - a row-major prefix `0..k-1`  ⇒ `{ frames: undefined, count: k }`
  *  - anything else                ⇒ `{ frames: sel,       count: undefined }`
  */
+/** Fold an explicit cell size back into the SMALLEST spec that expresses it — the
+ *  `sheetWithFrames` rule, applied to the geometry: a size that EQUALS the derived
+ *  one is not stored, so a gizmo drag that lands back on the derived geometry
+ *  keeps the legacy record shape (and every consumer stays on the derived path).
+ *
+ *  Pass `null` for either axis to mean "derived" explicitly (the reset affordance). */
+export function sheetWithCellSize(
+  sheet: SpriteSheetSpec, cellW: number | null, cellH: number | null, imgW: number, imgH: number,
+): SpriteSheetSpec {
+  const next: SpriteSheetSpec = { ...sheet };
+  delete next.cellW; delete next.cellH;
+  const derived = derivedCellSize(next, imgW, imgH);
+  const w = cellW === null || !Number.isFinite(cellW) ? null : Math.max(1, Math.floor(cellW));
+  const h = cellH === null || !Number.isFinite(cellH) ? null : Math.max(1, Math.floor(cellH));
+  if (w !== null && w !== derived.cellW) next.cellW = w;
+  if (h !== null && h !== derived.cellH) next.cellH = h;
+  return next;
+}
+
 export function sheetWithFrames(sheet: SpriteSheetSpec, sel: readonly number[]): SpriteSheetSpec {
   const cells = sheetCellCount(sheet);
   const pruned = pruneSheetFrames(sel, cells);
