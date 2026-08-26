@@ -854,6 +854,25 @@ function isMacroDefLike(d: unknown): d is MacroDef {
 }
 
 /**
+ * Explicit Controls: DROP a `controls` / `groups` that is present but is not an
+ * array. Every consumer treats them as arrays, and the format's only
+ * compatibility mechanism is "unknown keys are ignored" — so a malformed record
+ * must be silently discarded, NEVER thrown past `parseMacroFile`'s two named
+ * errors. Returns the SAME reference when there is nothing to drop, so a clean
+ * file's def is passed through untouched (the migration-identity convention).
+ */
+function sanitizeMacroDefRecords<T extends MacroDef>(d: T): T {
+  const raw = d as unknown as Record<string, unknown>;
+  const badControls = 'controls' in raw && !Array.isArray(raw.controls);
+  const badGroups = 'groups' in raw && !Array.isArray(raw.groups);
+  if (!badControls && !badGroups) return d;
+  const out = { ...raw };
+  if (badControls) delete out.controls;
+  if (badGroups) delete out.groups;
+  return out as unknown as T;
+}
+
+/**
  * Parse a `.gcamacro`'s text. THE ONE reader for the format.
  *
  * ⚠ It deliberately does NOT gate on `schemaVersion`: the format's only
@@ -878,9 +897,9 @@ export function parseMacroFile(text: string): MacroFile {
     schemaVersion: 1,
     name: typeof raw.name === 'string' ? raw.name : (raw.macroDef as MacroDef).name ?? 'Imported macro',
     description: typeof raw.description === 'string' ? raw.description : '',
-    macroDef: raw.macroDef as MacroDef,
+    macroDef: sanitizeMacroDefRecords(raw.macroDef as MacroDef),
   };
-  const nested = Array.isArray(raw.macroDefs) ? raw.macroDefs.filter(isMacroDefLike) : [];
+  const nested = Array.isArray(raw.macroDefs) ? raw.macroDefs.filter(isMacroDefLike).map(sanitizeMacroDefRecords) : [];
   if (nested.length > 0) file.macroDefs = nested;
   if (raw.references && typeof raw.references === 'object' && !Array.isArray(raw.references)) {
     const refs: Record<string, unknown> = {};

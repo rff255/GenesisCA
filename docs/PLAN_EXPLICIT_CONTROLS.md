@@ -638,3 +638,39 @@ tiers A-J), `npx tsc -b`, `npm run build` (**both** builds — the viewer build 
    key (which may be a nested def).
 8. **Absent `controls` / `groups` ⇒ today's rendering and today's files, exactly** — including
    the absence of the keys themselves on a freshly created macro.
+
+---
+
+## 11. Deviations found during P1 — 2026-08-26
+
+*Recorded, never silent (the §1 discipline). Everything not listed here followed
+the plan as written. P1's gates: `tsc` · `npm run build` (both builds) ·
+`check-compile-identity --compare` **31 models, all surfaces unchanged** ·
+`test-explicit-controls` **143 checks** with all six source mutations proven
+caught · `test-macro-references` · `test-param-input-mappings` ·
+`test-agent-abi` · `test-c9-gates` · `check-agent-wasm-gate`.*
+
+| # | Plan | What shipped | Why |
+|---|---|---|---|
+| **P1.1** | §4 — "`explicitControls.ts` (new) \| the whole API of §3", where §3 annotates `elementOptionsFor` "(class C (P4))" | The class-C **signature**, the `'element'` kind, `CLASS_C_KEYS` (the 11 key names) and the `classes` gate all ship; **`elementOptionsFor` returns `null`** and the default `classes` is `{A,B}`, so class C offers nothing until P4 fills it | Doing the 32-site extraction in P1 IS P4. Shipping the signature now freezes the contract before P4 moves the JSX lists into it — V2's own reasoning, applied to class C. Tier A asserts the gate explicitly (A36-A39), so it cannot rot |
+| **P1.2** | §3 — class B is "a declarative table `(nodeType, key) → { kind, options }`" | It is, **and it is an ALLOWLIST that deliberately OMITS every COUPLED-WRITE key** — `getConstant.constType` (resets `constValue` + `facePaletteId`), `statement.compareType` (resets the operands), and every `*Id` picker that re-seeds a dependent value | **New reasoning, not in the plan.** A control writes exactly ONE key. A key whose in-node editor writes SEVERAL cannot be faithfully driven by a one-key write — it produces a state the in-node editor never produces, silently. That is D2b's and D3's argument applied to the WRITE SHAPE instead of the key shape. Being an allowlist, the table excludes them by not naming them; `isExcludedControlKey` stays the ACTIVE filter for class A, whose key set is port-DERIVED |
+| **P1.3** | §4 — "replace the inline adaptive-widget block with a call to `inlineWidgetFor(...)`" | That, **plus `ownAttrListFor(model)` / `tagAttrScopeFor(model)` extracted alongside it**, with CaNode calling both | The adaptive swap READS those two scopes. Leaving them in CaNode would have meant a second copy inside the resolver — the exact drift the extraction exists to prevent. Pure move; tier A49 pins that both follow `getActiveGraphKind()` |
+| **P1.4** | §4 — "`isMacroDefLike` — additionally DROP a `controls` / `groups` that is present but not an array" | A **sibling** `sanitizeMacroDefRecords<T>(d)` applied to `macroDef` AND each nested def; `isMacroDefLike` is unchanged | `isMacroDefLike` is a type GUARD returning `boolean` — it structurally cannot drop a field. The helper returns the SAME reference when there is nothing to drop (the migration-identity convention), so a clean file's def is still passed through untouched (tiers C12-C15) |
+| **P1.5** | §3 — six `ControlBlock` values | **Seven**: `orphan-def` added | Reachable and DISTINCT: `REMOVE_MACRO` of a nested def leaves a chained target whose macro is gone, which is a different sentence from "the control it points at was removed" (tier D8 vs D7) |
+| **P1.6** | §3 — `applyControlValue(model, defId, control, value)` | `+ openScopeIds?` | Without it a **scope-open** control's write would not be inert, and R7's whole mitigation is that the disabled row's handler does nothing. Tier E13 |
+| **P1.7** | §3 API list | **`describeControlTarget(model, defId, control)` added** | §5's editor row spec needs the `Node label · Parameter label` mono subtitle (and an unresolvable target's REASON in its place). Deriving it from the SAME descriptor is what stops the editor naming a parameter the resolver does not know about. P2 consumes it; tiers A50/A51 |
+| **P1.8** | §4 "Done when — `grep -rn "controls" src/modeler/vpl/compiler/` returns nothing" | It returns **ONE** hit: an unrelated English word in an `agentWasm/compile.ts` comment (*"`skipSelf` controls whether…"*) | The literal grep is too broad. The harness pins the real invariant instead — tier **F6** (no compiler file imports `explicitControls`) and **F7** (`/\bMacroControl\b\|\.controls\b/`), both of which return nothing, and F7 NAMES the offending file when the "leak the record" mutation is applied |
+
+### Verification notes worth keeping
+
+- **The `UPDATE_MACRO` action is FLAT** — `{ type, id, changes }`, not `{ type, payload }`. The first harness draft used a `payload` wrapper; the reducer silently no-ops on an unknown shape, so 12 checks failed with *plausible* values (the pre-retype descriptor) rather than an error. Drive the reducer, then assert the model actually MOVED.
+- **The CaNode extraction was A/B'd through the REAL UI and is BIT-IDENTICAL.** `git stash push -- src/modeler/vpl/CaNode.tsx` gives the pre-extraction build from the same tree; loading `Extended Wireworld`, expanding all 50 collapsed nodes and fingerprinting **every** inline widget (element, type, value, full option list, `top`), **every** external port label and **every** input handle's offset yields **381 rows, hash `537ea16b`, 0 rows differing** on both sides (51 widgets / 205 labels / 125 handles). The adaptive ladder was then driven live on the new build: tag → `SELECT`, integer → `InlineNumberInput`, bool → `InlineBoolSelect`, back to tag, with the option list following the attribute each time; edits commit and survive a Modeler → Simulator → Modeler round trip through the model. 0 console errors.
+- **⚠ Never `git checkout <file>` to revert a source mutation on an unstaged file** — it restores from the INDEX and destroys the session's work. Every mutation in this phase was reverted from a copy in the scratchpad, and the A/B used `git stash push -- <file>` / `git stash pop` (the documented recipe) with a byte-compare against the copy afterwards.
+- **The mutation harness needs to be CRLF-agnostic** — this repo's sources are CRLF, so a multi-line `String.replace` with `\n` never matches. Mutate line-by-line on a `/\r?\n/` split.
+
+### What P2 inherits
+
+- `resolveControlDescriptor` / `describeControlTarget` / `applyControlValue` / `eligibleControlKeys` are the four calls the authoring UI needs; none of them can return `null` for a live control, and every unresolvable one carries `block` + a sentence from `CONTROL_BLOCK_REASON`.
+- `eligibleControlKeys` takes `connectedHandles` — build it from `def.edges` the way `countMacroSubgraphIssues` does (nodeValidation.ts L825-832); a wired port is still OFFERED, flagged `wired: true`, so pick mode can say so rather than hiding it.
+- Nothing in P1 reads or writes `graphState`'s pick-mode global — it does not exist yet; P2 adds it in the `activeGraphKind` shape.
+- The class-B table is where a newly-authorable scalar key goes. Add coupled-write keys ONLY with a rule for their sibling writes (P1.2).

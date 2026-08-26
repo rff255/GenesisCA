@@ -20,10 +20,13 @@ import type { MacroPort } from '../../model/types';
 import { useModel } from '../../model/ModelContext';
 import { countMacroInstances } from '../../model/macroImport';
 import { typeDisplayName } from '../../model/typeLabels';
-import { cellAttrsOf, cellFieldAttrsOf, bondAttrsOf } from '../../model/attributeScope';
+import { cellAttrsOf, bondAttrsOf } from '../../model/attributeScope';
 import { vectorPortDims } from './compiler/vectorAttr';
 import { is3dModelLike } from './compiler/niCodec';
-import { MULTI_ATTR_TYPES, MULTI_ATTR_SET_TYPES, multiAttrExtraCount, buildExtraSlotPorts, resolveSlotAttr } from './compiler/multiAttrExpand';
+import { MULTI_ATTR_TYPES, multiAttrExtraCount, buildExtraSlotPorts } from './compiler/multiAttrExpand';
+// Explicit Controls: the ONE inline-widget resolution + the two attribute
+// scopes, dually consumed here and by a control bound to the same key.
+import { inlineWidgetFor, ownAttrListFor, tagAttrScopeFor } from './explicitControls';
 import { buildCensusPorts, censusAttributes } from './compiler/censusExpand';
 import { buildBondAttrPorts } from './bondAttrPorts';
 import { isGraphFrequencyMetric, degreeHistogramKeys, type GraphMetric } from '../../simulator/engine/graphMetrics';
@@ -260,9 +263,7 @@ function CaNodeComponent({ id, data }: NodeProps) {
   // list the AGENT attribute set on the Agents graph and the CELL attribute set on
   // the Cells graph. Nodes are remounted on graph swap, so reading the kind at
   // render time is correct.
-  const ownAttrList = getActiveGraphKind() === 'agents'
-    ? (model.agentAttributes ?? [])
-    : model.attributes.filter(a => !a.isModelAttribute);
+  const ownAttrList = ownAttrListFor(model);
   // Tag-attribute pickers (Get Constant / Compare / Switch tag mode) reference a
   // tag attribute purely for its OPTION NAMES. Scope = every attribute whose
   // discrete value the active graph can meaningfully read/compare:
@@ -275,9 +276,7 @@ function CaNodeComponent({ id, data }: NodeProps) {
   //    Field) and then needs to compare or produce that CELL attribute's tag value
   //    on the Agents graph. (ownAttrList — used by Get/Set/Update Attribute — stays
   //    agent-only: those read/write the OWN agent via D-IDX, not the field.)
-  const tagAttrScope = getActiveGraphKind() === 'agents'
-    ? [...(model.agentAttributes ?? []), ...cellFieldAttrsOf(model), ...model.attributes.filter(a => a.isModelAttribute)]
-    : model.attributes;
+  const tagAttrScope = tagAttrScopeFor(model);
   const { updateNodeData } = useReactFlow();
   const updateNodeInternals = useUpdateNodeInternals();
   // Subscribe to port-label toggle so memoized CaNodes re-render when it changes
@@ -3930,68 +3929,18 @@ function CaNodeComponent({ id, data }: NodeProps) {
         const isConnected = connectedInputHandles.has(hid);
         const topPx = PORT_TOP_BASE + i * portSpacing;
 
-        // Determine effective widget type (dynamic for attribute-dependent nodes)
-        let effectiveWidget = portDef.inlineWidget;
-        const setAttrId = nodeData.config.attributeId as string;
-        // ownAttrList = the active graph's OWN attributes (agent attrs on the Agents
-        // graph). setNeighborhood*/setNeighbor* are lattice-only, so ownAttrList
-        // resolves the right attribute for every node type here, on both graphs.
-        // `setAttribute` is UNIVERSAL and resolves in whichever graph it sits in —
-        // self-targeted, by-id, or over a whole id array alike.
-        const setAttr = setAttrId ? ownAttrList.find(a => a.id === setAttrId) : undefined;
-        if (effectiveWidget && (nodeData.nodeType === 'setAttribute' || nodeData.nodeType === 'updateAttribute' || nodeData.nodeType === 'setNeighborhoodAttribute' || nodeData.nodeType === 'setNeighborAttributeByIndex' || nodeData.nodeType === 'setCellAtPosition') && port.id === 'value') {
-          const attr = setAttr;
-          if (!attr) {
-            effectiveWidget = undefined;
-          } else if (attr.type === 'bool') {
-            effectiveWidget = 'bool';
-          } else if (attr.type === 'integer' || attr.type === 'float') {
-            effectiveWidget = 'number';
-          } else if (attr.type === 'tag') {
-            effectiveWidget = 'tag';
-          } else {
-            effectiveWidget = undefined;
-          }
-        }
-
-        // Any set node whose `value` port carries a VECTOR attr/var: no inline scalar
-        // widget (the value is a composite `vector` wired from Make Vector). Covers
-        // setVariable (+ setAttribute / setNeighbor* which the attr-type swap above
-        // already drops for a vector). vectorPortDims is null for
-        // every non-vector case, so this is precise.
-        if (port.id === 'value' && vectorPortDims(nodeData.nodeType, nodeData.config, model)) {
-          effectiveWidget = undefined;
-        }
-
-        // Multi-attribute extra slot (`value_${i}`): the WIDGET is already carried
-        // on the constructed port (buildExtraSlotPorts adapts it to that slot's
-        // attribute type) — only the tag OPTIONS need resolving per slot here.
-        let slotTagOptions: string[] | undefined;
-        if (MULTI_ATTR_SET_TYPES.has(nodeData.nodeType) && effectiveWidget === 'tag' && port.id !== 'value') {
-          const slotM = /^value_(\d+)$/.exec(port.id);
-          if (slotM) {
-            slotTagOptions = resolveSlotAttr(nodeData.nodeType, model, nodeData.config[`attr_${slotM[1]}`])?.tagOptions || [];
-          }
-        }
-
-        // Compare (statement): swap the inline operand widgets by the chosen
-        // value type. Tag options come from the node's own tagAttributeId.
-        // Neighbor Index has no inline editor, so the operands must be wired.
-        let statementTagOptions: string[] | undefined;
-        if (nodeData.nodeType === 'statement' && (port.id === 'x' || port.id === 'y')) {
-          const cmpType = (nodeData.config.compareType as string) || 'numerical';
-          if (cmpType === 'bool') {
-            effectiveWidget = 'bool';
-          } else if (cmpType === 'tag') {
-            effectiveWidget = 'tag';
-            const tAttr = tagAttrScope.find(a => a.id === nodeData.config.tagAttributeId);
-            statementTagOptions = tAttr?.tagOptions || [];
-          } else if (cmpType === 'neighborIndex') {
-            effectiveWidget = undefined;
-          } else {
-            effectiveWidget = 'number';
-          }
-        }
+        // Determine the effective widget type + its tag options. THE ONE
+        // resolution lives in explicitControls.ts and is DUALLY CONSUMED — here,
+        // and by an Explicit Control bound to this same `_port_*` key, so the
+        // widget the instance renders can never drift from the widget the node
+        // renders (the buildCensusPorts / buildInputParamPorts discipline).
+        // It covers, in this order: the declared `inlineWidget`; the
+        // setAttribute-family `value` swap by the picked attribute's TYPE; the
+        // VECTOR suppression; the multi-attr slot's tag OPTIONS; and Compare's
+        // operand swap by `compareType`.
+        const inlineW = inlineWidgetFor(nodeData.nodeType, nodeData.config, portDef, model);
+        const effectiveWidget = inlineW.kind;
+        const inlineTagOptions = inlineW.tagOptions ?? [];
 
         const showWidget = effectiveWidget && !isConnected && port.category === 'value';
         const configKey = `_port_${port.id}`;
@@ -4044,7 +3993,7 @@ function CaNodeComponent({ id, data }: NodeProps) {
                   <InlineTagSelect
                     className={styles.inlineWidget}
                     value={val}
-                    options={statementTagOptions ?? slotTagOptions ?? (setAttr?.tagOptions || [])}
+                    options={inlineTagOptions}
                     onChange={next => updateConfig(configKey, next)}
                     onClick={e => e.stopPropagation()}
                     onMouseDown={stopDrag}
