@@ -170,6 +170,132 @@ console.log('\n=== Tier E — the decode signature (what makes an edit reach the
   // A non-decode edit must NOT re-decode (scale/rotation/loop are render meta).
   check('E6 an unrelated field does NOT change the key',
     M.spriteDecodeKey({ ...asset, name: 'renamed', scale: 3, loop: false, rotationOffset: 90 }) === k0);
+  // The gizmo's cell-size edit has to reach the decoder the same way a grid edit
+  // does — that is what makes a drag show up on the CPU overlay / gl3d / GPU atlas.
+  check('E7 an EXPLICIT cell size changes the key',
+    M.spriteDecodeKey({ ...asset, sheet: { cols: 4, rows: 4, cellW: 12 } }) !== k0);
+  check('E7b … and changing it again changes it again',
+    M.spriteDecodeKey({ ...asset, sheet: { cols: 4, rows: 4, cellW: 12 } })
+      !== M.spriteDecodeKey({ ...asset, sheet: { cols: 4, rows: 4, cellW: 13 } }));
+  check('E7c cellH is independent of cellW',
+    M.spriteDecodeKey({ ...asset, sheet: { cols: 4, rows: 4, cellW: 12, cellH: 12 } })
+      !== M.spriteDecodeKey({ ...asset, sheet: { cols: 4, rows: 4, cellW: 12, cellH: 13 } }));
+  // The FOLD's payoff: a drag that lands back on the derived geometry produces a
+  // record indistinguishable from one that never carried a size — so it does not
+  // force a pointless re-decode either.
+  check('E8 a folded (absent) size keys identically to a never-sized sheet',
+    M.spriteDecodeKey({ ...asset, sheet: M.sheetWithCellSize({ cols: 4, rows: 4 }, 16, 16, 64, 64) }) === k0);
+}
+
+console.log('\n=== Tier F — the EXPLICIT cell size (the first-cell gizmo) ===');
+{
+  // ABSENT is the historical path. Assert the derived helper IS the legacy formula
+  // for every tier-B spec, so "absent ⇒ byte-for-byte" rests on a second source.
+  for (const [name, sheet, w, h] of [
+    ['plain 4x4', { cols: 4, rows: 4 }, 64, 64],
+    ['margins + gaps', { cols: 3, rows: 2, marginX: 4, marginY: 2, spacingX: 2, spacingY: 3 }, 100, 60],
+    ['non-square cells', { cols: 5, rows: 2 }, 100, 30],
+    ['non-integer division', { cols: 3, rows: 3 }, 100, 100],
+  ]) {
+    const legacy = legacyRects(sheet, w, h)[0];
+    const d = M.derivedCellSize(sheet, w, h);
+    eq(`F1 derived === legacy cell size (${name})`, [d.cellW, d.cellH], [legacy.w, legacy.h]);
+    const g = M.sheetGrid(sheet, w, h);
+    eq(`F1b … and an ABSENT size resolves to it (${name})`, [g.cellW, g.cellH], [d.cellW, d.cellH]);
+  }
+
+  // Hand-computed geometry. 4x4 over 64x64 derives 16x16, so 12x10 DISCRIMINATES.
+  const ex = { cols: 4, rows: 4, cellW: 12, cellH: 10 };
+  const ge = M.sheetGrid(ex, 64, 64);
+  eq('F2 an explicit size is used verbatim', [ge.cellW, ge.cellH], [12, 10]);
+  check('F2b the fixture discriminates (explicit !== derived)',
+    JSON.stringify([ge.cellW, ge.cellH]) !== JSON.stringify([16, 16]));
+  eq('F3 cell 0 rect', M.sheetCellRect(ge, 0), { x: 0, y: 0, w: 12, h: 10 });
+  eq('F3b cell 3 (row 0, col 3) rect', M.sheetCellRect(ge, 3), { x: 36, y: 0, w: 12, h: 10 });
+  eq('F3c cell 5 (row 1, col 1) rect', M.sheetCellRect(ge, 5), { x: 12, y: 10, w: 12, h: 10 });
+
+  // Explicit size ON TOP of margins + gaps: the step is (cell + gap), from the margin.
+  const ex2 = { cols: 3, rows: 2, marginX: 4, marginY: 2, spacingX: 2, spacingY: 3, cellW: 20, cellH: 15 };
+  const g2 = M.sheetGrid(ex2, 100, 60);
+  eq('F4 explicit size with margins + gaps', [g2.cellW, g2.cellH], [20, 15]);
+  eq('F4b cell 0 sits at the margin', M.sheetCellRect(g2, 0), { x: 4, y: 2, w: 20, h: 15 });
+  eq('F4c cell 4 (row 1, col 1) steps by cell+gap', M.sheetCellRect(g2, 4), { x: 26, y: 20, w: 20, h: 15 });
+  check('F4d the fixture discriminates', JSON.stringify([g2.cellW, g2.cellH]) !== JSON.stringify([30, 27]));
+
+  // THE MOTIVATING CASE — a sheet with trailing dead space. 3 cells of 30 px in a
+  // 100 px image: the derived size (33) is WRONG and no cols/rows value can fix it.
+  const dead = { cols: 3, rows: 1, cellW: 30, cellH: 30 };
+  eq('F5 dead space: derived would be wrong', [M.derivedCellSize(dead, 100, 100).cellW], [33]);
+  eq('F5b … the explicit size grids it correctly',
+    M.sheetCellRects(dead, 100, 100).map(r => r.x), [0, 30, 60]);
+
+  // One axis explicit, the other derived — they are independent.
+  const half = M.sheetGrid({ cols: 4, rows: 4, cellW: 9 }, 64, 64);
+  eq('F6 one axis explicit, the other derived', [half.cellW, half.cellH], [9, 16]);
+
+  // Sanitisation: a hand-edited 0 / negative / NaN must never yield a zero-area cell.
+  for (const [name, bad] of [['0', 0], ['negative', -5], ['NaN', NaN], ['Infinity', Infinity]]) {
+    const g = M.sheetGrid({ cols: 4, rows: 4, cellW: bad, cellH: bad }, 64, 64);
+    eq(`F7 a ${name} explicit size falls back to derived`, [g.cellW, g.cellH], [16, 16]);
+  }
+  eq('F7b a fractional explicit size floors', [M.sheetGrid({ cols: 4, rows: 4, cellW: 7.9 }, 64, 64).cellW], [7]);
+
+  // A cell may now hang off the image. The rect is reported HONESTLY (the decoder's
+  // createImageBitmap crops with transparent padding); it is never clamped, because a
+  // clamp would silently resize one frame.
+  const over = M.sheetCellRect(M.sheetGrid({ cols: 4, rows: 1, cellW: 20, cellH: 20 }, 64, 64), 3);
+  eq('F8 a cell past the image edge is reported, not clamped', over, { x: 60, y: 0, w: 20, h: 20 });
+  check('F8b … and it really does overhang', over.x + over.w > 64);
+
+  // The selection rides the explicit geometry unchanged.
+  eq('F9 frames follow the explicit geometry',
+    M.sheetFrameRects({ ...ex, frames: [5, 0] }, 64, 64),
+    [M.sheetCellRect(ge, 5), M.sheetCellRect(ge, 0)]);
+}
+
+console.log('\n=== Tier G — folding the cell size back to the smallest spec ===');
+{
+  const base = { cols: 4, rows: 4, marginX: 0, marginY: 0 }; // derives 16x16 over 64x64
+
+  const folded = M.sheetWithCellSize(base, 16, 16, 64, 64);
+  check('G1 a size EQUAL to the derived one is not stored',
+    folded.cellW === undefined && folded.cellH === undefined);
+  eq('G1b … and the grid params survive', [folded.cols, folded.rows], [4, 4]);
+  check('G1c … so it keys identically to a never-sized sheet',
+    JSON.stringify(folded) === JSON.stringify(base));
+
+  const kept = M.sheetWithCellSize(base, 12, 10, 64, 64);
+  eq('G2 a size that DIFFERS is stored', [kept.cellW, kept.cellH], [12, 10]);
+
+  const mixed = M.sheetWithCellSize(base, 16, 10, 64, 64);
+  check('G3 the axes fold independently', mixed.cellW === undefined && mixed.cellH === 10);
+
+  const cleared = M.sheetWithCellSize({ ...base, cellW: 12, cellH: 10 }, null, null, 64, 64);
+  check('G4 null clears an existing explicit size', cleared.cellW === undefined && cleared.cellH === undefined);
+
+  // The fold compares against the derived size of the spec WITHOUT the old explicit
+  // keys — otherwise an explicit size would compare against itself and never fold.
+  const remargined = M.sheetWithCellSize({ ...base, marginX: 4, cellW: 99 }, 15, 16, 64, 64);
+  check('G5 the comparison uses the CURRENT derived size', remargined.cellW === undefined,
+    JSON.stringify(remargined));
+  eq('G5b … (that derived size really is 15)', [M.derivedCellSize({ ...base, marginX: 4 }, 64, 64).cellW], [15]);
+
+  for (const [name, bad] of [['0', 0], ['negative', -3], ['fractional', 12.7]]) {
+    const s = M.sheetWithCellSize(base, bad, null, 64, 64);
+    check(`G6 a ${name} size is sanitised on write`, s.cellW === undefined || s.cellW >= 1,
+      JSON.stringify(s));
+  }
+  eq('G6b a fractional size floors on write', [M.sheetWithCellSize(base, 12.7, null, 64, 64).cellW], [12]);
+
+  // ROUND TRIP: whatever shape the fold picks, the size comes back out of sheetGrid.
+  for (const [w, h] of [[16, 16], [12, 10], [1, 1], [64, 64], [16, 10], [30, 16]]) {
+    const g = M.sheetGrid(M.sheetWithCellSize(base, w, h, 64, 64), 64, 64);
+    eq(`G7 round trip ${w}x${h}`, [g.cellW, g.cellH], [w, h]);
+  }
+
+  // The two folds compose: a selection fold must not disturb the size, or vice versa.
+  const both = M.sheetWithCellSize(M.sheetWithFrames({ ...base, cellW: 12 }, [2, 1]), 12, null, 64, 64);
+  eq('G8 the frame fold and the size fold compose', [both.frames, both.cellW, both.count], [[2, 1], 12, undefined]);
 }
 
 rmSync(dir, { recursive: true, force: true });

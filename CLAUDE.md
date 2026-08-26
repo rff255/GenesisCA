@@ -197,7 +197,7 @@ genesis-ca/
 │   │   ├── InstallButton.tsx         # Navbar PWA install affordance (beforeinstallprompt/appinstalled)
 │   │   ├── ThumbMedia.tsx            # The ONE model-thumbnail renderer — <video> for a WebM clip, <img> otherwise
 │   │   ├── MacroExportDialog.tsx     # Export Macro… — the per-element opt-out over the collected references (embed by default)
-│   │   ├── SpriteSheetDialog.tsx     # Sprite-sheet gridding: the grid params + WHICH cells, in WHICH order, are the animation
+│   │   ├── SpriteSheetDialog.tsx     # Sprite-sheet gridding: the first-cell GIZMO + grid params + WHICH cells, in WHICH order, are the animation
 │   │   └── navStyles.ts              # Shared navbar icon-button style (shortcuts, Install)
 │   ├── modeler/
 │   │   ├── ActivityBar.tsx           # Left panel-switch tabs — floating "ear-tab" icon pills (SVG icons)
@@ -286,7 +286,7 @@ genesis-ca/
 │   │   ├── ModelContext.tsx           # React Context + useReducer
 │   │   ├── typeLabels.ts             # typeDisplayName(): 'bool'→Binary, 'float'→Decimal (UI-only names)
 │   │   ├── thumbnail.ts              # Thumbnail media rules: accept list, size cap, isVideoThumbnail (WebM)
-│   │   ├── spriteSheet.ts            # Sprite-sheet cell GEOMETRY + the frame SELECTION (the ONE definition; decoder + dialog both derive from it)
+│   │   ├── spriteSheet.ts            # Sprite-sheet cell GEOMETRY (derived OR explicit) + the frame SELECTION (the ONE definition; decoder + dialog both derive from it)
 │   │   ├── macroImport.ts            # cloneMacroWithFreshIds — ID regen for macro imports; countMacroInstances — linked-copy count
 │   │   ├── macroReferences.ts        # M1: which MODEL ELEMENTS a macro's subgraph names (config values, ids embedded in KEYS + edge HANDLES, the transitive closure) → the `.gcamacro` `references` bundle
 │   │   ├── defaultModel.ts           # EMPTY_MODEL (for New + the initial state on every app load)
@@ -5373,21 +5373,70 @@ Extends the sprite exhibition layer ([spriteRegistry.ts](src/simulator/spriteReg
 - **`spriteRotations` + `spriteScales` ride the agent-loop ABI** (the THREE-mirror discipline): `buildAgentLoopParams`/`buildDivisionParams`/`buildAgentInitParams` push them after `spriteSpeeds`; the worker's `buildAgentLoopArgs`/`buildDivisionArgs`/`buildAgentInitArgs` + the empty-store snapshot + `scripts/parity-agent-wasm.mjs` `buildArgs` mirror them; `AgentStore` allocates them, `initAgentSlot` zeroes them, `divideAgent` inherits them, the render snapshot ships them when `hasAgentSprites`, and `serializeAgentStore`/deserialize round-trip them. JS-only param list (the WASM/WebGPU behaviour ABIs are untouched — the WASM emit reads the sprite MEMORY REGIONS at baked offsets, not ABI params). Verified: JS↔WASM bit-parity on all agent samples unchanged.
 - **Chroma key:** `removeBgColor` + `removeBgTolerance` — matching pixels are made transparent at decode time via an offscreen-canvas pass (`applyChromaKey`). The Sprites panel adds a **`SpriteBgPicker`** — a small canvas of the sprite's first frame; **clicking a pixel sets `removeBgColor`** to that pixel's hex (the native colour picker covers the sprite, so this lets the user pick the background off the image directly).
 - **Image sequence:** `SpriteAsset.frames?: string[]` — several imported images become one animated sprite (filename order).
-- **Sprite sheet:** `SpriteAsset.sheet?: SpriteSheetSpec` (cols/rows/count + margin/spacing + **`frames?: number[]`**) — one grid image sliced into frames (`sliceSheet` via `createImageBitmap` crop). **The GEOMETRY and the frame SELECTION both live in [spriteSheet.ts](src/model/spriteSheet.ts)** — see the next section.
+- **Sprite sheet:** `SpriteAsset.sheet?: SpriteSheetSpec` (cols/rows/count + margin/spacing + **`frames?: number[]`** + an optional explicit **`cellW?`/`cellH?`**) — one grid image sliced into frames (`sliceSheet` via `createImageBitmap` crop). **The GEOMETRY and the frame SELECTION both live in [spriteSheet.ts](src/model/spriteSheet.ts)** — see the next section.
 - Decode is restructured into **`decodeSpriteAsset`** (sequence → sheet → animated → static, then chroma-key); the `SpriteRegistry` re-decodes on a **decode-signature** change (dataUrl/frames/sheet/chroma), not just dataUrl. Import UI adds "+ Frame sequence" (multi-file) and "+ Sprite sheet" buttons.
 
 #### Sprite-sheet FRAME SELECTION — pick which cells, in which order (branch `tasks_batch_2026_08`)
 A sheet's frames were forced to be a **row-major PREFIX** of the grid (`count`), but real sheets almost never hold one animation — a walk cycle sits beside an idle pose, a door, a UI icon. Isolating one cycle therefore meant fighting the Set Agent Sprite node's frame/speed inputs to skip the cells you did not want. **`SpriteSheetSpec.frames?: number[]`** is an ORDERED list of grid-cell indices that ARE the animation, so a sheet behaves exactly like an imported frame SEQUENCE and speed becomes trivial again. **Presentation + decode only** — `git status` touches no compiler/worker/engine file, and `check-compile-identity` reports **31 models, all surfaces unchanged**.
 - **ABSENT ⇒ the historical behaviour BYTE-FOR-BYTE** (the first `count` cells row-major, or every cell) — no migration, and every sheet authored before the selection slices identically. **`frames` SUPERSEDES `count`** when present (the editor clears `count` when it writes a list).
-- **[src/model/spriteSheet.ts](src/model/spriteSheet.ts) is the ONE definition of both the cell GEOMETRY and the frame SELECTION** (dependency-free + DOM-free, so the Node harness drives the shipped code). `sheetGrid` / `sheetCellRect` / `sheetCellRects` / `sheetFrameIndices` / `sheetFrameRects` / `pruneSheetFrames` / `rowMajorFrames` / `sheetWithFrames`. `sliceSheet` CALLS it, so the grid the dialog draws and the pixels the decoder cuts cannot disagree — a stronger guarantee than a documented lockstep pair.
+- **[src/model/spriteSheet.ts](src/model/spriteSheet.ts) is the ONE definition of both the cell GEOMETRY and the frame SELECTION** (dependency-free + DOM-free, so the Node harness drives the shipped code). `sheetGrid` / `derivedCellSize` / `sheetCellRect` / `sheetCellRects` / `sheetFrameIndices` / `sheetFrameRects` / `pruneSheetFrames` / `rowMajorFrames` / `sheetWithFrames` / `sheetWithCellSize`. `sliceSheet` CALLS it, so the grid the dialog draws and the pixels the decoder cuts cannot disagree — a stronger guarantee than a documented lockstep pair.
 - **DUPLICATES ARE ALLOWED, deliberately**: `[0,1,2,1]` is a ping-pong cycle, the cheapest way to author a back-and-forth, and it costs nothing (the same cell decoded twice is two bitmaps).
 - **OUT-OF-RANGE indices are DROPPED, never clamped** — a clamp would silently animate the WRONG cell. If pruning empties the list the row-major default is used, so a sheet can never become frameless.
 - **`sheetWithFrames` folds a selection back into the SMALLEST spec**: the whole grid in order ⇒ neither field; a row-major prefix ⇒ the legacy `count` shape; anything else ⇒ `frames`. So a legacy-shaped selection keeps its legacy record instead of gaining a redundant index list.
 - **THE PROPAGATION NEEDED NO PLUMBING**: `decodeKey` (renamed `spriteDecodeKey`, exported for the harness) serialises `sheet` WHOLESALE, so a selection edit changes the signature → `SpriteRegistry.sync` re-decodes → its existing `onReady` marks the 3D atlas dirty, re-ships the worker's 2D atlas and redraws. Frame COUNT changes therefore flow to the CPU overlay, gl3d and the GPU sprite billboard pass for free.
 - **[SpriteSheetDialog.tsx](src/components/SpriteSheetDialog.tsx)** is now the primary gridding surface: a FIXED-size pan/zoom viewport (the Map-Image-to-Cells layout rule — sizing the viewport to the image reflows the card mid-drag, the "feedback loop"), the grid NumberFields MOVED out of the panel, click-a-cell-to-toggle with ordinal badges, an ordered strip (`×` remove · `⧉` repeat · `◂ ▸` nudge) + Select all / Reverse / **Ping-pong** / Clear, and a live cycling preview. Unselected cells render DIMMED and selected ones at full brightness, so "what is in the animation" reads at a glance. A grid change prunes + says how many frames it dropped.
 - **The dialog IS the import step** — "+ Sprite sheet" no longer adds a `{cols:4,rows:4}` asset immediately; nothing enters the model until Apply (Cancel/Esc discards). The panel keeps a summary + **Edit sheet grid…**. Both mounts of the Mappings panel render their own dialog (list = import, detail = edit), each with its own state.
-- **`setPointerCapture` fires only for the PAN drag**, not on every press — capturing on a click buys nothing and is what makes a canvas undrivable from a synthetic pointer event.
-- **Gate: [scripts/test-sprite-sheet.mjs](scripts/test-sprite-sheet.mjs)** (49 checks): the geometry by hand-computed rects; **tier B compares the absent-selection path against an INDEPENDENT transcription of the pre-change `sliceSheet`** over 8 spec shapes (the back-compat claim, not a mirror); the selection semantics (order, the discriminator assertion, duplicates, drop-not-clamp, the stranded fallback, `frames` over `count`); the `sheetWithFrames` fold + its round trip; and the decode signature (a selection edit / reorder / duplicate changes it, an unrelated field does not). **Negative-controlled by SOURCE MUTATION — 3 mutations, 3 caught**: clamp instead of drop (6 failures), ignore the selection (11), drop the spacing from the cell rect (4).
+- **`setPointerCapture` fires only for a real DRAG** (pan, or a first-cell gizmo gesture), never on a plain press — capturing on a click buys nothing and is what makes a canvas undrivable from a synthetic pointer event. It is additionally wrapped in try/catch (`tryCapture`), so a synthetic pointerId the browser never issued cannot throw the handler out mid-gesture.
+- **Gate: [scripts/test-sprite-sheet.mjs](scripts/test-sprite-sheet.mjs)** (**100 checks**): the geometry by hand-computed rects; **tier B compares the absent-selection path against an INDEPENDENT transcription of the pre-change `sliceSheet`** over 8 spec shapes (the back-compat claim, not a mirror); the selection semantics (order, the discriminator assertion, duplicates, drop-not-clamp, the stranded fallback, `frames` over `count`); the `sheetWithFrames` fold + its round trip; the **explicit cell size** (tier F) and **its fold** (tier G); and the decode signature (a selection edit / reorder / duplicate / cell-size edit changes it, an unrelated field does not, and a FOLDED size keys identically to a never-sized sheet). **Negative-controlled by SOURCE MUTATION — 5 mutations, 5 caught**: clamp instead of drop (6 failures), ignore the selection (11), drop the spacing from the cell rect (4), ignore the explicit cell size (16), never fold the cell size (5).
+
+#### The FIRST-CELL gizmo + the optionally-EXPLICIT cell size (branch `tasks_batch_2026_08`)
+Aligning a grid by typing six numbers is guesswork, and the derived cell size is **locked to the
+FULL image extent** — so a sheet with trailing dead space on the right/bottom could not be gridded
+correctly at ALL. The dialog draws the grid's **first cell** as an orange rectangle: drag its BODY
+to move the grid origin (writes `marginX`/`marginY`), drag its CORNER to scale the cells. The
+NumberFields remain and sync both ways. Plan + mockup: [docs/PLAN_SPRITE_SHEET_GIZMO.md](docs/PLAN_SPRITE_SHEET_GIZMO.md)/`.html`.
+- **`SpriteSheetSpec.cellW?` / `cellH?`** (additive, optional): **ABSENT ⇒ DERIVED exactly as
+  today, byte-for-byte** — every existing `.gcaproj` slices identically, **no migration**. Present
+  ⇒ used as-is, sanitised `max(1, floor(·))` so a hand-edited 0 / NaN can never make a zero-area
+  cell. `derivedCellSize` is exported so the fold and the reset affordance share the one formula.
+- **THE FOLD RULE — `sheetWithCellSize(sheet, cellW|null, cellH|null, imgW, imgH)`**, the geometry
+  twin of `sheetWithFrames`: a size EQUAL to the derived one is **not stored** (the keys are
+  deleted), so a drag that lands back on the derived geometry keeps the LEGACY record shape and
+  keys identically for the decoder. It deletes the old keys BEFORE computing the derived size —
+  otherwise an explicit size would compare against itself and never fold. The axes fold
+  independently. Applied ONCE, at Apply.
+- **The dialog holds the size as `number | null`** (null = derived) rather than always-a-number, so
+  "derived" SURVIVES a cols/rows edit; the `↺` button (visible only when explicit) restores it.
+- **A press on the first cell's body is PROVISIONAL** — it becomes a move only past
+  `GIZMO_DRAG_PX`(3); released under that it TOGGLES cell 0. Without this the gizmo would make
+  cell 0 the one cell that can never be clicked into the animation. Hit priority: handle → body →
+  the existing cell-toggle / pan. Drags commit integer-rounded values against the drag's OWN start
+  values, so dragging back and forth cannot drift.
+- **A cell may now hang off the image** (reachable only with an explicit size). The rect is
+  reported HONESTLY and never clamped — `createImageBitmap` crops with transparent padding, and a
+  clamp would silently resize one frame.
+- **Real-UI verified** on a synthetic 100×100 sheet of nine 30-px colour cells with 10 px of dead
+  space (the motivating case, where derived = 33 is simply wrong): the corner drag took the cell
+  33→30 with the fields following live, and the strip thumbnail for cell 2 went from
+  **1044 blue + 116 cyan bleed + 440 dead-grey px** to **1600 px of PURE blue, 0 dead**; a body
+  drag moved the margin 0,0 → 2,2 leaving the size untouched; a click with no movement toggled the
+  frame count 9 → 8 → 9 with the margin unchanged; Apply → reopen round-tripped `30×30` with `↺`
+  visible, and `↺` → Apply → reopen showed `↺` **hidden** (the fold dropped the keys). 0 console
+  errors on a clean load.
+
+#### Sprite previews show the FIRST FRAME, not the whole sheet
+All three preview sites in [MappingsPanelContent.tsx](src/modeler/panels/MappingsPanelContent.tsx)
+— the list-row thumbnail, the detail-editor image and the `SpriteBgPicker` — render a sheet's
+**first ANIMATION frame** (`sheetFrameRects(...)[0]`, i.e. the first cell of the SELECTION, not
+cell 0) instead of the whole grid image. ONE shared **`useSpriteFrameSrc` / `SpriteFramePreview`**
+serves all three (never three ad-hoc crops); a `frames` sequence resolves to `frames[0]`, a plain
+image (an animated GIF/WebP included) is itself. **Chroma-key removal is deliberately NOT applied**
+— the picker must show the raw key colour. The hook returns `''` while a crop is in flight so a
+caller renders a blank box rather than flashing the whole sheet for a frame. Verified: both
+`<img>` sites became **30×30, 900 px of a single colour** = the selection's first cell (green,
+NOT cell 0's red — the selection was `[1,2,…,8,0]`), and a centre click on the picker set
+`removeBgColor` to **`#00ff00`** where the whole-sheet centre would have been the middle cell's
+magenta.
 
 ### "Map Image to Cells" dialog (replaces the 2D Open-Image import)
 A [ImageMappingDialog.tsx](src/simulator/ImageMappingDialog.tsx) modal: source image (left, with a draggable/resizable region box + a cell-grid overlay) + gridified preview (right). Setup: Input-Mapping picklist, average-pixels, invert, binarize+threshold, **resize-grid vs paste-centered**, and **"use manual input mapping"** (binarize-true cells painted with the manual-brush values, embeds `ManualBrushPanel`). Also opens on **Ctrl+V** of a clipboard image (a window `paste` listener, latest-ref, `visibleRef`-gated). The pure sampler is [imageMapping.ts](src/simulator/imageMapping.ts) (`gridifyImage` → `{cols, rows, pixels, mask}`). Apply covers 4 combos: resize (reinit to cols×rows, then `importImage` or a pending `paintManual`) × center (keep grid; `importImage` with a region, or `paintManual` on centred cells). The worker's **`importImage` gained an optional `region`** — paste-centered writes ONLY the sub-region (cells outside preserved); under WebGPU with `gpuOwnsAttrs` (post-Play) it uses **`patchWebGPUCells(regionIdxs)`** instead of a full `uploadAttrs` so evolved cells outside the region aren't clobbered by the stale CPU mirror. **2D-only** (the worker's per-cell `importImage` is 2D-linear); a 3D model keeps the classic 1px=1cell resize import.

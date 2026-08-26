@@ -398,6 +398,19 @@ export interface SpriteSheetSpec {
    *  and DUPLICATES are allowed (`[0,1,2,1]` is a ping-pong cycle).
    *  ABSENT ⇒ the historical row-major `count` behaviour, byte-for-byte. */
   frames?: number[];
+  /** EXPLICIT cell size in image pixels. ABSENT ⇒ the size is DERIVED from the
+   *  image, the margins and the gaps (`(imgW - marginX - (cols-1)*spacingX) / cols`)
+   *  — the historical behaviour, byte-for-byte, so every sheet authored before the
+   *  first-cell gizmo slices exactly as it always did.
+   *
+   *  It exists because the derived size is locked to the FULL image extent: a sheet
+   *  with trailing dead space on the right/bottom cannot be gridded correctly by
+   *  cols/rows alone, and a smoothly scalable gizmo cannot be expressed through
+   *  integer cell COUNTS. The dialog folds an explicit size that equals the derived
+   *  one back to ABSENT, so a drag that lands on the derived geometry keeps the
+   *  legacy record shape. See `spriteSheet.ts` — the one definition. */
+  cellW?: number;
+  cellH?: number;
   /** Pixel offset from the top-left of the image to the first cell. */
   marginX?: number;
   marginY?: number;

@@ -1,0 +1,178 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Sprite-sheet first-cell gizmo</title>
+<style>
+:root{--bg:#0c0d10;--panel:#14161c;--bd:#2a3a50;--tx:#cdd6e0;--mut:#8090a0;--acc:#4cc9f0;--org:#f0a020;--ok:#66bb6a}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--tx);font:14px/1.55 system-ui,sans-serif;padding:28px 20px 60px}
+.wrap{max-width:1020px;margin:0 auto}h1{font-size:22px;margin:0 0 4px}h2{font-size:16px;margin:34px 0 10px;color:var(--acc);border-bottom:1px solid var(--bd);padding-bottom:5px}
+h3{font-size:13px;margin:20px 0 6px;color:var(--org);text-transform:uppercase;letter-spacing:.5px}
+p{margin:8px 0;color:var(--tx)}.mut{color:var(--mut);font-size:12.5px}
+.card{background:var(--panel);border:1px solid var(--bd);border-radius:8px;padding:14px;margin:10px 0}
+.row{display:flex;gap:14px;flex-wrap:wrap;align-items:flex-start}
+table{border-collapse:collapse;width:100%;font-size:12.5px;margin:8px 0}
+th,td{border:1px solid var(--bd);padding:6px 9px;text-align:left;vertical-align:top}th{background:#1b1e26;color:var(--mut);font-weight:600}
+code{background:#1c2028;border:1px solid var(--bd);border-radius:3px;padding:1px 5px;font-size:12px}
+.badge{display:inline-block;background:var(--org);color:#14161c;font-weight:700;font-size:10px;padding:1px 6px;border-radius:3px}
+.cap{font-size:11.5px;color:var(--mut);text-align:center;margin-top:5px}
+</style></head><body><div class="wrap">
+
+<h1>Sprite-sheet first-cell gizmo <span class="mut">+ first-frame previews</span></h1>
+<p class="mut">Presentation + decode geometry only — nothing under <code>compiler/</code>, no worker, no engine file.</p>
+
+<h2>A — the first-cell rectangle</h2>
+<p>A highlighted rectangle over grid cell&nbsp;0. Dragging its <b>body</b> moves the grid origin
+(<code>marginX/marginY</code>); dragging its <b>corner handle</b> scales the cell
+(<code>cellW/cellH</code>). The NumberFields remain and stay in sync both ways.</p>
+
+<div class="row">
+<div class="card" style="flex:1 1 300px">
+<h3>Before — numbers only</h3>
+<svg viewBox="0 0 300 210" width="100%">
+  <rect width="300" height="210" fill="#0a0b0e"/>
+  <g opacity=".75">
+    <rect x="26" y="20" width="248" height="150" fill="#1a2230"/>
+    <g fill="#3a4a60">
+      <rect x="34" y="28" width="52" height="42"/><rect x="94" y="28" width="52" height="42"/>
+      <rect x="154" y="28" width="52" height="42"/><rect x="214" y="28" width="52" height="42"/>
+      <rect x="34" y="78" width="52" height="42"/><rect x="94" y="78" width="52" height="42"/>
+      <rect x="154" y="78" width="52" height="42"/><rect x="214" y="78" width="52" height="42"/>
+    </g>
+  </g>
+  <g stroke="#4cc9f0" stroke-opacity=".45" fill="none">
+    <rect x="26" y="20" width="62" height="50"/><rect x="88" y="20" width="62" height="50"/>
+    <rect x="150" y="20" width="62" height="50"/><rect x="212" y="20" width="62" height="50"/>
+    <rect x="26" y="70" width="62" height="50"/><rect x="88" y="70" width="62" height="50"/>
+    <rect x="150" y="70" width="62" height="50"/><rect x="212" y="70" width="62" height="50"/>
+  </g>
+  <text x="150" y="192" fill="#8090a0" font-size="11" text-anchor="middle">grid alignment is guesswork — six numbers, no handle</text>
+</svg>
+<div class="cap">the grid can only be nudged by typing</div>
+</div>
+
+<div class="card" style="flex:1 1 300px">
+<h3>After — the gizmo <span class="badge">new</span></h3>
+<svg viewBox="0 0 300 210" width="100%">
+  <rect width="300" height="210" fill="#0a0b0e"/>
+  <g opacity=".75">
+    <rect x="26" y="20" width="248" height="150" fill="#1a2230"/>
+    <g fill="#3a4a60">
+      <rect x="34" y="28" width="52" height="42"/><rect x="94" y="28" width="52" height="42"/>
+      <rect x="154" y="28" width="52" height="42"/><rect x="214" y="28" width="52" height="42"/>
+      <rect x="34" y="78" width="52" height="42"/><rect x="94" y="78" width="52" height="42"/>
+      <rect x="154" y="78" width="52" height="42"/><rect x="214" y="78" width="52" height="42"/>
+    </g>
+  </g>
+  <g stroke="#4cc9f0" stroke-opacity=".45" fill="none">
+    <rect x="26" y="20" width="62" height="50"/><rect x="88" y="20" width="62" height="50"/>
+    <rect x="150" y="20" width="62" height="50"/><rect x="212" y="20" width="62" height="50"/>
+    <rect x="26" y="70" width="62" height="50"/><rect x="88" y="70" width="62" height="50"/>
+    <rect x="150" y="70" width="62" height="50"/><rect x="212" y="70" width="62" height="50"/>
+  </g>
+  <!-- first-cell gizmo -->
+  <rect x="26" y="20" width="62" height="50" fill="#f0a020" fill-opacity=".12" stroke="#f0a020" stroke-width="2"/>
+  <rect x="82" y="64" width="11" height="11" fill="#f0a020"/>
+  <!-- move arrows -->
+  <g stroke="#f0a020" stroke-width="1.6" fill="none" opacity=".9">
+    <path d="M57 33 L57 24 M53 28 L57 24 L61 28"/><path d="M57 57 L57 66 M53 62 L57 66 L61 62"/>
+    <path d="M43 45 L34 45 M38 41 L34 45 L38 49"/><path d="M71 45 L80 45 M76 41 L80 45 L76 49"/>
+  </g>
+  <path d="M96 78 L118 92" stroke="#f0a020" stroke-width="1.2" fill="none"/>
+  <text x="121" y="96" fill="#f0a020" font-size="10.5">corner → cell size</text>
+  <text x="150" y="192" fill="#f0a020" font-size="11" text-anchor="middle">body → margin (grid origin)</text>
+</svg>
+<div class="cap">drag to align; the numbers follow</div>
+</div>
+</div>
+
+<h3>Gesture table + hit priority</h3>
+<table>
+<tr><th>gesture</th><th>writes</th><th>note</th></tr>
+<tr><td>drag the rectangle <b>body</b></td><td><code>marginX</code> / <code>marginY</code></td><td>the whole grid origin moves; clamped ≥ 0</td></tr>
+<tr><td>drag the <b>corner handle</b></td><td><code>cellW</code> / <code>cellH</code> <span class="badge">new keys</span></td><td>explicit size; clamped ≥ 1</td></tr>
+<tr><td><b>click</b> the body, no movement</td><td>the SELECTION</td><td>toggles cell 0 — unchanged from today</td></tr>
+<tr><td>middle / right drag</td><td>—</td><td>pan (unchanged)</td></tr>
+</table>
+<p class="mut"><b>Priority:</b> handle → body → the existing cell-toggle / pan. A body press is
+<b>provisional</b>: it becomes a move only past a few pixels, so cell 0 does not become the one cell
+you can never click into the animation.</p>
+
+<h2>The schema: cell size becomes optionally EXPLICIT</h2>
+<div class="card">
+<p><code>cellW = max(1, floor((imgW − marginX − (cols−1)·spacingX) / cols))</code> — derived, and
+locked to the FULL image width, so a sheet with trailing dead space cannot be gridded at all today.</p>
+<table>
+<tr><th><code>cellW</code>/<code>cellH</code></th><th>behaviour</th></tr>
+<tr><td><b>absent</b></td><td>derived exactly as today, <b>byte-for-byte</b> — every existing file slices identically. No migration.</td></tr>
+<tr><td>present</td><td><code>sheetGrid</code> uses it, still <code>max(1, floor(·))</code>-sanitised.</td></tr>
+<tr><td>= derived</td><td><b>THE FOLD RULE</b> — the keys are deleted at Apply, so a drag that lands back on the derived geometry keeps the legacy record shape.</td></tr>
+</table>
+<p class="mut">Everything downstream already routes through <code>sheetGrid</code>/<code>sheetCellRect</code>/<code>sheetFrameRects</code>,
+so extending <code>sheetGrid</code> is the ONE edit that propagates (overlay, decoder, harness).
+<code>spriteDecodeKey</code> serialises <code>sheet</code> wholesale ⇒ a cellW edit re-decodes and
+reaches the CPU overlay, gl3d and the GPU atlas with zero plumbing.</p>
+</div>
+
+<h3>Data flow</h3>
+<svg viewBox="0 0 940 130" width="100%">
+  <defs><marker id="a" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6" fill="#4cc9f0"/></marker></defs>
+  <g font-size="11.5" text-anchor="middle">
+    <rect x="8" y="42" width="150" height="44" rx="5" fill="#1c2028" stroke="#f0a020"/>
+    <text x="83" y="60" fill="#f0a020">gizmo drag</text><text x="83" y="76" fill="#8090a0" font-size="10">+ NumberFields</text>
+    <rect x="200" y="42" width="150" height="44" rx="5" fill="#1c2028" stroke="#2a3a50"/>
+    <text x="275" y="62" fill="#cdd6e0">local state</text><text x="275" y="77" fill="#8090a0" font-size="10">cellW | null</text>
+    <rect x="392" y="42" width="164" height="44" rx="5" fill="#1c2028" stroke="#66bb6a"/>
+    <text x="474" y="60" fill="#66bb6a">sheetWithCellSize</text><text x="474" y="76" fill="#8090a0" font-size="10">the FOLD, at Apply</text>
+    <rect x="598" y="42" width="150" height="44" rx="5" fill="#1c2028" stroke="#2a3a50"/>
+    <text x="673" y="62" fill="#cdd6e0">sheetGrid</text><text x="673" y="77" fill="#8090a0" font-size="10">the ONE definition</text>
+    <rect x="790" y="20" width="142" height="30" rx="5" fill="#1c2028" stroke="#2a3a50"/><text x="861" y="39" fill="#cdd6e0">dialog overlay</text>
+    <rect x="790" y="58" width="142" height="30" rx="5" fill="#1c2028" stroke="#2a3a50"/><text x="861" y="77" fill="#cdd6e0">sliceSheet (decode)</text>
+    <rect x="790" y="96" width="142" height="30" rx="5" fill="#1c2028" stroke="#2a3a50"/><text x="861" y="115" fill="#cdd6e0">harness</text>
+  </g>
+  <g stroke="#4cc9f0" stroke-width="1.4" fill="none" marker-end="url(#a)">
+    <path d="M158 64 L196 64"/><path d="M350 64 L388 64"/><path d="M556 64 L594 64"/>
+    <path d="M748 64 L770 64 L770 35 L786 35"/><path d="M748 64 L786 64"/><path d="M748 64 L770 64 L770 111 L786 111"/>
+  </g>
+</svg>
+
+<h2>B — previews show the FIRST FRAME</h2>
+<div class="row">
+<div class="card" style="flex:1 1 260px">
+<h3>Before</h3>
+<svg viewBox="0 0 260 120" width="100%">
+  <rect width="260" height="120" fill="#0a0b0e"/>
+  <rect x="14" y="34" width="52" height="52" fill="#14161c" stroke="#2a3a50"/>
+  <g fill="#3a4a60" opacity=".9">
+    <rect x="17" y="46" width="11" height="9"/><rect x="30" y="46" width="11" height="9"/><rect x="43" y="46" width="11" height="9"/><rect x="56" y="46" width="7" height="9"/>
+    <rect x="17" y="57" width="11" height="9"/><rect x="30" y="57" width="11" height="9"/><rect x="43" y="57" width="11" height="9"/><rect x="56" y="57" width="7" height="9"/>
+    <rect x="17" y="68" width="11" height="9"/><rect x="30" y="68" width="11" height="9"/><rect x="43" y="68" width="11" height="9"/><rect x="56" y="68" width="7" height="9"/>
+  </g>
+  <text x="86" y="55" fill="#cdd6e0" font-size="12">the WHOLE sheet</text>
+  <text x="86" y="72" fill="#e05050" font-size="11">unreadable at 24 px</text>
+</svg>
+</div>
+<div class="card" style="flex:1 1 260px">
+<h3>After <span class="badge">first frame</span></h3>
+<svg viewBox="0 0 260 120" width="100%">
+  <rect width="260" height="120" fill="#0a0b0e"/>
+  <rect x="14" y="34" width="52" height="52" fill="#14161c" stroke="#66bb6a"/>
+  <g fill="#66bb6a" opacity=".9">
+    <rect x="30" y="42" width="20" height="12"/><rect x="26" y="54" width="28" height="16"/>
+    <rect x="30" y="70" width="8" height="8"/><rect x="42" y="70" width="8" height="8"/>
+  </g>
+  <text x="86" y="55" fill="#cdd6e0" font-size="12">frame 1 of the animation</text>
+  <text x="86" y="72" fill="#8090a0" font-size="11">= sheetFrameRects(...)[0]</text>
+</svg>
+</div>
+</div>
+<table>
+<tr><th>site</th><th>before</th><th>after</th></tr>
+<tr><td>list-row thumbnail (24 px)</td><td>whole sheet</td><td>frame 1</td></tr>
+<tr><td>detail-editor image (48 px)</td><td>whole sheet</td><td>frame 1</td></tr>
+<tr><td><code>SpriteBgPicker</code> (chroma key)</td><td>whole sheet</td><td>frame 1 — the key colour is picked off REAL frame pixels</td></tr>
+</table>
+<p class="mut">"Frame 1" is the first cell of the <b>animation SELECTION</b>, not cell 0 — a hand-picked
+selection previews what actually plays first. ONE shared <code>SpriteFramePreview</code> serves all
+three sites (never three ad-hoc crops). A <code>frames</code> sequence uses <code>frames[0]</code>;
+a plain image is unchanged; an animated GIF/WebP keeps animating in an <code>&lt;img&gt;</code>.
+Chroma-key processing is deliberately NOT applied here — the picker must show the raw key colour.</p>
+
+</div></body></html>
