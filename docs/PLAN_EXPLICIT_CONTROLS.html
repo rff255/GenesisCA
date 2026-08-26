@@ -1,0 +1,431 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Plan — Explicit Controls for Macros</title>
+<style>
+  :root{
+    --bg:#0c0d10; --panel:#16181d; --panel2:#1c1f26; --line:#2a2f3a;
+    --ink:#e6e8ee; --dim:#9aa2b1; --faint:#6c7484;
+    --accent:#e8a13a; --accent-soft:rgba(232,161,58,.14);
+    --ok:#4caf7d; --warn:#e0a83a; --bad:#e06666; --info:#4cc9f0; --violet:#9b7bd4;
+    --mono:ui-monospace,SFMono-Regular,"Cascadia Mono",Consolas,monospace;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font:15px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+    padding:32px 20px 80px}
+  .wrap{max-width:1080px;margin:0 auto}
+  h1{font-size:26px;margin:0 0 6px;letter-spacing:-.2px}
+  h2{font-size:19px;margin:44px 0 14px;padding-bottom:8px;border-bottom:1px solid var(--line);color:var(--accent)}
+  h3{font-size:14.5px;margin:26px 0 8px;color:var(--ink)}
+  p{margin:10px 0}
+  .sub{color:var(--dim);margin:0 0 26px;font-size:14px}
+  code,.mono{font-family:var(--mono);font-size:12.5px}
+  code{background:var(--panel2);border:1px solid var(--line);border-radius:4px;padding:1px 5px;color:#d8c6a0}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:16px 20px;margin:16px 0}
+  .note{border-left:3px solid var(--accent);background:var(--accent-soft);border-radius:0 8px 8px 0;padding:11px 15px;margin:14px 0;font-size:13.5px}
+  .bad-note{border-left:3px solid var(--bad);background:rgba(224,102,102,.10);border-radius:0 8px 8px 0;padding:11px 15px;margin:14px 0;font-size:13.5px}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:18px}
+  @media(max-width:880px){.grid2{grid-template-columns:1fr}}
+  .tag{display:inline-block;font-size:10.5px;letter-spacing:.4px;text-transform:uppercase;
+    padding:2px 8px;border-radius:999px;border:1px solid var(--line);color:var(--dim);background:var(--panel2)}
+  .tag.ok{color:var(--ok);border-color:rgba(76,175,125,.4)}
+  .tag.bad{color:var(--bad);border-color:rgba(224,102,102,.4)}
+  .tag.warn{color:var(--warn);border-color:rgba(224,168,58,.4)}
+  .tag.acc{color:var(--accent);border-color:rgba(232,161,58,.45)}
+  table{border-collapse:collapse;width:100%;font-size:13.5px;margin:12px 0}
+  th,td{border:1px solid var(--line);padding:7px 10px;text-align:left;vertical-align:top}
+  th{background:var(--panel2);color:var(--dim);font-weight:600;font-size:12.5px}
+  svg{display:block;max-width:100%;height:auto;margin:6px auto}
+  .cap{text-align:center;color:var(--faint);font-size:12px;margin:2px 0 18px}
+  /* ---------- mock node UI ---------- */
+  .node{background:var(--panel);border:1px solid var(--line);border-radius:8px;
+    box-shadow:0 10px 30px rgba(0,0,0,.45);overflow:hidden;width:100%;max-width:330px;margin:0 auto}
+  .node.wide{max-width:400px}
+  .node-hd{padding:7px 11px;font-size:12.5px;font-weight:600;display:flex;align-items:center;gap:7px}
+  .node-hd.white{background:#f2f3f6;color:#1e2a3a}
+  .node-hd.macro{background:#00897b;color:#eafaf7}
+  .node-bd{padding:8px 11px 11px;display:flex;flex-direction:column;gap:6px}
+  .badge{background:rgba(0,0,0,.18);border-radius:999px;font-size:10px;padding:1px 6px;font-weight:600}
+  .badge.link{background:var(--accent-soft);color:var(--accent);border:1px solid rgba(232,161,58,.4)}
+  .sect{font-size:9.5px;text-transform:uppercase;letter-spacing:.7px;color:var(--faint);
+    margin:8px 0 1px;padding-bottom:3px;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;align-items:center}
+  .r{display:flex;gap:4px;align-items:center;font-size:11.5px}
+  .r .lbl{flex:1;color:var(--dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .fld{background:var(--panel2);border:1px solid var(--line);border-radius:4px;padding:2px 6px;
+    font-size:11px;color:var(--ink);min-width:0}
+  .fld.grow{flex:1}
+  .fld.num{width:56px;text-align:right;font-family:var(--mono)}
+  .fld.sel{padding-right:16px;position:relative;color:var(--ink)}
+  .fld.sel::after{content:"▾";position:absolute;right:4px;top:1px;color:var(--faint);font-size:9px}
+  .fld.dis{opacity:.42}
+  .ib{background:none;border:none;color:var(--faint);cursor:pointer;font-size:11px;padding:0 2px}
+  .ib.del{color:var(--bad)}
+  .ib.edit{color:var(--info)}
+  .addbtn{background:var(--panel2);border:1px solid var(--line);border-radius:4px;
+    font-size:11px;color:var(--dim);text-align:center;padding:3px 0;margin-top:2px}
+  .addbtn.acc{color:var(--accent);border-color:rgba(232,161,58,.35);background:var(--accent-soft)}
+  .subttl{font-family:var(--mono);font-size:10px;color:var(--faint);padding-left:2px;margin-top:-3px}
+  .subttl.bad{color:var(--bad)}
+  .chk{width:11px;height:11px;border:1px solid var(--line);border-radius:2px;background:var(--panel2);
+    display:inline-block;position:relative}
+  .chk.on{background:var(--accent);border-color:var(--accent)}
+  .chk.on::after{content:"✓";position:absolute;left:1px;top:-3px;font-size:9px;color:#20160a;font-weight:700}
+  .pill{display:inline-block;font-size:10px;color:var(--bad);background:rgba(224,102,102,.12);
+    border:1px solid rgba(224,102,102,.3);border-radius:999px;padding:0 6px}
+  ul.tight{margin:8px 0;padding-left:20px}
+  ul.tight li{margin:5px 0}
+  .phase{display:grid;grid-template-columns:52px 1fr;gap:12px;align-items:start;
+    padding:11px 0;border-bottom:1px solid rgba(42,47,58,.6)}
+  .phase:last-child{border-bottom:none}
+  .pn{font-family:var(--mono);font-size:13px;color:var(--accent);font-weight:700}
+  .phase .pt{font-size:14px;font-weight:600;margin-bottom:2px}
+  .phase .pd{font-size:13px;color:var(--dim)}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>Explicit Controls for Macros</h1>
+<p class="sub">Plan &middot; branch <code>explicit_controls</code> &middot; companion to
+<span class="mono">IMPACT_MAP_EXPLICIT_CONTROLS.md</span> and
+<span class="mono">PLAN_EXPLICIT_CONTROLS.md</span></p>
+
+<h2>1 &nbsp;What it is</h2>
+<div class="card">
+<p style="margin-top:0">A macro already externalises <b>connections</b>. Everything else it carries — the
+inline number/bool/tag boxes, the Expression formula, the op dropdowns, the attribute
+pickers — is reachable <b>only by opening the macro and understanding its internals</b>.</p>
+<p><b>Explicit Controls</b> let the author promote any of those in-node parameters to a
+<b>named control on the closed instance</b>, and organise ports and controls into
+<b>groups</b> — so a ready-made macro is tunable without opening it.</p>
+<p style="margin-bottom:0">The structural bet: a control is a <b>REMOTE CONTROL, not a copy</b>. It stores a
+<i>pointer</i> to an existing config key, never a second value — so the whole feature is
+metadata beside <code>nodes</code>/<code>edges</code> and <b>no compiler learns it
+exists</b>.</p>
+</div>
+
+<h2>2 &nbsp;The UX</h2>
+
+<h3>(a) The macro interface editor &mdash; on the boundary node, where ports already live</h3>
+<div class="grid2">
+  <div>
+    <div class="node">
+      <div class="node-hd white">Macro Interface (In)</div>
+      <div class="node-bd">
+        <div class="sect"><span>Ports</span></div>
+        <div class="r"><span class="fld grow">Source</span><span class="fld sel" style="width:44px">Val</span><span class="fld sel" style="width:62px">Tuning</span><button class="ib del">×</button></div>
+        <div class="r"><span class="fld grow">Trigger</span><span class="fld sel" style="width:44px">Flow</span><span class="fld sel" style="width:62px">(none)</span><button class="ib del">×</button></div>
+        <div class="addbtn">+ Add Port</div>
+
+        <div class="sect"><span>Explicit Parameters</span></div>
+        <div class="r"><span class="fld grow">Diffusion rate</span><span class="fld sel" style="width:62px">Tuning</span><button class="ib edit">✎</button><button class="ib del">×</button></div>
+        <div class="subttl">Get Random · Max</div>
+        <div class="r"><span class="fld grow">Wrap edges</span><span class="fld sel" style="width:62px">Tuning</span><button class="ib edit">✎</button><button class="ib del">×</button></div>
+        <div class="subttl">Switch · First match only</div>
+        <div class="r"><span class="fld grow">Falloff</span><span class="fld sel" style="width:62px">Advanced</span><button class="ib edit">✎</button><button class="ib del">×</button></div>
+        <div class="subttl bad">its target node was deleted</div>
+        <div class="addbtn acc">+ Explicit Parameter</div>
+
+        <div class="sect"><span>Groups</span></div>
+        <div class="r"><span class="fld grow">Tuning</span><button class="ib del">×</button></div>
+        <div class="r"><span class="fld grow">Advanced</span><button class="ib del">×</button></div>
+        <div class="addbtn">+ Group</div>
+      </div>
+    </div>
+    <p class="cap">Rows mirror the existing port rows exactly.</p>
+  </div>
+  <div>
+    <p style="margin-top:0"><span class="tag acc">One surface</span> The interface editor is the boundary node's
+    existing port editor, extended. No second panel, no new place to look.</p>
+    <ul class="tight">
+      <li>The <span class="mono">mono</span> subtitle is the <b>bound target</b>, resolved live —
+      <span class="mono">Get&nbsp;Random&nbsp;·&nbsp;Max</span>. An unresolvable target shows its
+      <b style="color:var(--bad)">reason</b> there instead.</li>
+      <li><b>✎ Edit</b> re-enters pick mode to re-bind an existing control, keeping its name,
+      id and group.</li>
+      <li>Assigning a <b>port</b> to a group <b>reorders</b> <code>exposedInputs</code> so the
+      handle order matches the display order — and <b>touches no edge</b> (the bridge matches
+      by <code>portId</code>, never by index).</li>
+      <li>Deleting a group <b>clears</b> its members' <code>groupId</code>; it deletes nothing.</li>
+    </ul>
+  </div>
+</div>
+
+<h3>(b) Pick mode &mdash; click a parameter to bind it</h3>
+<svg viewBox="0 0 980 330" role="img" aria-label="Pick mode: canvas nodes with eligible parameters highlighted">
+  <defs>
+    <filter id="glow" x="-60%" y="-60%" width="220%" height="220%">
+      <feGaussianBlur stdDeviation="3" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+  <rect x="0" y="0" width="980" height="330" fill="#0f1116" rx="8"/>
+  <!-- faint canvas dots -->
+  <g fill="#1e222b">
+    <circle cx="60" cy="60" r="1.4"/><circle cx="140" cy="60" r="1.4"/><circle cx="220" cy="60" r="1.4"/>
+    <circle cx="300" cy="60" r="1.4"/><circle cx="380" cy="60" r="1.4"/><circle cx="460" cy="60" r="1.4"/>
+    <circle cx="540" cy="60" r="1.4"/><circle cx="620" cy="60" r="1.4"/><circle cx="700" cy="60" r="1.4"/>
+    <circle cx="780" cy="60" r="1.4"/><circle cx="860" cy="60" r="1.4"/><circle cx="60" cy="150" r="1.4"/>
+    <circle cx="140" cy="150" r="1.4"/><circle cx="300" cy="150" r="1.4"/><circle cx="620" cy="150" r="1.4"/>
+    <circle cx="860" cy="150" r="1.4"/><circle cx="60" cy="245" r="1.4"/><circle cx="380" cy="245" r="1.4"/>
+    <circle cx="700" cy="245" r="1.4"/><circle cx="860" cy="245" r="1.4"/>
+  </g>
+
+  <!-- hint bar -->
+  <rect x="250" y="14" width="480" height="30" rx="15" fill="rgba(232,161,58,.14)" stroke="#e8a13a" stroke-width="1"/>
+  <text x="490" y="34" text-anchor="middle" fill="#e8a13a" font-family="-apple-system,Segoe UI,sans-serif" font-size="13" font-weight="600">
+    Pick a parameter to bind &nbsp;·&nbsp; Esc to cancel
+  </text>
+
+  <!-- NODE 1: Get Random (class A — real inline widgets outlined in place) -->
+  <g>
+    <rect x="40" y="80" width="230" height="128" rx="7" fill="#16181d" stroke="#e8a13a" stroke-width="1.6" opacity=".9"/>
+    <rect x="40" y="80" width="230" height="24" rx="7" fill="#4a6fa5"/>
+    <rect x="40" y="97" width="230" height="7" fill="#4a6fa5"/>
+    <text x="52" y="97" fill="#eaf1fb" font-family="-apple-system,Segoe UI,sans-serif" font-size="11.5" font-weight="600">Get Random</text>
+    <!-- port rows with inline widgets -->
+    <circle cx="40" cy="126" r="4" fill="#4cc9f0"/>
+    <text x="52" y="130" fill="#9aa2b1" font-family="-apple-system,Segoe UI,sans-serif" font-size="10.5">Min</text>
+    <g filter="url(#glow)">
+      <rect x="188" y="117" width="70" height="18" rx="4" fill="#1c1f26" stroke="#e8a13a" stroke-width="2"/>
+    </g>
+    <text x="250" y="130" text-anchor="end" fill="#d8c6a0" font-family="ui-monospace,monospace" font-size="10.5">0</text>
+
+    <circle cx="40" cy="156" r="4" fill="#4cc9f0"/>
+    <text x="52" y="160" fill="#9aa2b1" font-family="-apple-system,Segoe UI,sans-serif" font-size="10.5">Max</text>
+    <g filter="url(#glow)">
+      <rect x="188" y="147" width="70" height="18" rx="4" fill="#1c1f26" stroke="#e8a13a" stroke-width="2"/>
+    </g>
+    <text x="250" y="160" text-anchor="end" fill="#d8c6a0" font-family="ui-monospace,monospace" font-size="10.5">1</text>
+
+    <circle cx="40" cy="186" r="4" fill="#4cc9f0"/>
+    <text x="52" y="190" fill="#9aa2b1" font-family="-apple-system,Segoe UI,sans-serif" font-size="10.5">Seed</text>
+    <line x1="10" y1="186" x2="36" y2="186" stroke="#4cc9f0" stroke-width="1.6"/>
+    <text x="250" y="190" text-anchor="end" fill="#6c7484" font-family="-apple-system,Segoe UI,sans-serif" font-size="10" font-style="italic">wired</text>
+    <circle cx="270" cy="126" r="4" fill="#4cc9f0"/>
+  </g>
+  <text x="155" y="230" text-anchor="middle" fill="#e8a13a" font-family="-apple-system,Segoe UI,sans-serif" font-size="11" font-weight="600">CLASS A</text>
+  <text x="155" y="246" text-anchor="middle" fill="#6c7484" font-family="-apple-system,Segoe UI,sans-serif" font-size="10.5">the real inline widget, outlined in place</text>
+  <text x="155" y="262" text-anchor="middle" fill="#6c7484" font-family="-apple-system,Segoe UI,sans-serif" font-size="10.5">(a wired port is offered but will read</text>
+  <text x="155" y="276" text-anchor="middle" fill="#6c7484" font-family="-apple-system,Segoe UI,sans-serif" font-size="10.5">&ldquo;wired inside the macro&rdquo;)</text>
+
+  <!-- NODE 2: Switch (class B — resolver-driven overlay list) -->
+  <g>
+    <rect x="370" y="80" width="240" height="150" rx="7" fill="#16181d" stroke="#e8a13a" stroke-width="1.6" opacity=".9"/>
+    <rect x="370" y="80" width="240" height="24" rx="7" fill="#8d6e63"/>
+    <rect x="370" y="97" width="240" height="7" fill="#8d6e63"/>
+    <text x="382" y="97" fill="#f6eeea" font-family="-apple-system,Segoe UI,sans-serif" font-size="11.5" font-weight="600">Switch</text>
+    <rect x="378" y="112" width="224" height="110" rx="5" fill="rgba(232,161,58,.10)" stroke="rgba(232,161,58,.45)" stroke-width="1"/>
+    <text x="388" y="126" fill="#6c7484" font-family="-apple-system,Segoe UI,sans-serif" font-size="9" letter-spacing="1">ELIGIBLE PARAMETERS</text>
+    <g font-family="-apple-system,Segoe UI,sans-serif" font-size="10.5">
+      <rect x="386" y="132" width="208" height="20" rx="4" fill="#1c1f26" stroke="#2a2f3a"/>
+      <text x="394" y="146" fill="#e6e8ee">Mode</text><text x="586" y="146" text-anchor="end" fill="#d8c6a0" font-family="ui-monospace,monospace">value</text>
+      <rect x="386" y="156" width="208" height="20" rx="4" fill="#1c1f26" stroke="#e8a13a" stroke-width="1.6"/>
+      <text x="394" y="170" fill="#e6e8ee">First match only</text><text x="586" y="170" text-anchor="end" fill="#d8c6a0" font-family="ui-monospace,monospace">true</text>
+      <rect x="386" y="180" width="208" height="20" rx="4" fill="#1c1f26" stroke="#2a2f3a"/>
+      <text x="394" y="194" fill="#e6e8ee">Value type</text><text x="586" y="194" text-anchor="end" fill="#d8c6a0" font-family="ui-monospace,monospace">integer</text>
+      <rect x="386" y="204" width="208" height="14" rx="3" fill="none"/>
+      <text x="394" y="215" fill="#6c7484" font-size="9.5" font-style="italic">Case count — structural, not offered</text>
+    </g>
+  </g>
+  <text x="490" y="252" text-anchor="middle" fill="#e8a13a" font-family="-apple-system,Segoe UI,sans-serif" font-size="11" font-weight="600">CLASS B / C</text>
+  <text x="490" y="268" text-anchor="middle" fill="#6c7484" font-family="-apple-system,Segoe UI,sans-serif" font-size="10.5">an overlay list rendered FROM the resolver —</text>
+  <text x="490" y="282" text-anchor="middle" fill="#6c7484" font-family="-apple-system,Segoe UI,sans-serif" font-size="10.5">it cannot offer what the resolver does not know</text>
+
+  <!-- NODE 3: nested macro instance -->
+  <g>
+    <rect x="710" y="80" width="230" height="118" rx="7" fill="#16181d" stroke="#e8a13a" stroke-width="1.6" opacity=".9"/>
+    <rect x="710" y="80" width="230" height="24" rx="7" fill="#00897b"/>
+    <rect x="710" y="97" width="230" height="7" fill="#00897b"/>
+    <text x="722" y="97" fill="#eafaf7" font-family="-apple-system,Segoe UI,sans-serif" font-size="11.5" font-weight="600">Blur (Macro)</text>
+    <rect x="718" y="112" width="214" height="78" rx="5" fill="rgba(155,123,212,.10)" stroke="rgba(155,123,212,.5)" stroke-width="1"/>
+    <text x="728" y="126" fill="#6c7484" font-family="-apple-system,Segoe UI,sans-serif" font-size="9" letter-spacing="1">ITS OWN CONTROLS</text>
+    <g font-family="-apple-system,Segoe UI,sans-serif" font-size="10.5">
+      <rect x="726" y="132" width="198" height="20" rx="4" fill="#1c1f26" stroke="#9b7bd4" stroke-width="1.6"/>
+      <text x="734" y="146" fill="#e6e8ee">Kernel radius</text><text x="916" y="146" text-anchor="end" fill="#d8c6a0" font-family="ui-monospace,monospace">3</text>
+      <rect x="726" y="156" width="198" height="20" rx="4" fill="#1c1f26" stroke="#2a2f3a"/>
+      <text x="734" y="170" fill="#e6e8ee">Passes</text><text x="916" y="170" text-anchor="end" fill="#d8c6a0" font-family="ui-monospace,monospace">2</text>
+    </g>
+  </g>
+  <text x="825" y="220" text-anchor="middle" fill="#9b7bd4" font-family="-apple-system,Segoe UI,sans-serif" font-size="11" font-weight="600">CHAINING</text>
+  <text x="825" y="236" text-anchor="middle" fill="#6c7484" font-family="-apple-system,Segoe UI,sans-serif" font-size="10.5">a nested macro's control is itself</text>
+  <text x="825" y="250" text-anchor="middle" fill="#6c7484" font-family="-apple-system,Segoe UI,sans-serif" font-size="10.5">a bindable target — resolution recurses,</text>
+  <text x="825" y="264" text-anchor="middle" fill="#6c7484" font-family="-apple-system,Segoe UI,sans-serif" font-size="10.5">cycle-guarded, to the ultimate config key</text>
+</svg>
+<p class="cap">Pick mode is entered from the interface editor, so the eligible nodes are already on screen. Esc cancels; a scope change, an unmount or a model load auto-cancels.</p>
+
+<h3>(c) The closed instance &mdash; the interface, without opening the macro</h3>
+<div class="grid2">
+  <div>
+    <div class="node wide">
+      <div class="node-hd macro">Reaction–Diffusion <span class="badge">MACRO</span><span style="flex:1"></span><span class="badge link">⛓ 2</span></div>
+      <div class="node-bd">
+        <div class="r"><span style="color:#4cc9f0">●</span><span class="lbl">Source</span><span style="flex:1"></span><span class="lbl" style="text-align:right">Field ●</span><span style="color:#4cc9f0"></span></div>
+        <div class="r"><span style="color:#66bb6a">▶</span><span class="lbl">Trigger</span><span style="flex:1"></span><span class="lbl" style="text-align:right">Done ▶</span></div>
+
+        <div class="sect"><span>Tuning</span></div>
+        <div class="r"><span class="lbl">Diffusion rate</span><span class="fld num">0.24</span></div>
+        <div class="r"><span class="lbl">Kernel</span><span class="fld sel" style="width:96px">Moore</span></div>
+        <div class="r"><span class="lbl">Wrap edges</span><span class="chk on"></span></div>
+
+        <div class="sect"><span>Advanced</span></div>
+        <div class="r"><span class="lbl">Feed attribute</span><span class="fld sel" style="width:96px">chemical</span></div>
+        <div class="r"><span class="lbl" style="opacity:.5">Seed</span><span class="fld num dis">1</span></div>
+        <div class="subttl" style="color:var(--warn)">wired inside the macro</div>
+      </div>
+    </div>
+    <p class="cap">Rows sit in the node BODY. Handles are absolutely-positioned siblings, so body height moves no handle &mdash; and no <code>updateNodeInternals</code> is needed.</p>
+  </div>
+  <div>
+    <p style="margin-top:0"><span class="tag warn">⛓ 2</span> The linked-copy badge sits beside the section header, because
+    <b>two linked instances share one value</b> (see §3). Per-instance variation is already a
+    first-class action: right-click → <b>Duplicate → Duplicate Independent</b>.</p>
+    <p>An <b>empty interface renders no section at all</b>; a <b>collapsed</b> node renders no
+    controls — consistent with every other body widget.</p>
+    <p style="margin-bottom:6px"><b>Report, never drop.</b> A control that cannot resolve is rendered
+    <b>disabled with its reason</b> and badges the instance. It is never silently deleted and
+    never silently applied:</p>
+    <table style="margin-top:6px">
+      <tr><td><span class="pill">wired</span></td><td>wired inside the macro</td></tr>
+      <tr><td><span class="pill">orphan</span></td><td>its target node was deleted inside the macro</td></tr>
+      <tr><td><span class="pill">orphan</span></td><td>the macro's control this points at was removed</td></tr>
+      <tr><td><span class="pill">cycle</span></td><td>circular reference</td></tr>
+      <tr><td><span class="pill">scope</span></td><td>the macro is open for editing — edit it there</td></tr>
+    </table>
+  </div>
+</div>
+
+<h2>3 &nbsp;The core decisions</h2>
+<div class="card">
+<table>
+<tr><th style="width:210px">Decision</th><th>In one or two sentences</th></tr>
+<tr><td><b>Def-level storage</b><br><span class="tag ok">D1</span></td>
+  <td>The value lives in <code>def.nodes[k].data.config[key]</code> and the control points at it — <b>one storage location</b>, which is the only self-consistent reading of &ldquo;change either, the other shows it&rdquo;. Consequence, shown on the instance by the ⛓ badge: <b>two linked copies share the value</b>; per-instance variation is <b>Duplicate Independent</b>, exactly as documented for macro internals today.</td></tr>
+<tr><td><b>The widget kind is derived live</b><br><span class="tag ok">D2</span></td>
+  <td>Nothing about the widget is stored — the resolver reads <code>(nodeType, config, key)</code> at render time. A stored kind would show the wrong editor after a live retype (Set Attribute's value box flips bool↔tag↔number with the picked attribute) and write a wrong-typed value with <b>no error anywhere</b>.</td></tr>
+<tr><td><b>Three eligible classes</b><br><span class="tag ok">D3</span></td>
+  <td><b>A</b> every inline port widget (~148) &middot; <b>B</b> the ~60 scalar config keys (enums, checkboxes, body numbers, the Expression formula) &middot; <b>C</b> the ~11 model-element pickers. <b>Out</b>: count steppers (they change which PORTS the node has — a consumer must not be able to break the wiring), multi-key editors (gradient stops, palettes, RGB triples), and the two key shapes the machinery renames or permutes.</td></tr>
+<tr><td><b>Chaining, cycle-guarded</b><br><span class="tag ok">D4</span></td>
+  <td>A control may point at a <b>nested macro instance's own control</b>; resolution recurses to the ultimate config key with a <code>seen</code> set and a depth cap of 20, mirroring the three guards already in the codebase. A cycle or a removed inner control resolves to a reason, never to a guess.</td></tr>
+<tr><td><b>Groups are display metadata</b><br><span class="tag ok">D5</span></td>
+  <td>An ordered list on the def; ports and controls carry a <code>groupId</code>. Grouping a <b>port</b> reorders <code>exposedInputs</code> so the handle order matches — and <b>no edge is touched</b>, because the macro bridge matches by <code>portId</code>, never by index. Absent groups ⇒ flat, byte-for-byte today's rendering.</td></tr>
+<tr><td><b>Zero compiler impact</b><br><span class="tag ok">D7</span></td>
+  <td>A control is metadata beside <code>nodes</code>/<code>edges</code>. <code>expandMacros</code> copies internal nodes verbatim and accessor-CSE hashes node configs — a control record is not in a node config at all. <b>Proven, not assumed</b>: a harness tier compiles the same def with and without the records and asserts byte-identical JS / WASM / WGSL.</td></tr>
+</table>
+</div>
+
+<div class="bad-note"><b>The one thing most likely to go wrong.</b>
+<code>cloneMacroWithFreshIds</code> returns a hand-written 6-field literal with <b>no spread</b>
+— so a new field is <b>silently dropped</b> on every import, paste and Make-Independent-Copy.
+Forget it and the feature works perfectly in the session that authored the macro and is
+<b>empty everywhere else</b>, with no error, no badge and no console line. Remap the target's
+node id <i>wrongly</i> and it is worse: the control resolves to a different node and edits the
+wrong parameter. <b>Its test and its source-mutation negative control are written before the fix.</b></div>
+
+<h2>4 &nbsp;The sync model &mdash; one storage location</h2>
+<svg viewBox="0 0 940 250" role="img" aria-label="Sync model: instance widget and internal widget both read and write one config key">
+  <rect x="0" y="0" width="940" height="250" fill="#0f1116" rx="8"/>
+
+  <!-- instance -->
+  <rect x="40" y="66" width="230" height="118" rx="8" fill="#16181d" stroke="#2a2f3a"/>
+  <rect x="40" y="66" width="230" height="26" rx="8" fill="#00897b"/><rect x="40" y="84" width="230" height="8" fill="#00897b"/>
+  <text x="54" y="84" fill="#eafaf7" font-family="-apple-system,Segoe UI,sans-serif" font-size="11.5" font-weight="600">Closed instance</text>
+  <text x="54" y="118" fill="#9aa2b1" font-family="-apple-system,Segoe UI,sans-serif" font-size="11">Diffusion rate</text>
+  <rect x="196" y="106" width="60" height="18" rx="4" fill="#1c1f26" stroke="#e8a13a"/>
+  <text x="248" y="119" text-anchor="end" fill="#d8c6a0" font-family="ui-monospace,monospace" font-size="10.5">0.24</text>
+  <text x="54" y="150" fill="#6c7484" font-family="-apple-system,Segoe UI,sans-serif" font-size="10">a second LINKED instance</text>
+  <text x="54" y="164" fill="#6c7484" font-family="-apple-system,Segoe UI,sans-serif" font-size="10">shows the same value</text>
+
+  <!-- store -->
+  <rect x="352" y="52" width="236" height="146" rx="10" fill="rgba(232,161,58,.10)" stroke="#e8a13a" stroke-width="1.6"/>
+  <text x="470" y="76" text-anchor="middle" fill="#e8a13a" font-family="-apple-system,Segoe UI,sans-serif" font-size="11" font-weight="700" letter-spacing=".6">THE ONE STORAGE LOCATION</text>
+  <rect x="370" y="90" width="200" height="52" rx="6" fill="#1c1f26" stroke="#2a2f3a"/>
+  <text x="380" y="108" fill="#d8c6a0" font-family="ui-monospace,monospace" font-size="10">def.nodes[k]</text>
+  <text x="380" y="122" fill="#d8c6a0" font-family="ui-monospace,monospace" font-size="10">  .data.config</text>
+  <text x="380" y="136" fill="#d8c6a0" font-family="ui-monospace,monospace" font-size="10">    ._port_max = "0.24"</text>
+  <text x="470" y="164" text-anchor="middle" fill="#9aa2b1" font-family="-apple-system,Segoe UI,sans-serif" font-size="10.5">the control stores only a POINTER:</text>
+  <text x="470" y="180" text-anchor="middle" fill="#d8c6a0" font-family="ui-monospace,monospace" font-size="10">{ nodeId, configKey }</text>
+
+  <!-- internal -->
+  <rect x="670" y="66" width="230" height="118" rx="8" fill="#16181d" stroke="#2a2f3a"/>
+  <rect x="670" y="66" width="230" height="26" rx="8" fill="#4a6fa5"/><rect x="670" y="84" width="230" height="8" fill="#4a6fa5"/>
+  <text x="684" y="84" fill="#eaf1fb" font-family="-apple-system,Segoe UI,sans-serif" font-size="11.5" font-weight="600">Get Random (inside)</text>
+  <text x="684" y="118" fill="#9aa2b1" font-family="-apple-system,Segoe UI,sans-serif" font-size="11">Max</text>
+  <rect x="826" y="106" width="60" height="18" rx="4" fill="#1c1f26" stroke="#2a2f3a"/>
+  <text x="878" y="119" text-anchor="end" fill="#d8c6a0" font-family="ui-monospace,monospace" font-size="10.5">0.24</text>
+  <text x="684" y="150" fill="#6c7484" font-family="-apple-system,Segoe UI,sans-serif" font-size="10">the author's original widget,</text>
+  <text x="684" y="164" fill="#6c7484" font-family="-apple-system,Segoe UI,sans-serif" font-size="10">unchanged</text>
+
+  <!-- arrows -->
+  <g stroke="#e8a13a" stroke-width="1.8" fill="none">
+    <path d="M274 108 L346 108" marker-end="url(#ah)"/>
+    <path d="M346 138 L274 138" marker-end="url(#ah)"/>
+    <path d="M666 108 L594 108" marker-end="url(#ah)"/>
+    <path d="M594 138 L666 138" marker-end="url(#ah)"/>
+  </g>
+  <defs><marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0 0 L10 5 L0 10 z" fill="#e8a13a"/></marker></defs>
+  <text x="310" y="102" text-anchor="middle" fill="#e8a13a" font-family="-apple-system,Segoe UI,sans-serif" font-size="9.5">write</text>
+  <text x="310" y="156" text-anchor="middle" fill="#e8a13a" font-family="-apple-system,Segoe UI,sans-serif" font-size="9.5">read</text>
+  <text x="630" y="102" text-anchor="middle" fill="#e8a13a" font-family="-apple-system,Segoe UI,sans-serif" font-size="9.5">read</text>
+  <text x="630" y="156" text-anchor="middle" fill="#e8a13a" font-family="-apple-system,Segoe UI,sans-serif" font-size="9.5">write</text>
+
+  <text x="470" y="228" text-anchor="middle" fill="#6c7484" font-family="-apple-system,Segoe UI,sans-serif" font-size="11">
+    One value, two editors. Sync is not implemented — it is the absence of a second copy.
+  </text>
+</svg>
+
+<div class="note">An instance-side edit is <b>ONE dispatch</b> (<code>updateMacro(defId, {nodes})</code>,
+built from live context state). Propagation is free: a <code>model.macroDefs</code> change already
+re-renders every macro node, so linked instances and any open editor update on the next paint.
+An in-macro edit reaches the instance through the existing 100&nbsp;ms write-back, and the shallow
+<code>UPDATE_MACRO</code> merge preserves the <code>controls</code> key across it.</div>
+
+<h2>5 &nbsp;Phases</h2>
+<div class="card" style="padding-top:6px;padding-bottom:6px">
+  <div class="phase"><div class="pn">P1</div><div>
+    <div class="pt">Schema, resolver, the clone fix, the harness</div>
+    <div class="pd">The four additive types; <code>explicitControls.ts</code> (eligibility, live-derived
+    widget kind, cycle-guarded resolution, the one-dispatch write builder); the
+    <code>cloneMacroWithFreshIds</code> fix; the adaptive-widget extraction so CaNode calls the
+    resolver back. <b>No UI.</b> Harness tiers A–F, six source mutations.</div></div></div>
+  <div class="phase"><div class="pn">P2</div><div>
+    <div class="pt">Authoring — the interface editor, pick mode, groups</div>
+    <div class="pd">Explicit-Parameter and Group rows on the boundary node; the pick-mode global
+    (the <code>activeGraphKind</code> pub/sub shape) with in-place class-A outlines and
+    resolver-driven class-B overlays; Esc + auto-cancel; group assignment reordering ports with
+    no edge touched.</div></div></div>
+  <div class="phase"><div class="pn">P3</div><div>
+    <div class="pt">Consumption — the closed instance renders its interface</div>
+    <div class="pd">Labelled rows and group headers in the node body, the ⛓ linked badge, every
+    disabled-with-reason state, the orphan roll-up on the amber badge, and the one-dispatch
+    write. Cascade tier + the handle-offset proof (0&nbsp;px movement).</div></div></div>
+  <div class="phase"><div class="pn">P4</div><div>
+    <div class="pt">Class C, chaining UX, M1/M2 interplay, docs</div>
+    <div class="pd">The 32-site model-element picker extraction (one source, so the instance can
+    never offer a list the node cannot use); binding a nested macro's control; verifying macro
+    reference export/import and the cross-tab clipboard need <b>no</b> new pass; the CLAUDE.md +
+    Help sweep; the full gate set.</div></div></div>
+</div>
+
+<h2>6 &nbsp;Top risks</h2>
+<table>
+<tr><th style="width:52px">#</th><th style="width:250px">Risk</th><th>Fails how</th><th style="width:70px">Retired</th></tr>
+<tr><td><b>R1</b></td><td>the clone literal not extended</td><td>every import/paste returns a def with <b>no controls</b> — silently</td><td><span class="tag acc">P1</span></td></tr>
+<tr><td><b>R2</b></td><td>the target node id not remapped</td><td>worse: the control resolves to a <b>different node</b> and edits the wrong parameter</td><td><span class="tag acc">P1</span></td></tr>
+<tr><td><b>R3</b></td><td>a renamed/permuted key gets bound</td><td>the control edits a key nothing reads, or the wrong tag slot</td><td><span class="tag acc">P1</span></td></tr>
+<tr><td><b>R4</b></td><td>a stored widget kind</td><td>a retype leaves the control writing a wrong-typed value</td><td><span class="tag acc">P1</span></td></tr>
+<tr><td><b>R5</b></td><td>class-C list drift after the extraction</td><td>the instance offers a value the node cannot use</td><td><span class="tag acc">P4</span></td></tr>
+<tr><td><b>R6</b></td><td>cross-graph attribute scope</td><td>a universal macro on Cells and Agents offers two lists for one value — <b>pre-existing</b>, degrades loudly</td><td><span class="tag">doc</span></td></tr>
+<tr><td><b>R7</b></td><td>recursion clobber</td><td>an instance edit against the currently-open def is overwritten 100&nbsp;ms later</td><td><span class="tag acc">P3</span></td></tr>
+<tr><td><b>R8</b></td><td>byte-identity drift</td><td>a control record leaks into a config or a purity key</td><td><span class="tag acc">P1</span></td></tr>
+</table>
+
+<p class="sub" style="margin-top:30px">Every phase ends green on <code>tsc</code> + <code>npm run build</code> +
+<code>check-compile-identity --compare</code> (all models, all surfaces unchanged) +
+<code>test-explicit-controls.mjs</code>, with each tier negative-controlled by source mutation.</p>
+
+</div>
+</body>
+</html>
