@@ -1,4 +1,4 @@
-import type { MacroDef, MacroPort, GraphNode, GraphEdge } from './types';
+import type { MacroDef, MacroPort, MacroControl, GraphNode, GraphEdge } from './types';
 import { migrateColorInterpolationInMacroDef } from './colorScaleMigration';
 import { migrateTagConstantInMacroDef } from './tagConstantMigration';
 import { migrateGetRandomRangeInMacroDef } from './getRandomRangeMigration';
@@ -23,6 +23,10 @@ function genId(prefix: string): string {
  *   - every node.id in the subgraph (including group/commentNode children)
  *   - every edge.id, edge.source, edge.target
  *   - MacroPort.internalNodeId references (to keep boundary ports wired)
+ *   - MacroControl.target.nodeId — for BOTH target kinds (Explicit Controls,
+ *     impact-map F1/R2). A control that survives with an UN-remapped nodeId is
+ *     worse than one that vanishes: it resolves to a DIFFERENT internal node and
+ *     silently edits the wrong parameter.
  *
  * Also migrates legacy `data.parentId` group memberships: translates child
  * positions (relative to the group) back to absolute and drops the field.
@@ -32,6 +36,17 @@ function genId(prefix: string): string {
  * MacroPort.portId) are intentionally preserved — they're stable identifiers
  * inside the subgraph and don't collide across macro instances because each
  * MacroDef.id differs.
+ *
+ * PRESERVED for the SAME reason: MacroControl.id, MacroControl.groupId,
+ * MacroInterfaceGroup.id, and a chained target's `controlId` — the last one is a
+ * def-local id an OUTER def names, and both defs are cloned in the same
+ * operation, so preserving it is exactly what keeps the chain resolving.
+ *
+ * ⚠ THE ONE THING MOST LIKELY TO GO WRONG: this is a hand-written object literal
+ * with NO spread of `raw`, on the path of every import, paste and independent
+ * duplicate. A field left off the literal is SILENTLY DROPPED — the macro still
+ * works, the interface is just gone, with no error, no badge and no console line.
+ * Every new MacroDef-level field must be added here.
  */
 export function cloneMacroWithFreshIds(rawIn: MacroDef): MacroDef {
   // Rewrite any legacy colorInterpolation / tagConstant / moveSelfToNeighbor
@@ -94,8 +109,18 @@ export function cloneMacroWithFreshIds(rawIn: MacroDef): MacroDef {
   }));
 
   const remapPort = (p: MacroPort): MacroPort => ({
-    ...p,
+    ...p,                       // carries `groupId` for free
     internalNodeId: idMap.get(p.internalNodeId) ?? p.internalNodeId,
+  });
+
+  // `...c` carries id / name / groupId / description VERBATIM; only the target's
+  // nodeId moves. Both arms remap it: a `config` target names an internal node,
+  // and a `control` target names a nested macro INSTANCE node — both live in
+  // `raw.nodes` and therefore in `idMap`. `configKey` and `controlId` are
+  // preserved (the portId rule — see the doc block above).
+  const remapControl = (c: MacroControl): MacroControl => ({
+    ...c,
+    target: { ...c.target, nodeId: idMap.get(c.target.nodeId) ?? c.target.nodeId },
   });
 
   return {
@@ -105,6 +130,11 @@ export function cloneMacroWithFreshIds(rawIn: MacroDef): MacroDef {
     edges,
     exposedInputs: raw.exposedInputs.map(remapPort),
     exposedOutputs: raw.exposedOutputs.map(remapPort),
+    // Conditional spreads, deliberately: a def with NO controls must clone to a
+    // def with NO `controls` key — not `controls: []` — so "absent ⇒ today's
+    // files, exactly" survives every clone (invariant 8).
+    ...(raw.controls ? { controls: raw.controls.map(remapControl) } : {}),
+    ...(raw.groups ? { groups: raw.groups.map(g => ({ ...g })) } : {}),
   };
 }
 

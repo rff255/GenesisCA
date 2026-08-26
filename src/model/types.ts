@@ -714,6 +714,48 @@ export interface MacroPort {
   category: 'value' | 'flow';
   internalNodeId: string;    // which internal node this maps to
   internalPortId: string;    // which handle on that internal node
+  /** Membership in `MacroDef.groups` (Explicit Controls, D5). Absent ⇒ ungrouped.
+   *  Display metadata ONLY — no compiler reads it. Assigning a port to a group
+   *  REORDERS `exposedInputs`/`exposedOutputs` so the handle order matches the
+   *  displayed order; that is free because every consumer matches by `portId`
+   *  (`expandMacros` L88-95, CaNode's port map, and the `input_value_<portId>`
+   *  edge handles), so no edge is ever touched. */
+  groupId?: string;
+}
+
+/** What an EXPLICIT CONTROL points AT. Never a value — the value lives in the
+ *  target's own config, so there is exactly ONE storage location (D1) and
+ *  "change either side, the other shows it" holds by construction. */
+export type ControlTarget =
+  /** an internal node's config key inside THIS def */
+  | { kind: 'config'; nodeId: string; configKey: string }
+  /** a nested macro INSTANCE's own control — chaining (D4) */
+  | { kind: 'control'; nodeId: string; controlId: string };
+
+/** A parameter of the subgraph promoted to a named control on the CLOSED
+ *  instance — a REMOTE CONTROL, never a copy.
+ *
+ *  ⚠ `id` is def-local and STABLE across clones — the `MacroPort.portId` rule
+ *  (macroImport.ts L31-34): an OUTER def's chained target names it, and both
+ *  defs clone in one operation, so preserving it keeps the chain resolving.
+ *  `target.nodeId` by contrast MUST go through the clone's `idMap`. */
+export interface MacroControl {
+  id: string;
+  /** author-given label shown on the instance */
+  name: string;
+  target: ControlTarget;
+  /** membership in `MacroDef.groups` (D5). Absent ⇒ ungrouped. */
+  groupId?: string;
+  /** optional tooltip */
+  description?: string;
+}
+
+/** A named section of the macro's interface — display metadata only (D5).
+ *  ORDERED: the array order IS the render order of the sections. */
+export interface MacroInterfaceGroup {
+  /** def-local, stable — PRESERVED across clones, like `MacroControl.id`. */
+  id: string;
+  name: string;
 }
 
 /** A reusable macro (subgraph) definition */
@@ -724,6 +766,14 @@ export interface MacroDef {
   edges: GraphEdge[];
   exposedInputs: MacroPort[];
   exposedOutputs: MacroPort[];
+  /** Explicit Controls (D1) — ordered within their group. ABSENT ⇒ today's
+   *  rendering and today's files, exactly; no migration.
+   *  ⚠ Naming rule (R9): `stringifyCompact` inlines an array by its parent KEY
+   *  NAME (`nodes` / `edges` / `coords`), so no sub-array in these records may
+   *  carry one of those names. `controls` / `groups` pretty-print normally. */
+  controls?: MacroControl[];
+  /** The interface's named sections (D5) — ORDERED. */
+  groups?: MacroInterfaceGroup[];
 }
 
 // ---------------------------------------------------------------------------
