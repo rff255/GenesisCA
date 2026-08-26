@@ -57,7 +57,9 @@ export {
   inlineWidgetFor, isExcludedControlKey, elementOptionsFor, describeControlTarget,
   SCALAR_CONFIG_KEYS, CLASS_C_KEYS, CONTROL_BLOCK_REASON, CONTROL_MAX_CHAIN_DEPTH,
   ownAttrListFor, tagAttrScopeFor,
+  orderByGroup, withGroup, applyInterfaceEdit,
 } from '../src/modeler/vpl/explicitControls.ts';
+export { getControlPick, setControlPick, subscribeControlPick } from '../src/modeler/vpl/graphState.ts';
 export { cloneMacroWithFreshIds, countMacroInstances } from '../src/model/macroImport.ts';
 export { serializeModel, parseModelJSON, buildMacroFile, parseMacroFile } from '../src/model/fileOperations.ts';
 export { expandMacros } from '../src/modeler/vpl/compiler/macroExpand.ts';
@@ -336,6 +338,12 @@ console.log('\n--- Tier A: resolution --------------------------------------');
   const sub = M.describeControlTarget(model, 'def_a', ctl('c1', 'C', cfgTarget('rnd', '_port_min')));
   check('A50 describeControlTarget names node + parameter', /Random/i.test(sub.text) && /Min/i.test(sub.text), sub.text);
   check('A51 …and an unresolvable target shows its REASON', M.describeControlTarget(noNode, 'def_a', ctl('c1', 'C', cfgTarget('sa', '_port_value'))).text === M.CONTROL_BLOCK_REASON['orphan-node']);
+  // The node half prefers the author's OWN rename: the editor must name the box
+  // they labelled, not one of the four Compare nodes on the canvas.
+  const renamedNode = withDef(model, { ...defOf(model, 'def_a'), nodes: defOf(model, 'def_a').nodes.map(n => (n.id === 'rnd' ? { ...n, data: { ...n.data, label: 'Jitter' } } : n)) });
+  check('A52 …and it prefers the node\'s USER LABEL over the type label',
+    M.describeControlTarget(renamedNode, 'def_a', ctl('c1', 'C', cfgTarget('rnd', '_port_min'))).text === 'Jitter · Min',
+    M.describeControlTarget(renamedNode, 'def_a', ctl('c1', 'C', cfgTarget('rnd', '_port_min'))).text);
 }
 
 // ===========================================================================
@@ -696,6 +704,235 @@ console.log('\n--- Tier F: EMIT identity (the structural proof, R8) ---------');
   check('F6 NOTHING under compiler/ imports explicitControls', offenders.length === 0, offenders.join(','));
   const ctlMentions = compilerFiles.filter(f => /\bMacroControl\b|\.controls\b/.test(readFile(join(ROOT, f), 'utf8')));
   check('F7 no compiler file reads `.controls`', ctlMentions.length === 0, ctlMentions.join(','));
+}
+
+// ===========================================================================
+console.log('\n--- Tier H: authoring semantics (P2) -------------------------');
+// ===========================================================================
+{
+  const { readFileSync } = await import('fs');
+  const src = f => readFileSync(join(ROOT, f), 'utf8');
+
+  // A def with THREE ports and TWO controls, so an ordering bug is legible.
+  const ifaceDef = () => ({
+    id: 'def_i', name: 'Iface',
+    nodes: [
+      node('mi', 'macroInput', { macroDefId: 'def_i' }),
+      node('rnd', 'getRandom', { randomType: 'float', _port_min: '2', _port_max: '9' }),
+      node('ps', 'periodicStep', { period: 4, phase: 1 }),
+      node('mo', 'macroOutput', { macroDefId: 'def_i' }),
+    ],
+    edges: [edge('ei1', 'mi', 'rnd', 'output_flow_p1', 'input_flow_do')],
+    exposedInputs: [
+      { portId: 'p1', label: 'P1', dataType: 'flow', category: 'flow', internalNodeId: 'rnd', internalPortId: 'do' },
+      { portId: 'p2', label: 'P2', dataType: 'any', category: 'value', internalNodeId: 'rnd', internalPortId: 'min' },
+      { portId: 'p3', label: 'P3', dataType: 'any', category: 'value', internalNodeId: 'rnd', internalPortId: 'max' },
+    ],
+    exposedOutputs: [
+      { portId: 'q1', label: 'Q1', dataType: 'any', category: 'value', internalNodeId: 'rnd', internalPortId: 'value' },
+    ],
+    controls: [
+      ctl('k1', 'Min', cfgTarget('rnd', '_port_min')),
+      ctl('k2', 'Period', cfgTarget('ps', 'period'), { groupId: 'gA' }),
+    ],
+    groups: [{ id: 'gA', name: 'Tuning' }],
+  });
+
+  /** Drive ONE authoring edit the way the editor does: the SHIPPED semantics
+   *  builder, then the REAL reducer. Returns the next model + the def. */
+  const editDef = (model, defId, edit) => {
+    const changes = M.applyInterfaceEdit(defOf(model, defId), edit);
+    const next = M.modelReducer({ model, isDirty: false, modelVersion: 0 },
+      { type: 'UPDATE_MACRO', id: defId, changes }).model;
+    return { model: next, def: defOf(next, defId), changes };
+  };
+  const portIdSet = ps => [...ps.map(p => p.portId)].sort().join(',');
+
+  // --- controls: add / rename / remove ------------------------------------
+  {
+    const m0 = buildModel({ macroDefs: [ifaceDef()] });
+    const base = defOf(m0, 'def_i');
+    const added = editDef(m0, 'def_i', { kind: 'control-add', control: ctl('k3', 'Phase', cfgTarget('ps', 'phase')) });
+    check('H1 add appends exactly one control, in order', eq(added.def.controls.map(c => c.id), ['k1', 'k2', 'k3']));
+    check('H2 …and nothing else on the def moved (===)',
+      added.def.nodes === base.nodes && added.def.edges === base.edges
+      && added.def.exposedInputs === base.exposedInputs && added.def.groups === base.groups);
+    check('H3 …a single dispatch carries ONLY `controls`', eq(Object.keys(added.changes), ['controls']));
+
+    const renamed = editDef(m0, 'def_i', { kind: 'control-rename', controlId: 'k1', name: 'Lower bound' });
+    check('H4 rename changes ONLY the name', renamed.def.controls[0].name === 'Lower bound'
+      && eq(renamed.def.controls[0].target, base.controls[0].target)
+      && renamed.def.controls[0].id === 'k1');
+    check('H5 …and leaves the OTHER control === untouched', renamed.def.controls[1] === base.controls[1]);
+
+    const removed = editDef(m0, 'def_i', { kind: 'control-remove', controlId: 'k1' });
+    check('H6 remove drops exactly that control', eq(removed.def.controls.map(c => c.id), ['k2']));
+
+    // The LAST control removed restores the pristine record shape (invariant 8).
+    const emptied = editDef(removed.model, 'def_i', { kind: 'control-remove', controlId: 'k2' });
+    check('H7 removing the LAST control leaves NO `controls` key', emptied.def.controls === undefined);
+    check('H8 …so it serializes with no key at all',
+      !JSON.stringify(M.serializeModel(emptied.model)).includes('"controls"'));
+    check('H9 …and it clones with no key either (invariant 8)',
+      M.cloneMacroWithFreshIds(emptied.def).controls === undefined);
+  }
+
+  // --- re-binding (the ✎ path) --------------------------------------------
+  {
+    const m0 = buildModel({ macroDefs: [ifaceDef()] });
+    const before = defOf(m0, 'def_i').controls[1];
+    const r = editDef(m0, 'def_i', { kind: 'control-rebind', controlId: 'k2', target: cfgTarget('rnd', '_port_max') });
+    const after = r.def.controls[1];
+    check('H10 re-bind replaces the TARGET', eq(after.target, cfgTarget('rnd', '_port_max')));
+    check('H11 …and PRESERVES id + name + groupId',
+      after.id === before.id && after.name === before.name && after.groupId === before.groupId,
+      JSON.stringify(after));
+    check('H12 …and the control now resolves to the NEW parameter',
+      M.resolveControlDescriptor(r.model, 'def_i', after).value === '9');
+    check('H13 …while the sibling control is === untouched', r.def.controls[0] === defOf(m0, 'def_i').controls[0]);
+  }
+
+  // --- grouping a PORT reorders; NO edge is touched (D5 / F8) --------------
+  {
+    let m = buildModel({ macroDefs: [ifaceDef()] });
+    const base = defOf(m, 'def_i');
+    const edgesJson = JSON.stringify(base.edges);
+    m = editDef(m, 'def_i', { kind: 'group-add', group: { id: 'gB', name: 'Advanced' } }).model;
+    // p1 → gB, p3 → gA  ⇒  [ungrouped p2, gA: p3, gB: p1]
+    m = editDef(m, 'def_i', { kind: 'port-group', side: 'in', portId: 'p1', groupId: 'gB' }).model;
+    const r = editDef(m, 'def_i', { kind: 'port-group', side: 'in', portId: 'p3', groupId: 'gA' });
+    const ins = r.def.exposedInputs;
+    check('H14 the port array is REORDERED [ungrouped…, gA…, gB…]',
+      eq(ins.map(p => p.portId), ['p2', 'p3', 'p1']), ins.map(p => p.portId).join(','));
+    check('H15 …the portId SET is IDENTICAL', portIdSet(ins) === portIdSet(base.exposedInputs));
+    check('H16 …every port object still carries its own label + internal mapping',
+      ins.every(p => base.exposedInputs.some(b => b.portId === p.portId && b.label === p.label && b.internalPortId === p.internalPortId)));
+    check('H17 …`def.edges` is === UNTOUCHED (F8: the bridge matches by portId)',
+      r.def.edges === base.edges && JSON.stringify(r.def.edges) === edgesJson);
+    check('H18 …and the OUTPUT port array is === untouched', r.def.exposedOutputs === base.exposedOutputs);
+    check('H19 …the dispatch carried ONLY `exposedInputs`', eq(Object.keys(r.changes), ['exposedInputs']));
+
+    // Un-grouping DELETES the key — "ungrouped" is the ABSENT state.
+    const un = editDef(r.model, 'def_i', { kind: 'port-group', side: 'in', portId: 'p3', groupId: '' });
+    check('H20 un-grouping removes the groupId KEY (absent ⇒ today\'s files)',
+      !('groupId' in (un.def.exposedInputs.find(p => p.portId === 'p3') ?? { groupId: 1 })));
+    check('H21 …and it moves back to the ungrouped head', eq(un.def.exposedInputs.map(p => p.portId), ['p2', 'p3', 'p1']));
+
+    // The OUTPUT side reorders through the same edit, independently.
+    const outR = editDef(r.model, 'def_i', { kind: 'port-group', side: 'out', portId: 'q1', groupId: 'gA' });
+    check('H22 the OUTPUT array groups independently', outR.def.exposedOutputs[0]?.groupId === 'gA'
+      && outR.def.exposedInputs === r.def.exposedInputs);
+  }
+
+  // --- grouping a CONTROL --------------------------------------------------
+  {
+    let m = buildModel({ macroDefs: [ifaceDef()] });
+    m = editDef(m, 'def_i', { kind: 'group-add', group: { id: 'gB', name: 'Advanced' } }).model;
+    const r = editDef(m, 'def_i', { kind: 'control-group', controlId: 'k1', groupId: 'gB' });
+    check('H23 controls reorder the same way [ungrouped…, gA…, gB…]',
+      eq(r.def.controls.map(c => c.id), ['k2', 'k1']), r.def.controls.map(c => c.id).join(','));
+    check('H24 …the control SET is identical and nothing lost its target',
+      r.def.controls.length === 2 && r.def.controls.every(c => c.target.kind === 'config'));
+  }
+
+  // --- deleting a group CLEARS membership and DELETES NOTHING -------------
+  {
+    let m = buildModel({ macroDefs: [ifaceDef()] });
+    m = editDef(m, 'def_i', { kind: 'port-group', side: 'in', portId: 'p2', groupId: 'gA' }).model;
+    const before = defOf(m, 'def_i');
+    const r = editDef(m, 'def_i', { kind: 'group-remove', groupId: 'gA' });
+    check('H25 the group is gone — and it was the LAST, so no `groups` key', r.def.groups === undefined);
+    // `?? []` throughout: a MUTATION must produce a legible FAIL, never a crash
+    // that hides every later check.
+    const survivors = r.def.controls ?? [];
+    check('H26 …every PORT survives', portIdSet(r.def.exposedInputs) === portIdSet(before.exposedInputs));
+    check('H27 …every CONTROL survives', eq(survivors.map(c => c.id).sort(), ['k1', 'k2']));
+    check('H28 …their groupId KEYS are cleared, not blanked',
+      r.def.exposedInputs.every(p => !('groupId' in p)) && survivors.every(c => !('groupId' in c)));
+    check('H29 …and the controls still resolve',
+      !!survivors[0] && !M.resolveControlDescriptor(r.model, 'def_i', survivors[0]).block);
+  }
+
+  // --- groups: add to a def with NONE / remove the last --------------------
+  {
+    const bare = { ...ifaceDef(), controls: undefined, groups: undefined };
+    const m0 = buildModel({ macroDefs: [bare] });
+    const g = editDef(m0, 'def_i', { kind: 'group-add', group: { id: 'g1', name: 'One' } });
+    check('H30 adding a group to a def with none CREATES the array', eq(g.def.groups, [{ id: 'g1', name: 'One' }]));
+    const gone = editDef(g.model, 'def_i', { kind: 'group-remove', groupId: 'g1' });
+    check('H31 removing the last group leaves NO `groups` key', gone.def.groups === undefined);
+    check('H32 …and no `controls` key is invented for a control-free def', gone.def.controls === undefined);
+    const named = editDef(g.model, 'def_i', { kind: 'group-rename', groupId: 'g1', name: 'Renamed' });
+    check('H33 group rename changes only the name', eq(named.def.groups, [{ id: 'g1', name: 'Renamed' }]));
+  }
+
+  // --- orderByGroup is a TOTAL partition ----------------------------------
+  {
+    const items = [{ groupId: 'x' }, {}, { groupId: 'dead' }, { groupId: 'y' }, { groupId: 'x' }];
+    const out = M.orderByGroup(items, [{ id: 'y', name: 'Y' }, { id: 'x', name: 'X' }]);
+    check('H34 orderByGroup keeps EVERY member exactly once', out.length === items.length
+      && items.every(i => out.filter(o => o === i).length === 1));
+    check('H35 …ungrouped first (a DEAD groupId counts as ungrouped), then groups in order',
+      eq(out.map(o => o.groupId ?? '-'), ['-', 'dead', 'y', 'x', 'x']), JSON.stringify(out));
+    check('H36 …and it is stable within a bucket', out[3] === items[0] && out[4] === items[4]);
+  }
+
+  // --- the P4 class gate ---------------------------------------------------
+  {
+    const model = buildModel();
+    const rows = M.eligibleControlKeys('setAttribute', { attributeId: 'a_count' }, model, undefined, new Set(['A', 'B']));
+    check('H37 with class C excluded there is no `element` row', rows.every(r => r.kind !== 'element' && r.klass !== 'C'));
+    check('H38 …and the A/B rows are still offered', rows.length > 0);
+  }
+
+  // --- pick mode: the module global ---------------------------------------
+  {
+    let hits = 0;
+    const un = M.subscribeControlPick(() => { hits++; });
+    M.setControlPick(null);
+    check('H39 setting null over null does not notify', hits === 0);
+    M.setControlPick({ defId: 'def_i', controlId: 'new' });
+    check('H40 arming notifies and is readable', hits === 1 && M.getControlPick()?.controlId === 'new');
+    M.setControlPick({ defId: 'def_i', controlId: 'new' });
+    check('H41 an EQUAL but fresh object does not notify (memo churn guard)', hits === 1);
+    M.setControlPick({ defId: 'def_i', controlId: 'k1' });
+    check('H42 a DIFFERENT pick notifies', hits === 2 && M.getControlPick()?.controlId === 'k1');
+    M.setControlPick(null);
+    check('H43 cancelling notifies and clears', hits === 3 && M.getControlPick() === null);
+    un();
+    M.setControlPick({ defId: 'x', controlId: 'new' });
+    check('H44 unsubscribing really unsubscribes', hits === 3);
+    M.setControlPick(null);
+  }
+
+  // --- the R10 wiring, pinned in SOURCE (it lives in a React component) ----
+  {
+    const ge = src(join('src', 'modeler', 'vpl', 'GraphEditor.tsx'));
+    // The scope-switch effect's deps carry `modelVersion`, so ONE cancel there
+    // covers a scope change, a graph swap AND a model load.
+    const scopeEffect = ge.slice(ge.indexOf('// Switch displayed graph when scope OR the active graph'));
+    const scopeBody = scopeEffect.slice(0, scopeEffect.indexOf('}, [currentScope, modelVersion, activeGraph]);'));
+    check('H45 pick mode auto-cancels on a scope change / graph swap / model load',
+      scopeBody.includes('setControlPick(null)') && scopeBody.length > 0);
+    check('H46 …and the scope effect really does depend on modelVersion',
+      scopeEffect.includes('}, [currentScope, modelVersion, activeGraph]);'));
+    check('H47 Esc cancels pick mode, capture-phase, and only when armed',
+      /keydown[\s\S]{0,200}?true\)/.test(ge) && ge.includes("if (e.key !== 'Escape' || !getControlPick()) return;"));
+    check('H48 …and the editor is torn down with pick mode cancelled (unmount)',
+      /removeEventListener\('keydown', onKey, true\);\s*setControlPick\(null\);/.test(ge));
+    check('H49 the DEV hook exists (React Flow ignores synthetic pointer events)',
+      ge.includes('__setControlPick'));
+
+    const cn = src(join('src', 'modeler', 'vpl', 'CaNode.tsx'));
+    check('H50 the boundary editor dispatches through the ONE semantics builder',
+      cn.includes('applyInterfaceEdit(macroDefForBoundary, edit)'));
+    check('H51 …and a bind is ONE updateMacro through the same builder',
+      /updateMacro\(pick\.defId, applyInterfaceEdit\(pickDef, edit\)\)/.test(cn));
+    check('H52 pick mode only offers keys `eligibleControlKeys` returned',
+      cn.includes('return eligibleControlKeys(nodeData.nodeType, nodeData.config, model, connectedInputHandles);'));
+    check('H53 …and only for a node that really belongs to the picked def',
+      cn.includes("if (!pickDef || !pickDef.nodes.some(n => n.id === id)) return [];"));
+  }
 }
 
 // ---------------------------------------------------------------------------

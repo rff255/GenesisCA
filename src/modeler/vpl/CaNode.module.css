@@ -385,3 +385,92 @@
 .linkMenuItem:hover {
   background: var(--color-overlay-hover-medium);
 }
+
+/* --- EXPLICIT CONTROLS: the macro interface editor (MacroInput boundary) --- */
+
+/* Section header inside the boundary node's body — "Explicit Parameters" /
+   "Groups". Same visual weight as the node header's label so the three lists
+   (ports / controls / groups) read as siblings. */
+.ifaceHeader {
+  margin-top: var(--space-2);
+  font-size: 0.5rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--color-text-tertiary);
+  user-select: none;
+}
+
+/* The bound target under a control row: `Node label · Parameter label`, or the
+   BLOCK REASON when the target no longer resolves (report, never drop). */
+.ifaceSub {
+  margin: 0 0 var(--space-1) 2px;
+  font-size: 0.5rem;
+  font-family: var(--font-mono, monospace);
+  color: var(--color-text-tertiary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  user-select: none;
+}
+
+/* --- EXPLICIT CONTROLS: pick mode ---------------------------------------- */
+
+/* Class A — the REAL inline widget, outlined IN PLACE and made inert. `outline`
+   (not `border`) so the ring costs no layout: the widget must not move under
+   the cursor when pick mode arms. */
+.pickable {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 1px;
+  border-radius: var(--radius-sm);
+  box-shadow: 0 0 6px var(--color-accent-soft);
+  cursor: pointer;
+}
+
+/* Classes B/C (and any class-A key whose widget is hidden because the port is
+   wired) — a compact list at the top of the body, one row per
+   `eligibleControlKeys` entry. */
+.pickOverlay {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: var(--space-1);
+  border: 1px dashed var(--color-accent);
+  border-radius: var(--radius-sm);
+  background: var(--color-accent-soft);
+}
+
+.pickRow {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  padding: 1px var(--space-2);
+  font-size: 0.55rem;
+  font-family: inherit;
+  text-align: left;
+  color: var(--color-text-primary);
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.pickRow:hover {
+  background: var(--color-overlay-hover-medium);
+}
+
+.pickRowLabel {
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.pickRowNote {
+  flex: 0 0 auto;
+  font-size: 0.45rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--color-text-tertiary);
+}

@@ -694,7 +694,11 @@ export interface GraphNode {
   id: string;
   type: string;
   position: { x: number; y: number };
-  data: { nodeType: string; config: Record<string, string | number | boolean> };
+  /** `label` is the author's OWN rename — the strip CaNode draws above the type
+   *  header (`renameNode`, and the name a macro instance carries). Optional and
+   *  heterogeneous by design: comment / group / reroute nodes carry their own
+   *  extra keys here too. */
+  data: { nodeType: string; config: Record<string, string | number | boolean>; label?: string };
 }
 
 /** A serialized edge in the update rules graph */

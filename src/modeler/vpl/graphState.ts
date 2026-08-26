@@ -87,6 +87,51 @@ export function displayNodeDescription(
 }
 
 // ---------------------------------------------------------------------------
+// EXPLICIT CONTROLS — PICK MODE (D9 / R10).
+//
+// Armed from the MacroInput boundary node's interface editor, so the eligible
+// nodes are already on screen and `defId` IS the currently-open scope by
+// construction. While armed, every CaNode belonging to that def offers its
+// eligible parameters for binding — an in-place outline on a class-A inline
+// widget, an overlay list for classes B/C.
+//
+// A module global in the EXACT shape of `activeGraphKind` above (private `let`,
+// getter, subscribe returning an unsubscribe, equality-guarded setter that
+// notifies), because every CaNode is `memo`'d: without the pub/sub a memoised
+// node would never learn the mode changed. `useSyncExternalStore` demands a
+// STABLE reference from the getter, so the setter stores the object it is given
+// and the equality guard compares FIELDS (a fresh but identical object must not
+// notify — pick mode is entered once per gesture, not per render).
+//
+// ⚠ **A stranded pick binds into the wrong def** (R10), so it auto-cancels on a
+// scope change, on GraphEditor unmount and on a model load — all three of which
+// the scope-switch effect + its cleanup cover (its deps carry `modelVersion`).
+// ---------------------------------------------------------------------------
+
+/** `controlId: 'new'` ⇒ the next click CREATES a control; a real id ⇒ it
+ *  RE-BINDS that control, preserving its id / name / groupId. `groupId` is the
+ *  section a newly-created control joins. */
+export type ControlPick = { defId: string; controlId: string | 'new'; groupId?: string } | null;
+
+let controlPickGlobal: ControlPick = null;
+const controlPickListeners = new Set<() => void>();
+
+export function getControlPick(): ControlPick {
+  return controlPickGlobal;
+}
+export function subscribeControlPick(fn: () => void): () => void {
+  controlPickListeners.add(fn);
+  return () => { controlPickListeners.delete(fn); };
+}
+export function setControlPick(val: ControlPick): void {
+  const a = controlPickGlobal;
+  if (a === val) return;
+  if (a && val && a.defId === val.defId && a.controlId === val.controlId && a.groupId === val.groupId) return;
+  controlPickGlobal = val;
+  controlPickListeners.forEach(fn => fn());
+}
+
+// ---------------------------------------------------------------------------
 // Canvas view settings (port labels / grid / snap) — persisted.
 // GraphEditor unmounts on every Modeler → Simulator tab switch, so its local
 // useState seeds from these module globals; the globals themselves write

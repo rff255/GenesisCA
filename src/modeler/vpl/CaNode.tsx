@@ -16,7 +16,7 @@ import { ExpressionFormula, namesFromVarMap } from './widgets/ExpressionFormula'
 import { LogicalFormula } from './widgets/LogicalFormula';
 import { handleId } from './types';
 import type { NodeConfig, PortDef } from './types';
-import type { MacroPort } from '../../model/types';
+import type { MacroPort, MacroControl } from '../../model/types';
 import { useModel } from '../../model/ModelContext';
 import { countMacroInstances } from '../../model/macroImport';
 import { typeDisplayName } from '../../model/typeLabels';
@@ -26,7 +26,8 @@ import { is3dModelLike } from './compiler/niCodec';
 import { MULTI_ATTR_TYPES, multiAttrExtraCount, buildExtraSlotPorts } from './compiler/multiAttrExpand';
 // Explicit Controls: the ONE inline-widget resolution + the two attribute
 // scopes, dually consumed here and by a control bound to the same key.
-import { inlineWidgetFor, ownAttrListFor, tagAttrScopeFor } from './explicitControls';
+import { inlineWidgetFor, ownAttrListFor, tagAttrScopeFor, eligibleControlKeys, describeControlTarget, applyInterfaceEdit } from './explicitControls';
+import type { ControlKeyDescriptor, InterfaceEdit } from './explicitControls';
 import { buildCensusPorts, censusAttributes } from './compiler/censusExpand';
 import { buildBondAttrPorts } from './bondAttrPorts';
 import { isGraphFrequencyMetric, degreeHistogramKeys, type GraphMetric } from '../../simulator/engine/graphMetrics';
@@ -49,6 +50,9 @@ import {
   handleKey,
   getActiveGraphKind,
   displayNodeLabel,
+  getControlPick,
+  subscribeControlPick,
+  setControlPick,
 } from './graphState';
 
 /** Snapshot getter for useSyncExternalStore — must return a stable reference
@@ -365,6 +369,52 @@ function CaNodeComponent({ id, data }: NodeProps) {
     });
   }, [macroDefForBoundary, macroDefIdForBoundary, isMacroInput, updateMacro]);
 
+  // --- EXPLICIT CONTROLS: the interface editor --------------------------------
+  // Every mutation goes through the ONE semantics builder in explicitControls.ts
+  // (`applyInterfaceEdit`), which returns the WHOLE `changes` object for exactly
+  // ONE `updateMacro` — so this component is a thin dispatcher and the harness
+  // drives the SAME code the UI does (the `inlineWidgetFor` extraction
+  // precedent). Ids are minted HERE, keeping the builder deterministic.
+
+  const groupsOf = macroDefForBoundary?.groups ?? [];
+  const controlsOf = macroDefForBoundary?.controls ?? [];
+
+  const editInterface = useCallback((edit: InterfaceEdit) => {
+    if (!macroDefForBoundary || !macroDefIdForBoundary) return;
+    updateMacro(macroDefIdForBoundary, applyInterfaceEdit(macroDefForBoundary, edit));
+  }, [macroDefForBoundary, macroDefIdForBoundary, updateMacro]);
+
+  /** Arm pick mode — the control itself is created only when a parameter is
+   *  actually clicked, so cancelling (Esc / a scope change) leaves NOTHING
+   *  behind. */
+  const startPick = useCallback((controlId: string | 'new', groupId?: string) => {
+    if (!macroDefIdForBoundary) return;
+    setControlPick({ defId: macroDefIdForBoundary, controlId, ...(groupId ? { groupId } : {}) });
+  }, [macroDefIdForBoundary]);
+
+  const renameControl = useCallback((controlId: string, name: string) =>
+    editInterface({ kind: 'control-rename', controlId, name }), [editInterface]);
+  const removeControl = useCallback((controlId: string) =>
+    editInterface({ kind: 'control-remove', controlId }), [editInterface]);
+  const setControlGroup = useCallback((controlId: string, groupId: string) =>
+    editInterface({ kind: 'control-group', controlId, groupId }), [editInterface]);
+  const setPortGroup = useCallback((portId: string, groupId: string) =>
+    editInterface({ kind: 'port-group', side: isMacroInput ? 'in' : 'out', portId, groupId }), [editInterface, isMacroInput]);
+  const renameGroup = useCallback((groupId: string, name: string) =>
+    editInterface({ kind: 'group-rename', groupId, name }), [editInterface]);
+  const removeGroup = useCallback((groupId: string) =>
+    editInterface({ kind: 'group-remove', groupId }), [editInterface]);
+
+  const addGroup = useCallback(() => {
+    editInterface({
+      kind: 'group-add',
+      group: {
+        id: `grp_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}`,
+        name: `Group ${groupsOf.length + 1}`,
+      },
+    });
+  }, [editInterface, groupsOf.length]);
+
   if (!def) return <div className={styles.node}>Unknown node type</div>;
 
   // Dynamic port generation for macro nodes
@@ -609,6 +659,75 @@ function CaNodeComponent({ id, data }: NodeProps) {
     subscribeConnectedHandles,
     () => getConnectedHandlesForNode(id),
   );
+
+  // EXPLICIT CONTROLS — pick mode. Same single-pub/sub pattern: a `memo`'d node
+  // would otherwise never learn the mode was armed.
+  const controlPick = useSyncExternalStore(subscribeControlPick, getControlPick);
+
+  // The parameters of THIS node a pick would bind — computed ONLY while pick
+  // mode is armed AND this node really belongs to the def being edited (the
+  // scope effect seeds the canvas from `def.nodes` with ids UNCHANGED, so an id
+  // lookup inside that def is exact). Gating on both is what keeps
+  // `eligibleControlKeys` — which calls `getEffectivePorts` — off every node's
+  // ordinary render path.
+  //
+  // `connectedInputHandles` is the LIVE canvas set rather than `def.edges`: it
+  // is what actually decides whether the in-place widget is rendered, so
+  // passing it makes the in-place / overlay partition below exact by
+  // construction (a wired port shows no widget, so it can only be offered as an
+  // overlay row).
+  const pickRows: ControlKeyDescriptor[] = useMemo(() => {
+    if (!controlPick) return [];
+    const pickDef = (model.macroDefs || []).find(d => d.id === controlPick.defId);
+    if (!pickDef || !pickDef.nodes.some(n => n.id === id)) return [];
+    return eligibleControlKeys(nodeData.nodeType, nodeData.config, model, connectedInputHandles);
+  }, [controlPick, model, id, nodeData.nodeType, nodeData.config, connectedInputHandles]);
+
+  // The in-place / overlay PARTITION (deviation V6, extended): a class-A key is
+  // outlined on its REAL widget when that widget is on screen, and appears as an
+  // overlay row when it is not — which happens exactly when the port is WIRED
+  // (`showWidget` = kind && !isConnected). Both sides read the same `wired`
+  // flag, computed from the same live handle set, so the two are exact
+  // complements: every eligible key is offered EXACTLY once.
+  const pickInPlaceKeys = useMemo(
+    () => new Set(pickRows.filter(r => r.klass === 'A' && !r.wired).map(r => r.configKey)),
+    [pickRows],
+  );
+  const pickOverlayRows = useMemo(
+    () => pickRows.filter(r => r.klass !== 'A' || r.wired),
+    [pickRows],
+  );
+
+  /**
+   * Bind the armed pick to ONE (nodeId, configKey) — ONE `updateMacro`.
+   *
+   * `controlId: 'new'` APPENDS a control named after the parameter's own label;
+   * a real id RE-BINDS that control, preserving its `id` / `name` / `groupId`
+   * (the ✎ path — a fresh id would strand every chained target naming it).
+   */
+  const bindPick = useCallback((configKey: string, label: string) => {
+    const pick = getControlPick();
+    if (!pick) return;
+    const pickDef = (model.macroDefs || []).find(d => d.id === pick.defId);
+    if (!pickDef) { setControlPick(null); return; }
+    const target: MacroControl['target'] = { kind: 'config', nodeId: id, configKey };
+    const edit: InterfaceEdit = pick.controlId === 'new'
+      ? {
+        kind: 'control-add',
+        control: {
+          id: `ctl_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}`,
+          name: label,
+          target,
+          ...(pick.groupId ? { groupId: pick.groupId } : {}),
+        },
+      }
+      // Re-bind (✎): `applyInterfaceEdit` moves the TARGET only, preserving the
+      // control's id / name / groupId — a fresh id would strand every chained
+      // target naming it.
+      : { kind: 'control-rebind', controlId: pick.controlId, target };
+    updateMacro(pick.defId, applyInterfaceEdit(pickDef, edit));
+    setControlPick(null);
+  }, [model, id, updateMacro]);
 
   // Connection-kind hazards (e.g. list-position int wired into a NeighborIndex port).
   // Same single-pub/sub pattern as connectedHandles; identity-stable when unchanged so
@@ -1340,6 +1459,31 @@ function CaNodeComponent({ id, data }: NodeProps) {
         <div className={styles.warningBadge} title={configIssues.join('\n')}>!</div>
       )}
       <div className={`${styles.body} nodrag`} onDoubleClick={stopAll}>
+        {/* EXPLICIT CONTROLS — pick mode, classes B/C (and any class-A key whose
+            widget is HIDDEN because the port is wired). Rendered from
+            `eligibleControlKeys`' output, so it structurally cannot offer a
+            parameter the resolver does not know about; a node with nothing
+            eligible renders NO overlay (the enabled-control doctrine). Class-A
+            keys whose widget IS on screen are outlined in place instead — see
+            the input-port block below, which is the exact complement of this
+            list. At the TOP of the body so the offer is where the eye lands. */}
+        {pickOverlayRows.length > 0 && (
+          <div className={styles.pickOverlay}>
+            {pickOverlayRows.map(r => (
+              <button
+                key={r.configKey}
+                className={`${styles.pickRow} nodrag`}
+                onMouseDown={e => e.stopPropagation()}
+                onClick={e => { e.stopPropagation(); bindPick(r.configKey, r.label); }}
+                title={r.wired ? `${r.label} — wired inside the macro; the control will show that reason` : r.label}
+              >
+                <span className={styles.pickRowLabel}>{r.label}</span>
+                {r.wired && <span className={styles.pickRowNote}>wired</span>}
+              </button>
+            ))}
+          </div>
+        )}
+
         {/* Node-specific config UI */}
         {nodeData.nodeType === 'getCellAttribute' && (
           <select
@@ -3876,6 +4020,12 @@ function CaNodeComponent({ id, data }: NodeProps) {
           const ports = isMacroInput
             ? macroDefForBoundary.exposedInputs
             : macroDefForBoundary.exposedOutputs;
+          // EXPLICIT CONTROLS: the group select appears only once the def HAS a
+          // group — otherwise it is a control that can do nothing (the
+          // enabled-control doctrine). Groups are managed on the MacroInput node
+          // (below) but serve BOTH port lists.
+          const hasGroups = groupsOf.length > 0;
+          const armed = controlPick?.defId === macroDefIdForBoundary;
           return (
             <>
               {ports.map(p => (
@@ -3897,6 +4047,18 @@ function CaNodeComponent({ id, data }: NodeProps) {
                     <option value="value">Val</option>
                     <option value="flow">Flow</option>
                   </select>
+                  {hasGroups && (
+                    <select
+                      className={styles.select}
+                      style={{ width: 62 }}
+                      value={p.groupId ?? ''}
+                      onChange={e => setPortGroup(p.portId, e.target.value)}
+                      title="Interface group — assigning a port to a group reorders the handles to match"
+                    >
+                      <option value="">(none)</option>
+                      {groupsOf.map(g => <option key={g.id} value={g.id}>{g.name}</option>)}
+                    </select>
+                  )}
                   <button
                     style={{
                       background: 'none', border: 'none', color: '#f44336',
@@ -3916,9 +4078,119 @@ function CaNodeComponent({ id, data }: NodeProps) {
               >
                 + Add Port
               </button>
+
+              {/* EXPLICIT PARAMETERS + GROUPS live on the MacroInput node (the
+                  "interface in" node); groups serve BOTH port lists. */}
+              {isMacroInput && (
+                <>
+                  <div className={styles.ifaceHeader}>Explicit Parameters</div>
+                  {controlsOf.map(c => {
+                    const desc = describeControlTarget(model, macroDefIdForBoundary, c);
+                    const rebinding = armed && controlPick?.controlId === c.id;
+                    return (
+                      <div key={c.id}>
+                        <div style={{ display: 'flex', gap: 2, alignItems: 'center' }}>
+                          <input
+                            className={styles.input}
+                            style={{ flex: 1 }}
+                            value={c.name}
+                            onChange={e => renameControl(c.id, e.target.value)}
+                            title="Control name — what the closed instance shows"
+                          />
+                          {hasGroups && (
+                            <select
+                              className={styles.select}
+                              style={{ width: 62 }}
+                              value={c.groupId ?? ''}
+                              onChange={e => setControlGroup(c.id, e.target.value)}
+                              title="Interface group"
+                            >
+                              <option value="">(none)</option>
+                              {groupsOf.map(g => <option key={g.id} value={g.id}>{g.name}</option>)}
+                            </select>
+                          )}
+                          <button
+                            className="nodrag"
+                            style={{
+                              background: 'none', border: 'none',
+                              color: rebinding ? 'var(--color-accent)' : 'var(--color-text-tertiary)',
+                              cursor: 'pointer', fontSize: '0.7rem', padding: '0 2px',
+                            }}
+                            onClick={() => (rebinding ? setControlPick(null) : startPick(c.id))}
+                            title={rebinding ? 'Cancel — click again, or press Esc' : 'Re-bind: click another parameter on any node in this macro'}
+                          >
+                            {rebinding ? '…' : '✎'}
+                          </button>
+                          <button
+                            style={{
+                              background: 'none', border: 'none', color: '#f44336',
+                              cursor: 'pointer', fontSize: '0.7rem', padding: '0 2px',
+                            }}
+                            onClick={() => removeControl(c.id)}
+                            title="Remove control"
+                          >
+                            x
+                          </button>
+                        </div>
+                        <div
+                          className={styles.ifaceSub}
+                          style={desc.block ? { color: 'var(--color-danger, #f44336)' } : undefined}
+                          title={desc.text}
+                        >
+                          {desc.text}
+                        </div>
+                      </div>
+                    );
+                  })}
+                  <button
+                    className={styles.select}
+                    style={{
+                      cursor: 'pointer', textAlign: 'center',
+                      ...(armed && controlPick?.controlId === 'new'
+                        ? { borderColor: 'var(--color-accent)', color: 'var(--color-accent)' }
+                        : {}),
+                    }}
+                    onClick={() => (armed && controlPick?.controlId === 'new' ? setControlPick(null) : startPick('new'))}
+                    title="Click, then click any eligible parameter on a node in this macro"
+                  >
+                    {armed && controlPick?.controlId === 'new' ? 'Pick a parameter… (Esc)' : '+ Explicit Parameter'}
+                  </button>
+
+                  <div className={styles.ifaceHeader}>Groups</div>
+                  {groupsOf.map(g => (
+                    <div key={g.id} style={{ display: 'flex', gap: 2, alignItems: 'center' }}>
+                      <input
+                        className={styles.input}
+                        style={{ flex: 1 }}
+                        value={g.name}
+                        onChange={e => renameGroup(g.id, e.target.value)}
+                        title="Group name — a section header on the closed instance"
+                      />
+                      <button
+                        style={{
+                          background: 'none', border: 'none', color: '#f44336',
+                          cursor: 'pointer', fontSize: '0.7rem', padding: '0 2px',
+                        }}
+                        onClick={() => removeGroup(g.id)}
+                        title="Remove group (its ports and controls become ungrouped — nothing is deleted)"
+                      >
+                        x
+                      </button>
+                    </div>
+                  ))}
+                  <button
+                    className={styles.select}
+                    style={{ cursor: 'pointer', textAlign: 'center' }}
+                    onClick={addGroup}
+                  >
+                    + Group
+                  </button>
+                </>
+              )}
             </>
           );
         })()}
+
       </div>
 
       {/* Input handles (left side) + external inline widgets + external labels.
@@ -3975,12 +4247,29 @@ function CaNodeComponent({ id, data }: NodeProps) {
               style={{ top: `${topPx}px` }}
               title={port.label}
             />
-            {showWidget && (
+            {showWidget && (() => {
+              // EXPLICIT CONTROLS — pick mode outlines the REAL widget in place
+              // (deviation V6) and makes it INERT: the pointer-down capture kills
+              // focus / the native select popup, and the click capture BINDS.
+              // Binding on the completed CLICK (not the press) keeps a stray
+              // press-and-drag from committing a binding.
+              const pickable = pickInPlaceKeys.has(configKey);
+              return (
               // `title` names the port: with the global port-label toggle OFF
               // (the default) an inline widget is otherwise an unlabelled box, so
               // hovering is the only way to learn what it sets (the reported
               // "where is the Radius input?" on the FOV sensing nodes).
-              <div className={`${styles.inlineWidgetWrapper} nodrag`} title={port.label} style={{ top: `${topPx}px` }} onDoubleClick={stopAll}>
+              <div
+                className={`${styles.inlineWidgetWrapper} nodrag${pickable ? ` ${styles.pickable}` : ''}`}
+                title={pickable ? `Bind “${port.label}” as an explicit parameter` : port.label}
+                style={{ top: `${topPx}px` }}
+                onDoubleClick={stopAll}
+                {...(pickable ? {
+                  onPointerDownCapture: (e: React.PointerEvent) => { e.preventDefault(); e.stopPropagation(); },
+                  onMouseDownCapture: (e: React.MouseEvent) => { e.preventDefault(); e.stopPropagation(); },
+                  onClickCapture: (e: React.MouseEvent) => { e.preventDefault(); e.stopPropagation(); bindPick(configKey, port.label); },
+                } : {})}
+              >
                 {effectiveWidget === 'bool' ? (
                   <InlineBoolSelect
                     className={styles.inlineWidget}
@@ -4016,7 +4305,8 @@ function CaNodeComponent({ id, data }: NodeProps) {
                   />
                 )}
               </div>
-            )}
+              );
+            })()}
             {showPortLabels && !showWidget && (
               <div className={styles.portLabelLeft} style={{ top: `${topPx}px` }}>
                 {port.label}

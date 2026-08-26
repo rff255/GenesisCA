@@ -668,9 +668,57 @@ caught · `test-macro-references` · `test-param-input-mappings` ·
 - **⚠ Never `git checkout <file>` to revert a source mutation on an unstaged file** — it restores from the INDEX and destroys the session's work. Every mutation in this phase was reverted from a copy in the scratchpad, and the A/B used `git stash push -- <file>` / `git stash pop` (the documented recipe) with a byte-compare against the copy afterwards.
 - **The mutation harness needs to be CRLF-agnostic** — this repo's sources are CRLF, so a multi-line `String.replace` with `\n` never matches. Mutate line-by-line on a `/\r?\n/` split.
 
-### What P2 inherits
+### What P2 inherited
 
 - `resolveControlDescriptor` / `describeControlTarget` / `applyControlValue` / `eligibleControlKeys` are the four calls the authoring UI needs; none of them can return `null` for a live control, and every unresolvable one carries `block` + a sentence from `CONTROL_BLOCK_REASON`.
 - `eligibleControlKeys` takes `connectedHandles` — build it from `def.edges` the way `countMacroSubgraphIssues` does (nodeValidation.ts L825-832); a wired port is still OFFERED, flagged `wired: true`, so pick mode can say so rather than hiding it.
 - Nothing in P1 reads or writes `graphState`'s pick-mode global — it does not exist yet; P2 adds it in the `activeGraphKind` shape.
 - The class-B table is where a newly-authorable scalar key goes. Add coupled-write keys ONLY with a rule for their sibling writes (P1.2).
+
+---
+
+## 12. Deviations found during P2 — 2026-08-26
+
+*Recorded, never silent (the §1 discipline). Everything not listed here followed
+§5 as written. P2's gates: `tsc` · `npm run build` (both builds) ·
+`check-compile-identity --compare` **31 models, all surfaces unchanged** ·
+`test-explicit-controls` **197 checks** (143 → 197: tier H's 53 + one new tier-A
+row) with five source mutations proven caught · `test-macro-references` ·
+`test-param-input-mappings` · `test-agent-abi` · `test-c9-gates` ·
+`check-agent-wasm-gate` · `audit-agent-layout`.*
+
+| # | Plan | What shipped | Why |
+|---|---|---|---|
+| **P2.1** | §5 — "four control CRUD callbacks + three group CRUD callbacks … in the `addPort`/`removePort`/`renamePort` shape (L324-367)" | **`applyInterfaceEdit(def, edit) → Partial<MacroDef>`** in `explicitControls.ts` — ONE pure builder over a 9-arm `InterfaceEdit` union; CaNode is a thin dispatcher | Those callbacks live in a React component, so a harness can only test a COPY of their logic — and tier H's whole job is the authoring SEMANTICS. Extracting them makes the harness (and its four required mutations) drive the SHIPPED code. Exactly P1.3's reasoning for `inlineWidgetFor`, applied to the write side. Ids are minted by the CALLER, so the builder stays deterministic |
+| **P2.2** | §5 — deviation V6: "class A outlines the REAL widget in place; classes B/C use an overlay LIST" | That, **plus a class-A key whose widget is HIDDEN (the port is WIRED) becomes an overlay row, flagged `wired`** | V6's partition leaves a wired parameter UNBINDABLE — and P1 deliberately ships `ControlKeyDescriptor.wired` so pick mode "can say so rather than hiding it" (§11 "What P2 inherited"). The two sides read the same live handle set, so they are EXACT COMPLEMENTS: `showWidget = kind && !isConnected`, so every eligible key is offered exactly ONCE. Observed in Kelp War: `Set Variable · Value` appears as a `wired` overlay row and the node offers no in-place outline |
+| **P2.3** | §5 — "removing the last one leaves `groups: []` (harmless) or removes the key — assert whichever the implementation chooses" | **The key is REMOVED** (`controls: undefined` / `groups: undefined` through the shallow merge) | `stringifyCompact` drops an undefined property and `cloneMacroWithFreshIds`' conditional spread then clones with **no key at all**, so removing the last control restores the PRISTINE record shape — invariant 8 holds for a def that gained and lost an interface, not only for one that never had one. Tiers H7-H9 / H31-H32 |
+| **P2.4** | §5 — the editor row spec's mono subtitle is `` `${displayNodeLabel(getNodeDef(nodeType))} · ${label}` `` | `describeControlTarget` prefers the node's **own `data.label`** (the author's rename) and falls back to the type label | Observed in the real UI: a control bound inside Game of Life's macro read *"Compare · Y"* when the author had named that box **"Reproduction"** — and there are four Compare nodes on that canvas. The editor must name the box the author named. Tier A52; `GraphNode.data` gained the `label?: string` it already carried at runtime (`renameNode`, macro instances, comment / group / reroute nodes) |
+| **P2.5** | §5 — R10 lists three cancel sites (the scope effect, the unmount cleanup, `App.tsx`'s model-load seam) | **TWO sites, both in GraphEditor**: `setControlPick(null)` at the top of the scope-switch effect + the Esc effect's cleanup | The scope effect's deps are `[currentScope, modelVersion, activeGraph]`, so ONE line there covers a scope change, a graph swap **and** a model load; and GraphEditor is UNMOUNTED whenever the user is not in the Modeler, so its cleanup covers everything else. An `App.tsx` edit would be a third site that can only ever fire after one of these two. Tiers H45-H48 pin all of it in source (a React component the harness cannot mount), and the "drop the cancel" mutation is caught |
+| **P2.6** | §5 — the Group ▾ select on port rows | Rendered **only once the def HAS a group** | With no groups the select's sole option is `(none)` — a visible, interactable control that cannot do anything. The enabled-control doctrine's *structurally impossible ⇒ HIDE* arm. Verified: the selects appear the moment `+ Group` is clicked and vanish when the last group is deleted |
+| **P2.7** | — | **A COLLAPSED node is not pickable** (it returns before the body, so it renders no inline widgets and no overlay) | Not a decision so much as a consequence, recorded because it is user-visible: pick mode offers a collapsed node nothing. Consistent with every other body widget; the fix is to expand the node |
+
+### Verification notes worth keeping
+
+- **⚠ AN EXTERNAL-STORE UPDATE IS NOT FLUSHED INSIDE THE CLICK THAT CAUSED IT.** `setControlPick` notifies a `useSyncExternalStore`, not a React setState, so a probe that clicks `+ Explicit Parameter` and reads the DOM **in the same `preview_eval`** sees ZERO pickables and ZERO overlays — and it looks exactly like the feature not working (it cost a full false-alarm investigation on Kelp War). Split the click and the read into two evals. The same trap hit the `describeControlTarget` subtitle read right after a bind.
+- **AN OCCLUDED BROWSER PANE RENDERS ZERO REACT FLOW EDGES** (the documented rAF / ResizeObserver suspension), so the plan's step-5 check "capture `JSON.stringify(edges)` before/after" is **not available from the DOM**. The substitute is stronger: a **BLINKER**. Game of Life's macro exposes `Must Die` / `Must be Born`, so a port reorder that disturbed the bridge would INVERT the rule — and the blinker's three generations came back **cell-for-cell identical** to the pristine model (`[[99,100],[100,100],[101,100]] → [[100,99],[100,100],[100,101]] → [[99,100],[100,100],[101,100]]`), with the closed instance's handles correctly reordered to `output_value_out_1, output_value_out_0`.
+- **A `setRngSeed` + `reset` probe on Game of Life leaves an ALL-DEAD board** — measured identically on the PRISTINE model, so it is a property of driving the worker directly, not a regression. Take the pristine control before concluding anything from a synthetic worker probe.
+- Real-UI coverage, all with **0 fresh console errors**: pick mode arms and disarms; 3 in-place outlines + 3 overlay lists on Game of Life (with the Compare nodes' wired `X` correctly listed as an overlay `wired` row); binding from BOTH an in-place widget and an overlay row; rename through the native-setter path; **✎ re-bind moved the target and preserved the name**; two groups added, renamed and assigned to a port and a control; **a LINKED duplicate's def carries the identical control + group** (D1 in the UI); deleting a group left every port and control alive with their `groupId` keys cleared; deleting the last control emptied the section cleanly; Esc cancelled without resetting the simulator or closing the editor; a scope exit cancelled an armed pick; and Kelp War (6 macros) ran 30 generations with a plausible evolving indicator series after the same edits.
+- **Never `git checkout <file>` to revert a source mutation on an unstaged file.** Every mutation was applied by a line-based, CRLF-agnostic helper and reverted from a copy in the scratchpad, byte-compared afterwards.
+
+### The five source mutations, and what each broke
+
+| mutation | caught by |
+|---|---|
+| `port-group` returns the array WITHOUT `orderByGroup` | H14 (order), H21 |
+| `orderByGroup` drops its last member (the index-splice bug) | H15 (the portId SET), + 11 more |
+| `control-rebind` mints a FRESH control id | H11 (id/name/groupId preserved) |
+| the scope effect's `setControlPick(null)` removed | H45, H48 |
+| `group-remove` DELETES its members instead of clearing `groupId` | H26 (ports survive), H27 (controls survive) |
+
+### What P3 inherits
+
+- `applyInterfaceEdit` is the ONE authoring mutation; **`orderByGroup(items, groups)` is the ONE interface RENDER ORDER** (ungrouped first in their existing order, then each group in `groups` order) — the instance must render with the SAME call the editor reorders with, or the two disagree about what the interface looks like.
+- The four resolver calls are unchanged from P1. `resolveControlDescriptor(model, defId, control, openScopeIds)` already carries `block` + a sentence for every unresolvable case, and `applyControlValue` already returns `null` for a blocked one — so P3's "a disabled control's handler is inert" is structural, not a UI convention.
+- Pick mode is AUTHORING-only: it never runs on a closed instance, so P3 adds no pick-mode surface. `pickRows` is gated on the node belonging to the picked def, so an instance can never be offered anything.
+- The harness's `editDef(model, defId, edit)` helper (SHIPPED builder → REAL reducer) is the shape tier G's cascade drives should reuse.
+- The instance renders **nothing** today — that is the correct P2 end state, and it is what makes P3's first real-UI step ("bind a control, exit the macro, the row appears with the live value") a genuine before/after.

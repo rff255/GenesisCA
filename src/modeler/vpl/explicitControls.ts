@@ -27,7 +27,7 @@
 
 import type { PortDef, NodeConfig } from './types';
 import { handleId } from './types';
-import type { CAModel, MacroDef, MacroControl, ControlTarget, GraphNode, Attribute } from '../../model/types';
+import type { CAModel, MacroDef, MacroControl, MacroInterfaceGroup, ControlTarget, GraphNode, Attribute } from '../../model/types';
 import { getNodeDef } from './nodes/registry';
 import { getEffectivePorts } from './effectivePorts';
 import { getActiveGraphKind, displayNodeLabel } from './graphState';
@@ -104,6 +104,137 @@ export const CONTROL_BLOCK_REASON: Readonly<Record<ControlBlock, string>> = {
 
 /** Mirrors `expandMacros`' depth-20 guard and `MAX_MACRO_DEPTH`. */
 export const CONTROL_MAX_CHAIN_DEPTH = 20;
+
+// ---------------------------------------------------------------------------
+// Groups — the ONE interface ordering (D5 / F8)
+// ---------------------------------------------------------------------------
+
+/**
+ * THE render order of a macro's interface: **ungrouped members first, in their
+ * existing order, then each group in `groups` order** — so adding a group never
+ * reorders what was already there.
+ *
+ * Shared by the boundary-node editor (which APPLIES it to `exposedInputs` /
+ * `exposedOutputs` so the HANDLE order matches the display — F8 proves that is
+ * free, since every consumer matches by `portId` and no edge is touched) and by
+ * the closed instance's rendering. ONE definition, so the two cannot disagree.
+ *
+ * A member whose `groupId` names no LIVE group counts as ungrouped, so a
+ * deleted group degrades gracefully. It is a TOTAL partition — every member
+ * lands in exactly one bucket — which is what guarantees the member SET is
+ * identical before and after (the invariant tier H asserts).
+ */
+export function orderByGroup<T extends { groupId?: string }>(
+  items: readonly T[],
+  groups: readonly MacroInterfaceGroup[],
+): T[] {
+  const live = new Set(groups.map(g => g.id));
+  const out: T[] = items.filter(i => !i.groupId || !live.has(i.groupId));
+  for (const g of groups) for (const i of items) if (i.groupId === g.id) out.push(i);
+  return out;
+}
+
+/**
+ * Set (or, with `''`, CLEAR) a member's group.
+ *
+ * Clearing DELETES the key rather than storing `groupId: ''` — "ungrouped" is
+ * the ABSENT state (invariant 8: absent ⇒ today's files, exactly), so a port
+ * that never had a group and one that was un-grouped must serialize the same.
+ * Returns the SAME reference when there is nothing to change (the migration
+ * convention), so a no-op edit cannot churn React identities.
+ */
+export function withGroup<T extends { groupId?: string }>(item: T, groupId: string): T {
+  if (groupId) return item.groupId === groupId ? item : { ...item, groupId };
+  if (item.groupId === undefined) return item;
+  const { groupId: _drop, ...rest } = item;
+  return rest as T;
+}
+
+// ---------------------------------------------------------------------------
+// The interface editor's SEMANTICS — pure, so the harness drives the SHIPPED
+// code and not a copy of it (the `inlineWidgetFor` extraction precedent, P1.3)
+// ---------------------------------------------------------------------------
+
+/** ONE authoring edit. Ids are minted by the CALLER, so every builder here is
+ *  deterministic and testable. */
+export type InterfaceEdit =
+  | { kind: 'control-add'; control: MacroControl }
+  | { kind: 'control-rename'; controlId: string; name: string }
+  | { kind: 'control-remove'; controlId: string }
+  | { kind: 'control-rebind'; controlId: string; target: ControlTarget }
+  | { kind: 'control-group'; controlId: string; groupId: string }
+  | { kind: 'port-group'; side: 'in' | 'out'; portId: string; groupId: string }
+  | { kind: 'group-add'; group: MacroInterfaceGroup }
+  | { kind: 'group-rename'; groupId: string; name: string }
+  | { kind: 'group-remove'; groupId: string };
+
+/**
+ * THE authoring semantics: one edit → the `changes` object for exactly ONE
+ * `updateMacro` (D6 — build the whole array first; never dispatch twice).
+ *
+ * Three rules the whole feature rests on, enforced HERE so the editor cannot
+ * express anything else:
+ *
+ *  1. **RE-BINDING PRESERVES `id` / `name` / `groupId`.** Only `target` moves. A
+ *     fresh id would strand every CHAINED target naming this control — the same
+ *     reason `MacroPort.portId` is preserved across clones.
+ *  2. **Grouping a member REORDERS its array** so the closed instance's handle
+ *     order matches the displayed order (D5 / F8). The portId SET is unchanged
+ *     and **no edge is touched** — every consumer matches by `portId`.
+ *  3. **Deleting a group CLEARS its members' `groupId`; it deletes NOTHING.**
+ *     Destroying the author's ports/controls on a mis-click is exactly what
+ *     "report, never drop" forbids.
+ *
+ * An array that would end up EMPTY comes back as `undefined`, so removing the
+ * last control (or group) restores the pristine record shape — `stringifyCompact`
+ * drops an undefined property and `cloneMacroWithFreshIds`' conditional spread
+ * then clones with no key at all (invariant 8).
+ */
+export function applyInterfaceEdit(def: MacroDef, edit: InterfaceEdit): Partial<MacroDef> {
+  const controls = def.controls ?? [];
+  const groups = def.groups ?? [];
+  const packC = (next: MacroControl[]): Partial<MacroDef> => ({ controls: next.length ? next : undefined });
+
+  switch (edit.kind) {
+    case 'control-add':
+      return packC([...controls, edit.control]);
+    case 'control-rename':
+      return packC(controls.map(c => (c.id === edit.controlId ? { ...c, name: edit.name } : c)));
+    case 'control-remove':
+      return packC(controls.filter(c => c.id !== edit.controlId));
+    case 'control-rebind':
+      // Rule 1 — `target` only.
+      return packC(controls.map(c => (c.id === edit.controlId ? { ...c, target: edit.target } : c)));
+    case 'control-group':
+      return packC(orderByGroup(
+        controls.map(c => (c.id === edit.controlId ? withGroup(c, edit.groupId) : c)),
+        groups,
+      ));
+    case 'port-group': {
+      // Rule 2 — reorder, never re-key.
+      const field = edit.side === 'in' ? 'exposedInputs' : 'exposedOutputs';
+      const next = def[field].map(p => (p.portId === edit.portId ? withGroup(p, edit.groupId) : p));
+      return { [field]: orderByGroup(next, groups) };
+    }
+    case 'group-add':
+      return { groups: [...groups, edit.group] };
+    case 'group-rename':
+      return { groups: groups.map(g => (g.id === edit.groupId ? { ...g, name: edit.name } : g)) };
+    case 'group-remove': {
+      // Rule 3 — clear membership everywhere, delete nothing, and re-order both
+      // port arrays against the SURVIVING groups so the handles keep matching.
+      const nextGroups = groups.filter(g => g.id !== edit.groupId);
+      const strip = <T extends { groupId?: string }>(x: T): T => (x.groupId === edit.groupId ? withGroup(x, '') : x);
+      const nextControls = controls.map(strip);
+      return {
+        groups: nextGroups.length ? nextGroups : undefined,
+        exposedInputs: orderByGroup(def.exposedInputs.map(strip), nextGroups),
+        exposedOutputs: orderByGroup(def.exposedOutputs.map(strip), nextGroups),
+        ...(nextControls.length ? { controls: orderByGroup(nextControls, nextGroups) } : { controls: undefined }),
+      };
+    }
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Attribute scopes — the ONE derivation, shared with CaNode (R5)
@@ -770,9 +901,14 @@ function describeKey(
   return null;
 }
 
-/** The pick-mode subtitle for a bound target: `Node label · Parameter label`.
- *  Resolved from the SAME descriptor the instance renders, so the editor can
- *  never name a parameter the resolver does not know about. */
+/** The interface editor's subtitle for a bound target: `Node label · Parameter
+ *  label`. Resolved from the SAME descriptor the instance renders, so the editor
+ *  can never name a parameter the resolver does not know about.
+ *
+ *  The node half prefers the author's OWN rename (`data.label`, the strip CaNode
+ *  draws above the type header) over the node type's display label — the author
+ *  is looking for the box they named "Reproduction", not for one of the four
+ *  Compare nodes on the canvas. */
 export function describeControlTarget(
   model: CAModel,
   defId: string,
@@ -791,7 +927,8 @@ export function describeControlTarget(
     ? (eligibleControlKeys(nodeType!, (node.data.config ?? {}) as NodeConfig, model)
       .find(k => k.configKey === res.at.configKey)?.label ?? res.at.configKey)
     : res.at.configKey;
-  return { text: `${displayNodeLabel(def)} · ${keyLabel}`, ...(built ? {} : { block: 'orphan-key' as const }) };
+  const nodeLabel = node.data?.label?.trim() || displayNodeLabel(def);
+  return { text: `${nodeLabel} · ${keyLabel}`, ...(built ? {} : { block: 'orphan-key' as const }) };
 }
 
 // ---------------------------------------------------------------------------
