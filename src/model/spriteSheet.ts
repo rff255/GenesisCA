@@ -154,6 +154,17 @@ export function sheetFrameRects(sheet: SpriteSheetSpec, imgW: number, imgH: numb
  *  - a row-major prefix `0..k-1`  ⇒ `{ frames: undefined, count: k }`
  *  - anything else                ⇒ `{ frames: sel,       count: undefined }`
  */
+export function sheetWithFrames(sheet: SpriteSheetSpec, sel: readonly number[]): SpriteSheetSpec {
+  const cells = sheetCellCount(sheet);
+  const pruned = pruneSheetFrames(sel, cells);
+  const isPrefix = pruned.length > 0 && pruned.every((v, i) => v === i);
+  const next: SpriteSheetSpec = { ...sheet };
+  if (isPrefix && pruned.length === cells) { delete next.frames; delete next.count; }
+  else if (isPrefix) { delete next.frames; next.count = pruned.length; }
+  else { next.frames = [...pruned]; delete next.count; }
+  return next;
+}
+
 /** Fold an explicit cell size back into the SMALLEST spec that expresses it — the
  *  `sheetWithFrames` rule, applied to the geometry: a size that EQUALS the derived
  *  one is not stored, so a gizmo drag that lands back on the derived geometry
@@ -170,16 +181,5 @@ export function sheetWithCellSize(
   const h = cellH === null || !Number.isFinite(cellH) ? null : Math.max(1, Math.floor(cellH));
   if (w !== null && w !== derived.cellW) next.cellW = w;
   if (h !== null && h !== derived.cellH) next.cellH = h;
-  return next;
-}
-
-export function sheetWithFrames(sheet: SpriteSheetSpec, sel: readonly number[]): SpriteSheetSpec {
-  const cells = sheetCellCount(sheet);
-  const pruned = pruneSheetFrames(sel, cells);
-  const isPrefix = pruned.length > 0 && pruned.every((v, i) => v === i);
-  const next: SpriteSheetSpec = { ...sheet };
-  if (isPrefix && pruned.length === cells) { delete next.frames; delete next.count; }
-  else if (isPrefix) { delete next.frames; next.count = pruned.length; }
-  else { next.frames = [...pruned]; delete next.count; }
   return next;
 }
