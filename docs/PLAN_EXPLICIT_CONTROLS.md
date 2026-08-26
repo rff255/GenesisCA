@@ -597,6 +597,7 @@ tiers A-J), `npx tsc -b`, `npm run build` (**both** builds — the viewer build 
 | **`_port_bondAttr_*` / `partTag_*` bindings** | **D2b.** They are the only key shapes any path renames, deletes or permutes (F3), and `_port_bondAttr_*` embeds a model-element id. | a fifth `applyImportPlan` pass in lockstep with 2 and 4, participation in three ModelContext cascades, and a fourth `collectMacroReferences` arm — four coupled edits in four files, each failing plausibly-but-wrong with no error |
 | **Count steppers** (`extraCount`, `caseCount`, `visibleCount`, `payloadCount`, `axisCount`) | **structural** — they change which PORTS the internal node has, hence what `expandMacros` emits and which internal edges survive. A non-author must not be able to break the macro's wiring from outside. | a port-set reconciliation contract |
 | **Multi-key editors** — gradient stops, categorical palettes, RGB triples, `_varName_*` | one-control-one-value does not hold | a composite control type |
+| **`attr_N` multi-attr slot pickers** (P4.5) | an INDEXED key family, not one of the 11 `CLASS_C_KEYS`: the slot count is itself a count stepper (row 3), and a control bound to `attr_3` has no defined meaning once the slot is removed | the indexed keys in the key space + a slot-removal rule, i.e. the count-stepper contract first |
 | **Instance-side port reordering** | the interface belongs to the author; the instance is a consumer | — |
 | **A per-control default + "Reset"** | needs a stored default, i.e. a **second value** — exactly what D1 rejects | could be *derived* from `port.defaultValue` / the node def, without storage |
 | **Preventing macro self-recursion** | pre-existing; three independent depth guards already anticipate it (`expandMacros` 20, `MAX_MACRO_DEPTH` 20, `isMacroAvailableOnGraph`'s `seen`). R7 works around it with `scope-open`. | a small fix of its own, worth doing |
@@ -772,3 +773,50 @@ source mutations proven caught · `test-macro-references` ·
 - **Chaining already resolves, writes and BLOCKS correctly end to end** (tiers D and G27-G31, G41-G42): the write lands in the NESTED def, `orphan-control` / `orphan-def` report, and `scope-open` fires on the def that OWNS the key rather than the outer one. P4 adds only the pick-mode ROWS for a nested instance.
 - **Pick mode never runs on a closed instance** (`pickRows` is gated on the node belonging to the picked def), so the controls section and pick mode do not interact today. P4's chaining UX is where they first meet: a nested macro instance inside the open def will render BOTH its own control rows and, while armed, its pick rows.
 - `MacroControlRow` is a module-level component taking only `{ desc, onChange, needsAttention }`, so a new widget kind is one `case` in its switch plus the resolver row that produces it.
+
+---
+
+## 14. Deviations found during P4 — 2026-08-26
+
+*Recorded, never silent (the §1 discipline). Everything not listed here followed
+§7 as written. P4's gates: `tsc` · `npm run build` (both builds) ·
+`check-compile-identity --compare` **31 models, all surfaces unchanged** ·
+`test-explicit-controls` **317 checks** (258 → 317: tiers I + K + J) with **eight**
+source mutations proven caught · `test-macro-references` ·
+`test-param-input-mappings` · `check-agent-wasm-gate`.*
+
+| # | Plan | What shipped | Why |
+|---|---|---|---|
+| **P4.1** | §7 — class C is gated by `CLASS_C_KEYS` alone (the 11 id keys) | A per-key registry **`ELEMENT_CONFIG_KEYS`** (32 `regElement(...)` registrations) whose specs carry an explicit **`coupled: true`** flag; `eligibleControlKeys` skips a coupled key and `describeKey` refuses to answer for one | P1.2's coupled-write rule applies to class C too, but class B could express it by simple OMISSION from its allowlist while class C **cannot**: the in-node picker must still render the SAME option list even for a key no control may bind. So the LIST is shared and the KEY is flagged. Six keys carry it (`updateAttribute.attributeId`, `updateIndicator.indicatorId`, `getModelAttribute.attributeId`, `getConstant.tagAttributeId`, `statement`/`switch`.`tagAttributeId`, `getNeighborIndexesByTags.neighborhoodId`) — each has an in-node `onChange` that writes a second key. Tier I pins both halves (flagged / list still shared / never offered / a hand-edited one resolves `orphan-key`) |
+| **P4.2** | §7 — "the ~32 model-element picker sites" | **39** sites | The plan's estimate came from an `updateConfig(` grep. Six sites use `updateNodeData` (the coupled writers, which must write two keys in ONE call — the documented never-call-`updateConfig`-twice rule) and one more, `getNeighborIndexesByTags.neighborhoodId`, was found only in the review pass by grepping the option-list expression itself. Tier I19-I21 pin the count and that **no inline list survives** |
+| **P4.3** | — | `ControlOption` widened with **`disabled?`** + **`title?`**, and the shared list carries the FULL option shape — the "— Select … —" placeholder, `setCellLooks`' `CURRENT_VIEWER_SENTINEL`, and `getIndicator`'s frequency-shaped / spatial rows as disabled entries carrying `indicatorScalarBlocker`'s reason | The extraction is only worth doing if CaNode keeps **no** list logic; leaving the placeholder or the disabled rows behind would have left three sites re-deriving half a list, and the "no surviving inline list" pin would have been unenforceable. It also means an instance-side `'element'` row inherits the disabled rows and their tooltips for free — the D8 "report, never drop" posture at option granularity |
+| **P4.4** | §7 — the sweep replaces every picker's `<option>` body | `ovReadIndicator` / `ovCollectSpatial` keep their **local `eligible` filter** while taking their option list from the shared source | The two answer a DIFFERENT question — *is the SELECTED indicator frequency-shaped* (which drives their category field), not *what may this picker offer*. Folding them into the shared list would have changed Overseer behaviour, and the sweep's whole claim is zero behaviour change |
+| **P4.5** | §7 — class C covers "the model-element pickers" | **`attr_N` multi-attr slot pickers are OUT OF SCOPE** | They are a different, indexed key family (`attr_2`, `attr_3`, …) built by `multiAttrExpand`'s port builder, not among the 11 `CLASS_C_KEYS`. Binding one would need the slot count in the key space and a rule for what happens when the slot is removed — a separate decision, recorded in the follow-ups register rather than smuggled in |
+| **P4.6** | §7 — pick mode "offers the nested instance's controls" | `bindPick` was split into **`bindPickTarget(target, label)`** + a thin `bindPick(configKey, label)` | The two row kinds differ only in the `ControlTarget` they build. One binder means the `'control'` rows go through the identical `applyInterfaceEdit` path (new vs ✎-rebind, group inheritance, the pick-mode teardown) as the `'config'` rows, so chaining cannot acquire its own authoring semantics |
+| **P4.7** | §7 — a cycle "is refused" | A cycling chain row renders **DISABLED with a `circular` note**, not hidden | The same argument as D8: hiding it makes the author wonder why the row they expect is missing. `.pickRow:disabled` (opacity + `not-allowed`, no hover) is the one new CSS rule |
+| **P4.8** | — | Four harness derefs null-guarded (`rClone.resolved?.defId`, `r.at?.defId`, `d.resolved?.defId`/`?.nodeId`) | A source mutation made D11 **throw**, aborting the run and hiding tiers I/K/J entirely — so the R2 clone mutation *looked* uncaught by tier J. A harness must FAIL a check, never abort, or a mutation control can silently prove nothing |
+| **P4.9** | — | **K7b** added: the same row resolves CLEANLY without the ✎ seed | K7 alone did not catch the removed cycle seed, because the harness mirrors the row computation with the SHIPPED `resolveTarget` — both sides moved together. K7b asserts the seed is what makes the difference, so the mutation is caught functionally and not only by the K12 source pin |
+
+### Verification notes worth keeping
+
+- **THE CLASS-C SWEEP IS PROVEN BEHAVIOUR-FREE BY A FINGERPRINT A/B, not by inspection.** Every picker `<select>` on every expanded node of a model was fingerprinted (option values + labels + disabled + title + the selected value) **before and after**, using the `git stash push -- <file>` recipe: **304 rows across 6 model+graph combinations, 0 diffs**. It covers a Cells graph AND an Agents graph, so D10's graph-kind scoping is proven live rather than argued.
+- **Real-UI coverage, all with 0 fresh console errors**: an instance-side **`'element'`** row rendering the right option list and committing into the internal node; **chaining end to end** — macro A contains macro B, B's control is offered on B's instance inside A, binding it makes A's closed instance edit B's def, and a self-rebind offers the cycling row DISABLED; a **`.gcamacro` export → File-menu import into a DIFFERENT model** keeping controls, groups and the chain, with the element row resolving against the TARGET model's attributes and the chained row still editing the imported nested def — **R2 in the UI**.
+- **The M2 import dialog is unchanged by controls** (tier J): the reference bundle is byte-identical with and without them, so a macro whose elements already exist opens no dialog and one that needs decisions opens exactly the pre-P4 rows.
+- Never `git checkout <file>` to revert a source mutation on an unstaged file. Every mutation was applied by the line-based, CRLF-agnostic helper and reverted from a scratchpad copy, with `cmp` proving each restore byte-exact.
+
+### The eight source mutations, and what each broke
+
+| mutation | caught by |
+|---|---|
+| the clone drops `target.nodeId`'s `idMap` remap (R2) | J6, J7, J8, J12, J13, J14 |
+| the clone drops `controls` entirely | tier B + J |
+| `eligibleControlKeys` offers a **coupled** class-C key | the I coupled block |
+| `describeKey` answers for a coupled key (its write becomes live) | the I coupled block |
+| `elementOptionsFor` returns a truncated list | the I coverage table (many rows) |
+| the ✎-rebind cycle seed is dropped | K7b (functional) + K12 (source pin) |
+| the `scope-open` block is dropped | tier G |
+| `CONTROL_BLOCK_NEEDS_ATTENTION` stops rolling up | tier G |
+
+### What v1 leaves behind
+
+The follow-ups register (§8) gained ONE row — **`attr_N` multi-attr slot pickers** (P4.5) — and is otherwise unchanged: per-instance overrides, `_port_bondAttr_*` / `partTag_*`, the count steppers, multi-key editors, instance-side port reordering, per-control defaults, macro self-recursion and a macro-level interface panel all stay out of v1 for the reasons recorded there. Everything §7 asked P4 to deliver — class C, chaining UX, the M1/M2/clipboard proof, the docs sweep and the final gates — shipped.

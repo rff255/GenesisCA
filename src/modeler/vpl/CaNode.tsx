@@ -19,19 +19,17 @@ import type { NodeConfig, PortDef } from './types';
 import type { MacroPort, MacroControl } from '../../model/types';
 import { useModel } from '../../model/ModelContext';
 import { countMacroInstances } from '../../model/macroImport';
-import { typeDisplayName } from '../../model/typeLabels';
 import { cellAttrsOf, bondAttrsOf } from '../../model/attributeScope';
 import { vectorPortDims } from './compiler/vectorAttr';
 import { is3dModelLike } from './compiler/niCodec';
 import { MULTI_ATTR_TYPES, multiAttrExtraCount, buildExtraSlotPorts } from './compiler/multiAttrExpand';
 // Explicit Controls: the ONE inline-widget resolution + the two attribute
 // scopes, dually consumed here and by a control bound to the same key.
-import { inlineWidgetFor, ownAttrListFor, tagAttrScopeFor, eligibleControlKeys, describeControlTarget, applyInterfaceEdit, groupSections, resolveControlDescriptor, applyControlValue, CONTROL_BLOCK_NEEDS_ATTENTION } from './explicitControls';
+import { inlineWidgetFor, ownAttrListFor, tagAttrScopeFor, eligibleControlKeys, describeControlTarget, applyInterfaceEdit, groupSections, resolveControlDescriptor, applyControlValue, elementOptionsFor, resolveTarget, CONTROL_BLOCK_REASON, CONTROL_BLOCK_NEEDS_ATTENTION } from './explicitControls';
 import type { ControlKeyDescriptor, InterfaceEdit, ControlDescriptor } from './explicitControls';
 import { buildCensusPorts, censusAttributes } from './compiler/censusExpand';
 import { buildBondAttrPorts } from './bondAttrPorts';
 import { isGraphFrequencyMetric, degreeHistogramKeys, type GraphMetric } from '../../simulator/engine/graphMetrics';
-import { indicatorScalarBlocker } from '../../model/indicatorValue';
 import { resolveMaxBonds } from '../../model/centerBased';
 import { applyLookupAxisPorts } from './nodes/LookupInteractionNode';
 import { buildInputParamPorts, isInputMappingRoot } from '../../model/inputMappingParams';
@@ -272,7 +270,12 @@ function MacroControlRow({ desc, onChange, needsAttention }: {
             onChange={e => onChange(e.target.value)}
             {...guards}
           >
-            {(desc.options ?? []).map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+            {/* `disabled` / `title` carry a class-C option's own reason (Get
+                Indicator lists frequency-shaped and spatial indicators with
+                theirs rather than omitting them). */}
+            {(desc.options ?? []).map(o => (
+              <option key={o.value} value={o.value} disabled={o.disabled} title={o.title}>{o.label}</option>
+            ))}
             {/* A value the live option list no longer contains would otherwise
                 render as the FIRST option — a silent lie about what is stored. */}
             {(desc.options ?? []).every(o => o.value !== desc.value) && (
@@ -427,6 +430,24 @@ function CaNodeComponent({ id, data }: NodeProps) {
   //    on the Agents graph. (ownAttrList — used by Get/Set/Update Attribute — stays
   //    agent-only: those read/write the OWN agent via D-IDX, not the field.)
   const tagAttrScope = tagAttrScopeFor(model);
+  /**
+   * EXPLICIT CONTROLS (class C, R5) — THE model-element option list for one of
+   * this node's `*Id` pickers, rendered from `elementOptionsFor`.
+   *
+   * Every one of the ~32 in-node pickers below draws its `<option>`s from this
+   * ONE call, so a control bound to the same key cannot offer a different list
+   * (the `buildCensusPorts` / `inlineWidgetFor` dual-consumption discipline). The
+   * placeholder row and the `setCellLooks` sentinel are part of the list, which
+   * is what leaves nothing inline here to drift.
+   *
+   * `?? []` never fires for a site that has a table row; a MISSING row would
+   * render an empty select, which is what the harness's per-(nodeType, key)
+   * coverage table exists to make impossible.
+   */
+  const elementOptions = (configKey: string) =>
+    (elementOptionsFor(nodeData.nodeType, configKey, model) ?? []).map(o => (
+      <option key={o.value} value={o.value} disabled={o.disabled} title={o.title}>{o.label}</option>
+    ));
   const { updateNodeData } = useReactFlow();
   const updateNodeInternals = useUpdateNodeInternals();
   // Subscribe to port-label toggle so memoized CaNodes re-render when it changes
@@ -845,18 +866,49 @@ function CaNodeComponent({ id, data }: NodeProps) {
   );
 
   /**
-   * Bind the armed pick to ONE (nodeId, configKey) — ONE `updateMacro`.
+   * CHAINING (D4) — the pick rows a NESTED MACRO INSTANCE offers: that def's own
+   * explicit controls, bindable as `{ kind: 'control', nodeId, controlId }`.
+   *
+   * These do NOT come from `eligibleControlKeys` (a macro instance has no config
+   * parameters of its own to promote); the offer IS the inner interface, which
+   * is what makes an outer macro able to re-expose one knob of an inner one.
+   *
+   * A row that would close a CYCLE is offered DISABLED with the reason rather
+   * than hidden. The verdict comes from the SHIPPED `resolveTarget` — seeded, on
+   * the ✎ path, with the control being re-bound, so "this chain comes back to
+   * me" is caught by the same `seen` set the resolver uses at render time.
+   */
+  const pickControlRows = useMemo(() => {
+    if (!controlPick || nodeData.nodeType !== 'macro') return [];
+    const defs = model.macroDefs || [];
+    const pickDef = defs.find(d => d.id === controlPick.defId);
+    if (!pickDef || !pickDef.nodes.some(n => n.id === id)) return [];
+    const innerId = nodeData.config.macroDefId as string | undefined;
+    const inner = innerId ? defs.find(d => d.id === innerId) : undefined;
+    return (inner?.controls ?? []).map(c => {
+      const seen = controlPick.controlId === 'new'
+        ? new Set<string>()
+        : new Set<string>([`${controlPick.defId}::${controlPick.controlId}`]);
+      const res = resolveTarget(defs, controlPick.defId, { kind: 'control', nodeId: id, controlId: c.id }, seen);
+      return { id: c.id, name: c.name, cycle: !res.ok && res.block === 'cycle' };
+    });
+  }, [controlPick, model, id, nodeData.nodeType, nodeData.config]);
+
+  /**
+   * Bind the armed pick to ONE target — ONE `updateMacro`.
    *
    * `controlId: 'new'` APPENDS a control named after the parameter's own label;
    * a real id RE-BINDS that control, preserving its `id` / `name` / `groupId`
    * (the ✎ path — a fresh id would strand every chained target naming it).
+   *
+   * Shared by the class-A/B/C key rows and the chaining rows, so the two kinds
+   * of target land through exactly the same one-dispatch path.
    */
-  const bindPick = useCallback((configKey: string, label: string) => {
+  const bindPickTarget = useCallback((target: MacroControl['target'], label: string) => {
     const pick = getControlPick();
     if (!pick) return;
     const pickDef = (model.macroDefs || []).find(d => d.id === pick.defId);
     if (!pickDef) { setControlPick(null); return; }
-    const target: MacroControl['target'] = { kind: 'config', nodeId: id, configKey };
     const edit: InterfaceEdit = pick.controlId === 'new'
       ? {
         kind: 'control-add',
@@ -873,7 +925,12 @@ function CaNodeComponent({ id, data }: NodeProps) {
       : { kind: 'control-rebind', controlId: pick.controlId, target };
     updateMacro(pick.defId, applyInterfaceEdit(pickDef, edit));
     setControlPick(null);
-  }, [model, id, updateMacro]);
+  }, [model, updateMacro]);
+
+  const bindPick = useCallback(
+    (configKey: string, label: string) => bindPickTarget({ kind: 'config', nodeId: id, configKey }, label),
+    [bindPickTarget, id],
+  );
 
   // --- EXPLICIT CONTROLS: the CLOSED INSTANCE's interface (P3) ---------------
   // The macro def this node instantiates. Hoisted above `configIssues` so the
@@ -1705,6 +1762,35 @@ function CaNodeComponent({ id, data }: NodeProps) {
           </div>
         )}
 
+        {/* EXPLICIT CONTROLS — pick mode, CHAINING (D4). A nested macro INSTANCE
+            offers its own def's controls, so an outer macro can re-expose one
+            knob of an inner one. A row that would close a cycle is greyed with
+            the reason rather than hidden — and the verdict is the resolver's own
+            `resolveTarget`, so the offer and the resolution cannot disagree. */}
+        {pickControlRows.length > 0 && (
+          <div className={styles.pickOverlay}>
+            {pickControlRows.map(r => (
+              <button
+                key={r.id}
+                type="button"
+                disabled={r.cycle}
+                className={`${styles.pickRow} nodrag`}
+                onMouseDown={e => e.stopPropagation()}
+                onClick={e => {
+                  e.stopPropagation();
+                  if (!r.cycle) bindPickTarget({ kind: 'control', nodeId: id, controlId: r.id }, r.name);
+                }}
+                title={r.cycle
+                  ? `${r.name} — ${CONTROL_BLOCK_REASON.cycle}`
+                  : `${r.name} — re-expose this nested macro's control on the outer one`}
+              >
+                <span className={styles.pickRowLabel}>{r.name}</span>
+                <span className={styles.pickRowNote}>{r.cycle ? 'circular' : 'chain'}</span>
+              </button>
+            ))}
+          </div>
+        )}
+
         {/* Node-specific config UI */}
         {nodeData.nodeType === 'getCellAttribute' && (
           <select
@@ -1712,10 +1798,7 @@ function CaNodeComponent({ id, data }: NodeProps) {
             value={(nodeData.config.attributeId as string) || ''}
             onChange={e => updateConfig('attributeId', e.target.value)}
           >
-            <option value="">Select...</option>
-            {ownAttrList.map(a => (
-              <option key={a.id} value={a.id}>{a.name}</option>
-            ))}
+            {elementOptions('attributeId')}
           </select>
         )}
 
@@ -1731,10 +1814,7 @@ function CaNodeComponent({ id, data }: NodeProps) {
               value={(nodeData.config.attributeId as string) || ''}
               onChange={e => updateConfig('attributeId', e.target.value)}
             >
-              <option value="">Agent attribute...</option>
-              {(model.agentAttributes ?? []).map(a => (
-                <option key={a.id} value={a.id}>{a.name}</option>
-              ))}
+              {elementOptions('attributeId')}
             </select>
             {nodeData.nodeType === 'filterAgents' && (
               <select
@@ -1789,10 +1869,7 @@ function CaNodeComponent({ id, data }: NodeProps) {
             value={(nodeData.config.attributeId as string) || ''}
             onChange={e => updateConfig('attributeId', e.target.value)}
           >
-            <option value="">Bond attribute...</option>
-            {bondAttrsOf(model).map(a => (
-              <option key={a.id} value={a.id}>{a.name}</option>
-            ))}
+            {elementOptions('attributeId')}
           </select>
         )}
 
@@ -1823,10 +1900,7 @@ function CaNodeComponent({ id, data }: NodeProps) {
                   value={(nodeData.config.partitionAttributeId as string) || ''}
                   onChange={e => updateConfig('partitionAttributeId', e.target.value)}
                 >
-                  <option value="">Bond attribute...</option>
-                  {bondAttrsOf(model).map(a => (
-                    <option key={a.id} value={a.id}>{a.name}</option>
-                  ))}
+                  {elementOptions('partitionAttributeId')}
                 </select>
               )}
               {mode === 'byBondAttribute' && partAttr && partAttr.type === 'tag' && (
@@ -1893,10 +1967,7 @@ function CaNodeComponent({ id, data }: NodeProps) {
               value={(nodeData.config.attributeId as string) || ''}
               onChange={e => updateConfig('attributeId', e.target.value)}
             >
-              <option value="">Agent attribute (tag / binary)...</option>
-              {censusAttributes(model).map(a => (
-                <option key={a.id} value={a.id}>{a.name}</option>
-              ))}
+              {elementOptions('attributeId')}
             </select>
             <select
               className={styles.select}
@@ -1926,10 +1997,7 @@ function CaNodeComponent({ id, data }: NodeProps) {
               value={(nodeData.config.attributeId as string) || ''}
               onChange={e => updateConfig('attributeId', e.target.value)}
             >
-              <option value="">Field (cell) attribute...</option>
-              {cellAttrsOf(model).map(a => (
-                <option key={a.id} value={a.id}>{a.name}</option>
-              ))}
+              {elementOptions('attributeId')}
             </select>
             {nodeData.nodeType === 'readCellsUnder' && (
               <select
@@ -1969,22 +2037,14 @@ function CaNodeComponent({ id, data }: NodeProps) {
               value={(nodeData.config.neighborhoodId as string) || ''}
               onChange={e => updateConfig('neighborhoodId', e.target.value)}
             >
-              <option value="">Neighborhood...</option>
-              {model.neighborhoods.map(n => (
-                <option key={n.id} value={n.id}>{n.name}</option>
-              ))}
+              {elementOptions('neighborhoodId')}
             </select>
             <select
               className={styles.select}
               value={(nodeData.config.attributeId as string) || ''}
               onChange={e => updateConfig('attributeId', e.target.value)}
             >
-              <option value="">Attribute...</option>
-              {model.attributes
-                .filter(a => !a.isModelAttribute)
-                .map(a => (
-                  <option key={a.id} value={a.id}>{a.name}</option>
-                ))}
+              {elementOptions('attributeId')}
             </select>
           </>
         )}
@@ -2000,12 +2060,7 @@ function CaNodeComponent({ id, data }: NodeProps) {
             value={(nodeData.config.attributeId as string) || ''}
             onChange={e => updateConfig('attributeId', e.target.value)}
           >
-            <option value="">Attribute...</option>
-            {model.attributes
-              .filter(a => !a.isModelAttribute)
-              .map(a => (
-                <option key={a.id} value={a.id}>{a.name}</option>
-              ))}
+            {elementOptions('attributeId')}
           </select>
         )}
 
@@ -2093,12 +2148,8 @@ function CaNodeComponent({ id, data }: NodeProps) {
                       updateNodeData(id, { ...nodeData, config: newConfig });
                     }}
                   >
-                    <option value="">Tag attr...</option>
-                    {tagAttrScope
-                      .filter(a => a.type === 'tag')
-                      .map(a => (
-                        <option key={a.id} value={a.id}>{a.name}</option>
-                      ))}
+                    {/* COUPLED write (constValue) — list shared, key not bindable. */}
+                    {elementOptions('tagAttributeId')}
                   </select>
                   {(() => {
                     const tagAttr = tagAttrScope.find(a => a.id === nodeData.config.tagAttributeId);
@@ -2195,10 +2246,7 @@ function CaNodeComponent({ id, data }: NodeProps) {
                   value={(nodeData.config.facingAttributeId as string) ?? ''}
                   onChange={e => updateConfig('facingAttributeId', e.target.value)}
                 >
-                  <option value="">Vector attribute…</option>
-                  {(model.agentAttributes ?? []).filter(a => a.type === 'vector').map(a => (
-                    <option key={a.id} value={a.id}>{a.name}</option>
-                  ))}
+                  {elementOptions('facingAttributeId')}
                 </select>
               </>
             )}
@@ -2235,10 +2283,7 @@ function CaNodeComponent({ id, data }: NodeProps) {
                   value={(nodeData.config.facingAttributeId as string) ?? ''}
                   onChange={e => updateConfig('facingAttributeId', e.target.value)}
                 >
-                  <option value="">Vector attribute…</option>
-                  {(model.agentAttributes ?? []).filter(a => a.type === 'vector').map(a => (
-                    <option key={a.id} value={a.id}>{a.name}</option>
-                  ))}
+                  {elementOptions('facingAttributeId')}
                 </select>
               </>
             )}
@@ -2338,12 +2383,8 @@ function CaNodeComponent({ id, data }: NodeProps) {
                     updateNodeData(id, { ...nodeData, config: newConfig });
                   }}
                 >
-                  <option value="">Tag attr...</option>
-                  {tagAttrScope
-                    .filter(a => a.type === 'tag')
-                    .map(a => (
-                      <option key={a.id} value={a.id}>{a.name}{a.isModelAttribute ? ' (model)' : ''}</option>
-                    ))}
+                  {/* COUPLED write (the operands) — list shared, key not bindable. */}
+                  {elementOptions('tagAttributeId')}
                 </select>
               )}
               <select
@@ -2409,10 +2450,7 @@ function CaNodeComponent({ id, data }: NodeProps) {
             value={(nodeData.config.attributeId as string) || ''}
             onChange={e => updateConfig('attributeId', e.target.value)}
           >
-            <option value="">Select...</option>
-            {ownAttrList.map(a => (
-              <option key={a.id} value={a.id}>{a.name}</option>
-            ))}
+            {elementOptions('attributeId')}
           </select>
         )}
 
@@ -2442,10 +2480,9 @@ function CaNodeComponent({ id, data }: NodeProps) {
                   updateNodeData(id, { ...nodeData, config: newConfig });
                 }}
               >
-                <option value="">Select...</option>
-                {ownAttrList.map(a => (
-                  <option key={a.id} value={a.id}>{a.name}</option>
-                ))}
+                {/* COUPLED write (operation + _tagLen), so this key is not
+                    bindable as a control — but the LIST is still the shared one. */}
+                {elementOptions('attributeId')}
               </select>
               <select
                 className={styles.select}
@@ -2466,12 +2503,7 @@ function CaNodeComponent({ id, data }: NodeProps) {
             value={(nodeData.config.indicatorId as string) || ''}
             onChange={e => updateConfig('indicatorId', e.target.value)}
           >
-            <option value="">Select...</option>
-            {(model.indicators || [])
-              .filter(i => i.kind === 'standalone')
-              .map(i => (
-                <option key={i.id} value={i.id}>{i.name}</option>
-              ))}
+            {elementOptions('indicatorId')}
           </select>
         )}
 
@@ -2487,48 +2519,24 @@ function CaNodeComponent({ id, data }: NodeProps) {
             value={(nodeData.config.indicatorId as string) || ''}
             onChange={e => updateConfig('indicatorId', e.target.value)}
           >
-            <option value="">Select...</option>
-            {(model.indicators || []).map(i => {
-              const blocker = indicatorScalarBlocker(i);
-              const kindTag = i.kind === 'standalone' ? '' : i.kind === 'graph' ? ' (graph)' : ' (linked)';
-              return (
-                <option key={i.id} value={i.id} disabled={blocker !== null} title={blocker ?? undefined}>
-                  {i.name}{kindTag}{blocker ? ' — ' + blocker : ''}
-                </option>
-              );
-            })}
+            {elementOptions('indicatorId')}
           </select>
         )}
 
         {(nodeData.nodeType === 'getVariable'
           || nodeData.nodeType === 'setVariable'
-          || nodeData.nodeType === 'setArrayElement') && (() => {
-          // Filter by kind: SetVariable wants scalars, SetArrayElement wants
-          // arrays, GetVariable accepts either.
-          const wantArray = nodeData.nodeType === 'setArrayElement';
-          const wantScalar = nodeData.nodeType === 'setVariable';
-          // Generic Agent Platform: the Agents graph lists the agent variable set.
-          const varList = getActiveGraphKind() === 'agents' ? (model.agentVariables || []) : (model.variables || []);
-          const matching = varList.filter(v => {
-            if (wantArray) return v.kind === 'array';
-            if (wantScalar) return v.kind === 'scalar';
-            return true;
-          });
-          return (
-            <select
-              className={styles.select}
-              value={(nodeData.config.variableId as string) || ''}
-              onChange={e => updateConfig('variableId', e.target.value)}
-            >
-              <option value="">Select variable...</option>
-              {matching.map(v => (
-                <option key={v.id} value={v.id}>
-                  {v.name} ({v.kind === 'array' ? `${typeDisplayName(v.dataType)}[${v.length ?? '?'}]` : typeDisplayName(v.dataType)})
-                </option>
-              ))}
-            </select>
-          );
-        })()}
+          || nodeData.nodeType === 'setArrayElement') && (
+          // The kind filter (Set Variable wants scalars, Set Array Element wants
+          // arrays, Get Variable takes either) and the Agents-graph variable set
+          // both live in the shared list — see `varOpts` in explicitControls.
+          <select
+            className={styles.select}
+            value={(nodeData.config.variableId as string) || ''}
+            onChange={e => updateConfig('variableId', e.target.value)}
+          >
+            {elementOptions('variableId')}
+          </select>
+        )}
 
 
         {nodeData.nodeType === 'updateIndicator' && (() => {
@@ -2557,12 +2565,9 @@ function CaNodeComponent({ id, data }: NodeProps) {
                   updateNodeData(id, { ...nodeData, config: newConfig });
                 }}
               >
-                <option value="">Select...</option>
-                {(model.indicators || [])
-                  .filter(i => i.kind === 'standalone')
-                  .map(i => (
-                    <option key={i.id} value={i.id}>{i.name}</option>
-                  ))}
+                {/* COUPLED write (operation + _tagLen) — list shared, key not
+                    bindable as a control. */}
+                {elementOptions('indicatorId')}
               </select>
               <select
                 className={styles.select}
@@ -2626,26 +2631,18 @@ function CaNodeComponent({ id, data }: NodeProps) {
               {label}
             </label>
           );
-          // On the Agents graph this colours an AGENT for an agent viewer, so list
-          // the agent mappings; on the Cells graph list the cell mappings. The
-          // "Current Simulator Selected" sentinel works in both (writes whichever
-          // viewer is active — for an agent OM pass that's the mapping it runs for).
-          const looksMappings = getActiveGraphKind() === 'agents'
-            ? (model.agentMappings ?? []) : model.mappings;
           return (
             <>
+              {/* On the Agents graph this colours an AGENT for an agent viewer, so
+                  the shared list carries the agent mappings there and the cell
+                  mappings on Cells; the "Current Simulator Selected" sentinel is
+                  part of that list and works on both. */}
               <select
                 className={styles.select}
                 value={(nodeData.config.mappingId as string) || ''}
                 onChange={e => updateConfig('mappingId', e.target.value)}
               >
-                <option value="">Select Mapping...</option>
-                <option value={CURRENT_VIEWER_SENTINEL}>Current Simulator Selected</option>
-                {looksMappings
-                  .filter(m => m.isAttributeToColor)
-                  .map(m => (
-                    <option key={m.id} value={m.id}>{m.name}</option>
-                  ))}
+                {elementOptions('mappingId')}
               </select>
               {/* Glyphs are a render no-op for agents (discs/sprites carry no glyph
                   overlay), so the checkbox is hidden on the Agents graph — except
@@ -2705,12 +2702,7 @@ function CaNodeComponent({ id, data }: NodeProps) {
             value={(nodeData.config.mappingId as string) || ''}
             onChange={e => updateConfig('mappingId', e.target.value)}
           >
-            <option value="">Select Mapping...</option>
-            {model.mappings
-              .filter(m => !m.isAttributeToColor)
-              .map(m => (
-                <option key={m.id} value={m.id}>{m.name}</option>
-              ))}
+            {elementOptions('mappingId')}
           </select>
         )}
 
@@ -2720,12 +2712,7 @@ function CaNodeComponent({ id, data }: NodeProps) {
             value={(nodeData.config.mappingId as string) || ''}
             onChange={e => updateConfig('mappingId', e.target.value)}
           >
-            <option value="">Select Mapping...</option>
-            {model.mappings
-              .filter(m => m.isAttributeToColor)
-              .map(m => (
-                <option key={m.id} value={m.id}>{m.name}</option>
-              ))}
+            {elementOptions('mappingId')}
           </select>
         )}
 
@@ -2736,12 +2723,7 @@ function CaNodeComponent({ id, data }: NodeProps) {
             value={(nodeData.config.mappingId as string) || ''}
             onChange={e => updateConfig('mappingId', e.target.value)}
           >
-            <option value="">Select Mapping...</option>
-            {model.mappings
-              .filter(m => m.isAttributeToColor)
-              .map(m => (
-                <option key={m.id} value={m.id}>{m.name}</option>
-              ))}
+            {elementOptions('mappingId')}
           </select>
         )}
 
@@ -2751,12 +2733,7 @@ function CaNodeComponent({ id, data }: NodeProps) {
             value={(nodeData.config.mappingId as string) || ''}
             onChange={e => updateConfig('mappingId', e.target.value)}
           >
-            <option value="">Select Agent View...</option>
-            {(model.agentMappings ?? [])
-              .filter(m => m.isAttributeToColor)
-              .map(m => (
-                <option key={m.id} value={m.id}>{m.name}</option>
-              ))}
+            {elementOptions('mappingId')}
           </select>
         )}
 
@@ -2769,12 +2746,7 @@ function CaNodeComponent({ id, data }: NodeProps) {
             value={(nodeData.config.mappingId as string) || ''}
             onChange={e => updateConfig('mappingId', e.target.value)}
           >
-            <option value="">Select Agent Input Mapping...</option>
-            {(model.agentMappings ?? [])
-              .filter(m => !m.isAttributeToColor)
-              .map(m => (
-                <option key={m.id} value={m.id}>{m.name}</option>
-              ))}
+            {elementOptions('mappingId')}
           </select>
         )}
 
@@ -2802,10 +2774,7 @@ function CaNodeComponent({ id, data }: NodeProps) {
                   onChange={e => updateConfig('spriteId', e.target.value)}
                   title="The sprite to draw (manage sprites in the Mappings panel → Sprites)"
                 >
-                  <option value="">Select Sprite...</option>
-                  {(model.sprites ?? []).map(s => (
-                    <option key={s.id} value={s.id}>{s.name}</option>
-                  ))}
+                  {elementOptions('spriteId')}
                 </select>
               )}
               {cbx('setFrame', 'Set frame', !!nodeData.config.setFrame, 'Jump to / reset the current frame (the Frame input)')}
@@ -2839,12 +2808,8 @@ function CaNodeComponent({ id, data }: NodeProps) {
               updateNodeData(id, { ...nodeData, config: newConfig });
             }}
           >
-            <option value="">Select...</option>
-            {model.attributes
-              .filter(a => a.isModelAttribute)
-              .map(a => (
-                <option key={a.id} value={a.id}>{a.name}</option>
-              ))}
+            {/* COUPLED write (isColorAttr) — list shared, key not bindable. */}
+            {elementOptions('attributeId')}
           </select>
         )}
 
@@ -2867,12 +2832,7 @@ function CaNodeComponent({ id, data }: NodeProps) {
             value={(nodeData.config.tableId as string) || ''}
             onChange={e => updateConfig('tableId', e.target.value)}
           >
-            <option value="">Select Lookup Table...</option>
-            {model.attributes
-              .filter(a => a.isModelAttribute && a.type === 'lookupTable')
-              .map(a => (
-                <option key={a.id} value={a.id}>{a.name}</option>
-              ))}
+            {elementOptions('tableId')}
           </select>
         )}
         {nodeData.nodeType === 'ovSetModelAttribute' && (
@@ -2881,16 +2841,15 @@ function CaNodeComponent({ id, data }: NodeProps) {
             value={(nodeData.config.attributeId as string) || ''}
             onChange={e => updateConfig('attributeId', e.target.value)}
           >
-            <option value="">Select model attribute...</option>
-            {model.attributes
-              .filter(a => a.isModelAttribute && a.type !== 'color' && a.type !== 'lookupTable' && a.type !== 'vector')
-              .map(a => (
-                <option key={a.id} value={a.id}>{a.name}</option>
-              ))}
+            {elementOptions('attributeId')}
           </select>
         )}
 
         {nodeData.nodeType === 'ovReadIndicator' && (() => {
+          // The OPTION LIST is the shared one (`elementOptions` below); this local
+          // filter exists only to answer a DIFFERENT question — whether the
+          // SELECTED indicator is frequency-shaped, which decides the category
+          // widget's shape.
           const eligible = (model.indicators || []).filter(i =>
             !(i.kind === 'linked' && i.xAxis && i.xAxis !== 'generation'));
           const sel = eligible.find(i => i.id === nodeData.config.indicatorId);
@@ -2914,10 +2873,7 @@ function CaNodeComponent({ id, data }: NodeProps) {
                 value={(nodeData.config.indicatorId as string) || ''}
                 onChange={e => updateConfig('indicatorId', e.target.value)}
               >
-                <option value="">Select indicator...</option>
-                {eligible.map(i => (
-                  <option key={i.id} value={i.id}>{i.name}</option>
-                ))}
+                {elementOptions('indicatorId')}
               </select>
               {isFreq && (knownCats ? (
                 <select
@@ -2947,7 +2903,9 @@ function CaNodeComponent({ id, data }: NodeProps) {
         })()}
 
         {nodeData.nodeType === 'ovCollectSpatial' && (() => {
-          // The inverse filter of ovReadIndicator: SPATIAL indicators only.
+          // The inverse filter of ovReadIndicator: SPATIAL indicators only. As
+          // there, the OPTION LIST is the shared one; this local filter only
+          // answers whether the SELECTED indicator is frequency-shaped.
           const eligible = (model.indicators || []).filter(i =>
             i.kind === 'linked' && i.xAxis && i.xAxis !== 'generation');
           const sel = eligible.find(i => i.id === nodeData.config.indicatorId);
@@ -2965,10 +2923,7 @@ function CaNodeComponent({ id, data }: NodeProps) {
                 onChange={e => updateConfig('indicatorId', e.target.value)}
                 title="A spatial indicator (rows / columns / layers X-axis) — its whole per-position curve is captured."
               >
-                <option value="">Select spatial indicator...</option>
-                {eligible.map(i => (
-                  <option key={i.id} value={i.id}>{i.name}</option>
-                ))}
+                {elementOptions('indicatorId')}
               </select>
               {isFreq && (knownCats ? (
                 <select
@@ -3020,10 +2975,7 @@ function CaNodeComponent({ id, data }: NodeProps) {
             value={(nodeData.config.presetId as string) || ''}
             onChange={e => updateConfig('presetId', e.target.value)}
           >
-            <option value="">Select preset...</option>
-            {(model.presets || []).map(p => (
-              <option key={p.id} value={p.id}>{p.name}</option>
-            ))}
+            {elementOptions('presetId')}
           </select>
         )}
 
@@ -3699,12 +3651,8 @@ function CaNodeComponent({ id, data }: NodeProps) {
                     updateNodeData(id, { ...nodeData, config: newConfig });
                   }}
                 >
-                  <option value="">Tag attr...</option>
-                  {tagAttrScope
-                    .filter(a => a.type === 'tag')
-                    .map(a => (
-                      <option key={a.id} value={a.id}>{a.name}{a.isModelAttribute ? ' (model)' : ''}</option>
-                    ))}
+                  {/* COUPLED write (caseCount) — list shared, key not bindable. */}
+                  {elementOptions('tagAttributeId')}
                 </select>
               )}
 
@@ -3840,22 +3788,14 @@ function CaNodeComponent({ id, data }: NodeProps) {
                 value={(nodeData.config.neighborhoodId as string) || ''}
                 onChange={e => updateConfig('neighborhoodId', e.target.value)}
               >
-                <option value="">Neighborhood...</option>
-                {model.neighborhoods.map(n => (
-                  <option key={n.id} value={n.id}>{n.name}</option>
-                ))}
+                {elementOptions('neighborhoodId')}
               </select>
               <select
                 className={styles.select}
                 value={(nodeData.config.attributeId as string) || ''}
                 onChange={e => updateConfig('attributeId', e.target.value)}
               >
-                <option value="">Attribute...</option>
-                {model.attributes
-                  .filter(a => !a.isModelAttribute)
-                  .map(a => (
-                    <option key={a.id} value={a.id}>{a.name}</option>
-                  ))}
+                {elementOptions('attributeId')}
               </select>
               <select
                 className={styles.select}
@@ -3904,17 +3844,13 @@ function CaNodeComponent({ id, data }: NodeProps) {
           // Table Map, they're parallel int arrays. Indices come from face
           // labels (Get Facing Labels) or tag reads — depends on the table's
           // row/col key sources.
-          const tables = model.attributes.filter(a => a.isModelAttribute && a.type === 'lookupTable');
           return (
             <select
               className={styles.select}
               value={(nodeData.config.tableId as string) || ''}
               onChange={e => updateConfig('tableId', e.target.value)}
             >
-              <option value="">Lookup Table...</option>
-              {tables.map(a => (
-                <option key={a.id} value={a.id}>{a.name}</option>
-              ))}
+              {elementOptions('tableId')}
             </select>
           );
         })()}
@@ -4049,10 +3985,8 @@ function CaNodeComponent({ id, data }: NodeProps) {
                   updateNodeData(id, { ...nodeData, config: newConfig });
                 }}
               >
-                <option value="">Neighborhood...</option>
-                {model.neighborhoods.map(n => (
-                  <option key={n.id} value={n.id}>{n.name}</option>
-                ))}
+                {/* COUPLED write (tagCount) — list shared, key not bindable. */}
+                {elementOptions('neighborhoodId')}
               </select>
               {Array.from({ length: tagCount }, (_, i) => (
                 <div key={i} style={{ display: 'flex', gap: 2, alignItems: 'center' }}>
@@ -4109,10 +4043,7 @@ function CaNodeComponent({ id, data }: NodeProps) {
             value={(nodeData.config.neighborhoodId as string) || ''}
             onChange={e => updateConfig('neighborhoodId', e.target.value)}
           >
-            <option value="">Neighborhood...</option>
-            {model.neighborhoods.map(n => (
-              <option key={n.id} value={n.id}>{n.name}</option>
-            ))}
+            {elementOptions('neighborhoodId')}
           </select>
         )}
 
@@ -4129,10 +4060,7 @@ function CaNodeComponent({ id, data }: NodeProps) {
                 value={(nodeData.config.neighborhoodId as string) || ''}
                 onChange={e => updateConfig('neighborhoodId', e.target.value)}
               >
-                <option value="">Neighborhood...</option>
-                {model.neighborhoods.map(n => (
-                  <option key={n.id} value={n.id}>{n.name}</option>
-                ))}
+                {elementOptions('neighborhoodId')}
               </select>
               <select
                 className={styles.select}
