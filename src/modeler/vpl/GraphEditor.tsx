@@ -2349,17 +2349,25 @@ export function GraphEditorInner() {
     [makeRerouteNode, pushCurrentSnapshot, scheduleSync, setNodes, setEdges],
   );
 
-  /** DISSOLVE a reroute — remove the dot but KEEP the wiring (Blender's term for
+  /** DISSOLVE reroutes — remove the dots but KEEP the wiring (Blender's term for
    *  the same operation). The editor-level inverse of the press-and-hold insert
-   *  gesture: every consumer of the reroute's output is rewired straight to the
-   *  reroute's IMMEDIATE upstream source, then the reroute and its now-dead
-   *  edges go.
+   *  gesture: every consumer of a dissolved reroute's output is rewired straight
+   *  to its upstream source, then the reroute and its now-dead edges go.
    *
-   *  Only the CLICKED reroute dissolves — its consumers land on whatever fed it,
-   *  which may itself be another reroute, so a chain stays intact minus one link
-   *  (`A → R1 → R2 → B`, dissolve R1 ⇒ `A → R2 → B`). That is the least
-   *  surprising reading of "dissolve this dot" and mirrors what the compiler's
-   *  `collapseReroutes` would produce for the resulting graph.
+   *  Only the SELECTED reroutes dissolve — a consumer lands on the nearest
+   *  upstream source that is NOT itself dissolving, so the walk is transitive
+   *  over the dissolved SET, exactly like the compiler's `collapseReroutes` is
+   *  over all reroutes. With `A → R1 → R2 → B`: dissolve both ⇒ `A → B`;
+   *  dissolve R1 alone ⇒ `A → R2 → B` (it stops at the surviving R2). That
+   *  second case is the single-node reading of "dissolve this dot", which is why
+   *  `dissolveReroute` below is just this with a one-element set.
+   *
+   *  BATCH SEMANTICS (the multi-selection menu's "Dissolve Reroutes"): ONE undo
+   *  snapshot, ONE edge rewrite, ONE sync — never a loop over the single form,
+   *  which would push a snapshot per reroute and read possibly-stale React state
+   *  between them. Order-independent by construction: nothing is mutated while
+   *  resolving, and the whole rewrite happens inside ONE setEdges updater over a
+   *  consistent snapshot of the edge list.
    *
    *  Degenerate shapes fall out: a reroute with NO inbound edge just deletes
    *  (its consumers were relaying nothing — dangling through it — so their edges
@@ -2373,41 +2381,90 @@ export function GraphEditorInner() {
    *  already exists — the compiled result is unchanged either way, and a value
    *  input can't hit this at all (single-occupancy, enforced by
    *  `isValidConnection`). */
-  const dissolveReroute = useCallback((nodeId: string) => {
-    const node = nodesRef.current.find(n => n.id === nodeId);
-    if (!node || (node.data as Record<string, unknown> | undefined)?.nodeType !== 'reroute') return;
+  const dissolveReroutes = useCallback((nodeIds: readonly string[]) => {
+    // Only genuine reroutes dissolve — a mixed selection leaves every other node
+    // (and its wiring) untouched.
+    const targets = new Set<string>();
+    for (const id of nodeIds) {
+      const n = nodesRef.current.find(nn => nn.id === id);
+      if (n && (n.data as Record<string, unknown> | undefined)?.nodeType === 'reroute') targets.add(id);
+    }
+    if (targets.size === 0) return;
     pushCurrentSnapshot();
     const ts = Date.now().toString(36);
     let seq = 0;
     setEdges(cur => {
-      // The reroute's single inbound edge names the upstream source (first wins
-      // — reroute inputs are single-occupancy; defensive against a hand-edited
-      // file with a stray extra wire, same rule as collapseReroutes).
-      const inbound = cur.find(e => e.target === nodeId);
-      const kept = cur.filter(e => e.source !== nodeId && e.target !== nodeId);
-      if (!inbound) return kept;
+      // Each dissolved reroute's single inbound edge names its upstream source
+      // (first wins — reroute inputs are single-occupancy; defensive against a
+      // hand-edited file with a stray extra wire, same rule as collapseReroutes).
+      const inboundOf = new Map<string, Edge>();
+      for (const e of cur) {
+        if (targets.has(e.target) && !inboundOf.has(e.target)) inboundOf.set(e.target, e);
+      }
+      // Walk back through DISSOLVED reroutes to the first source that survives.
+      // Memoized over the whole walked path; cycle-guarded (editor validation
+      // prevents cycles, but a hand-edited file might not).
+      type Src = { source: string; sourceHandle: Edge['sourceHandle'] };
+      const memo = new Map<string, Src | null>();
+      const resolve = (startId: string): Src | null => {
+        const cached = memo.get(startId);
+        if (cached !== undefined) return cached;
+        const path: string[] = [];
+        const seenIds = new Set<string>();
+        let curId = startId;
+        let result: Src | null = null;
+        for (;;) {
+          if (seenIds.has(curId)) { result = null; break; }        // cycle
+          seenIds.add(curId);
+          path.push(curId);
+          const inb = inboundOf.get(curId);
+          if (!inb) { result = null; break; }                      // nothing feeds it
+          if (!targets.has(inb.source)) {                          // survives: stop here
+            result = { source: inb.source, sourceHandle: inb.sourceHandle };
+            break;
+          }
+          const next = memo.get(inb.source);                       // upstream already resolved?
+          if (next !== undefined) { result = next; break; }
+          curId = inb.source;                                      // keep walking the chain
+        }
+        for (const id of path) memo.set(id, result);
+        return result;
+      };
+
+      const kept = cur.filter(e => !targets.has(e.source) && !targets.has(e.target));
       const seen = new Set(
         kept.map(e => `${e.source} ${e.sourceHandle ?? ''} ${e.target} ${e.targetHandle ?? ''}`),
       );
       const rewired: Edge[] = [];
       for (const e of cur) {
-        if (e.source !== nodeId) continue;
-        const key = `${inbound.source} ${inbound.sourceHandle ?? ''} ${e.target} ${e.targetHandle ?? ''}`;
+        if (!targets.has(e.source)) continue;  // not an outbound wire of a dissolved reroute
+        if (targets.has(e.target)) continue;   // internal to the dissolved set: it just goes
+        const real = resolve(e.source);
+        if (!real) continue;                   // fed by nothing: the consumer edge goes too
+        const key = `${real.source} ${real.sourceHandle ?? ''} ${e.target} ${e.targetHandle ?? ''}`;
         if (seen.has(key)) continue;
         seen.add(key);
         rewired.push({
           ...e,
           id: `e_${ts}_rd${seq++}_${Math.random().toString(36).slice(2, 5)}`,
-          source: inbound.source,
-          sourceHandle: inbound.sourceHandle,
+          source: real.source,
+          sourceHandle: real.sourceHandle,
           selected: false,
         });
       }
       return [...kept, ...rewired];
     });
-    setNodes(nds => nds.filter(n => n.id !== nodeId));
+    setNodes(nds => nds.filter(n => !targets.has(n.id)));
     scheduleSync();
   }, [pushCurrentSnapshot, scheduleSync, setNodes, setEdges]);
+
+  /** Single-reroute dissolve (the node context-menu item + double-click on the
+   *  dot). The one-element case of the batch: with nothing else in the set the
+   *  transitive walk stops at the IMMEDIATE upstream source, which is exactly
+   *  the historical single-node semantics. */
+  const dissolveReroute = useCallback((nodeId: string) => {
+    dissolveReroutes([nodeId]);
+  }, [dissolveReroutes]);
 
   // Press-and-hold gesture to CREATE a reroute on a wire: LMB-press on a wire and
   // hold ~0.55s to drop a reroute that then follows the cursor until release
@@ -4587,6 +4644,34 @@ export function GraphEditorInner() {
           {contextMenu.target.type === 'selection' && (
             <>
               <div className={styles.contextTitle}>Selection ({contextMenu.target.nodeIds.length})</div>
+              {/* Reroutes in the selection dissolve as ONE operation (one undo
+                  step). Shown only when the selection actually holds one; a
+                  mixed selection dissolves ONLY its reroutes and leaves every
+                  other node untouched. */}
+              {(() => {
+                const ids = (contextMenu.target as { nodeIds: string[] }).nodeIds;
+                const rerouteIds = ids.filter(id => {
+                  const n = nodes.find(nn => nn.id === id);
+                  return !!n && (n.data as Record<string, unknown> | undefined)?.nodeType === 'reroute';
+                });
+                if (rerouteIds.length === 0) return null;
+                return (
+                  <>
+                    <button
+                      className={styles.contextItem}
+                      title="Remove the selected reroutes but keep the connections — each consumer rewires straight to the nearest source that is not being dissolved"
+                      onClick={e => {
+                        e.stopPropagation();
+                        setContextMenu(null);
+                        dissolveReroutes(rerouteIds);
+                      }}
+                    >
+                      Dissolve Reroute{rerouteIds.length > 1 ? `s (${rerouteIds.length})` : ''}
+                    </button>
+                    <hr style={{ border: 'none', borderTop: '1px solid var(--color-border)', margin: '4px 0' }} />
+                  </>
+                );
+              })()}
               <button className={styles.contextItem} onClick={e => { e.stopPropagation(); duplicateSelection(); setContextMenu(null); }}>Duplicate</button>
               <button className={styles.contextItem} onClick={e => { e.stopPropagation(); handleCopy(); setContextMenu(null); }}>Copy</button>
               <button className={styles.contextItem} onClick={e => { e.stopPropagation(); handleCut(); setContextMenu(null); }}>Cut</button>
