@@ -123,12 +123,16 @@ function fadeColor(color: string | undefined, alpha: number, fallback: string): 
 // node that carries a validation badge and fails to compile.
 // ---------------------------------------------------------------------------
 
+/** Frames the pending-`.gcamacro` drain waits for React Flow to measure itself
+ *  on a fresh mount before giving up and placing the macro anyway. */
+const MACRO_DRAIN_MAX_ATTEMPTS = 40;
+
 /** User-facing name of a graph kind (the cross-kind Paste explanation). */
 function graphKindLabel(kind: ActiveGraphKind): string {
   return kind === 'cells' ? 'Cells' : kind === 'agents' ? 'Agents' : 'Overseer';
 }
 
-import { setIsConnecting, setConnectingFrom, setShowPortLabels, showPortLabelsGlobal, showGridGlobal, setShowGrid as setShowGridGlobal, snapEnabledGlobal, setSnapEnabled as setSnapEnabledGlobal, setConnectedHandlesFromEdges, setConnectionHazards, getSavedGraphViewport, setSavedGraphViewport, savedCurrentScope, setSavedCurrentScope, subscribeCurrentModelElementDrag, setCompatibleHandlesForDrag, clearCompatibleHandlesForDrag, setCurrentModelElementDrag, compatibleHandlesForDrag, currentModelElementDrag, setQuickAddApi, setActiveGraphKind, displayNodeLabel, displayNodeDescription, type ActiveGraphKind } from './graphState';
+import { setIsConnecting, setConnectingFrom, setShowPortLabels, showPortLabelsGlobal, showGridGlobal, setShowGrid as setShowGridGlobal, snapEnabledGlobal, setSnapEnabled as setSnapEnabledGlobal, setConnectedHandlesFromEdges, setConnectionHazards, getSavedGraphViewport, setSavedGraphViewport, savedCurrentScope, setSavedCurrentScope, subscribeCurrentModelElementDrag, setCompatibleHandlesForDrag, clearCompatibleHandlesForDrag, setCurrentModelElementDrag, compatibleHandlesForDrag, currentModelElementDrag, setQuickAddApi, setActiveGraphKind, hasPendingMacroImport, takePendingMacroImport, displayNodeLabel, displayNodeDescription, type ActiveGraphKind } from './graphState';
 import { modelerUiState } from '../modelerUiState';
 import type { QuickAddPayload } from './graphState';
 import { detectEdgeHazard, isNodeAvailable } from './nodes/nodeValidation';
@@ -2730,12 +2734,10 @@ export function GraphEditorInner() {
     if (applied.notices.length > 0) console.warn(`Macro import — ${applied.notices.join('; ')}`);
   }, [model, importMacroBundle, addNodeAtPosition]);
 
-  const handleMacroFileSelected = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    e.target.value = '';
-    if (!file) return;
-    const finalPos = pendingImportPos.current ?? { x: 0, y: 0 };
-    pendingImportPos.current = null;
+  /** THE one macro-import path: read → parse → plan → (dialog | straight
+   *  through). Shared by the "Import Macro…" file picker AND an OS drag-and-drop
+   *  of a `.gcamacro` onto the app, so the two behave identically. */
+  const importMacroFile = useCallback((file: File, pos: { x: number; y: number }) => {
     file.text().then(text => {
       // ONE reader for the format (`parseMacroFile`), which never gates on
       // `schemaVersion` and drops any malformed optional field.
@@ -2750,10 +2752,74 @@ export function GraphEditorInner() {
       // NO unresolved reference ⇒ NO dialog. The import is exactly today's — and
       // this is what keeps every existing `.gcamacro` (and a re-import into the
       // model the macro came from) on the historical path.
-      if (!planNeedsDialog(plan)) { commitMacroImport(plan, plan.rows, finalPos); return; }
-      setMacroImportState({ plan, pos: finalPos });
+      if (!planNeedsDialog(plan)) { commitMacroImport(plan, plan.rows, pos); return; }
+      setMacroImportState({ plan, pos });
     });
   }, [model, commitMacroImport]);
+
+  const handleMacroFileSelected = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    const finalPos = pendingImportPos.current ?? { x: 0, y: 0 };
+    pendingImportPos.current = null;
+    importMacroFile(file, finalPos);
+  }, [importMacroFile]);
+
+  // A `.gcamacro` dropped anywhere on the app (App.tsx routes every OS file
+  // drop). App.tsx stashes it in a module-level slot and switches to the
+  // Modeler, so this drains BOTH on mount (the editor did not exist when the
+  // drop happened) and from the event (it did). `takePendingMacroImport` clears
+  // the slot, so whichever runs first wins and the other is a no-op.
+  const macroDrainRetry = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const drainPendingMacroImport = useCallback((attempt = 0) => {
+    if (macroDrainRetry.current !== null) { clearTimeout(macroDrainRetry.current); macroDrainRetry.current = null; }
+    // PEEK, never consume, until we can actually place a node. On a FRESH mount
+    // (the drop happened on another tab) React Flow has not run its own init
+    // yet, so `rfInstance` is null / the wrapper measures 0 — consuming here
+    // would drop the macro at flow (0,0) instead of the viewport centre. Retry
+    // for ~40 frames, then place it wherever we can rather than lose the file.
+    if (!hasPendingMacroImport()) return;
+    const rf = rfInstance.current;
+    const bounds = editorWrapperRef.current?.getBoundingClientRect();
+    if ((!rf || !bounds || bounds.width === 0) && attempt < MACRO_DRAIN_MAX_ATTEMPTS) {
+      macroDrainRetry.current = setTimeout(() => {
+        macroDrainRetry.current = null;
+        drainPendingMacroImportRef.current(attempt + 1);
+      }, 16);
+      return;
+    }
+    const pending = takePendingMacroImport();
+    if (!pending) return;
+    // Coords are carried only for a drop made while the Modeler was already
+    // active; honour them when they really land on the canvas, else drop the
+    // macro at the graph's viewport centre.
+    const inside = pending.clientX !== undefined && pending.clientY !== undefined && bounds
+      && pending.clientX >= bounds.left && pending.clientX <= bounds.right
+      && pending.clientY >= bounds.top && pending.clientY <= bounds.bottom;
+    const client = inside
+      ? { x: pending.clientX!, y: pending.clientY! }
+      : bounds && bounds.width > 0
+        ? { x: bounds.left + bounds.width / 2, y: bounds.top + bounds.height / 2 }
+        : { x: window.innerWidth / 2, y: window.innerHeight / 2 };
+    importMacroFile(pending.file, rf?.screenToFlowPosition(client) ?? { x: 0, y: 0 });
+  }, [importMacroFile]);
+
+  // Latest-ref so the once-registered listener never acts on a stale closure.
+  const drainPendingMacroImportRef = useRef(drainPendingMacroImport);
+  drainPendingMacroImportRef.current = drainPendingMacroImport;
+  useEffect(() => {
+    const onImportMacroFile = () => drainPendingMacroImportRef.current();
+    window.addEventListener('genesis-import-macro-file', onImportMacroFile);
+    // Mount drain: the drop that armed this happened on another tab, so the
+    // event fired before this editor existed.
+    const t = setTimeout(() => drainPendingMacroImportRef.current(), 0);
+    return () => {
+      window.removeEventListener('genesis-import-macro-file', onImportMacroFile);
+      clearTimeout(t);
+      if (macroDrainRetry.current !== null) { clearTimeout(macroDrainRetry.current); macroDrainRetry.current = null; }
+    };
+  }, []);
 
   const duplicateNode = useCallback((linked = false) => {
     if (!contextMenu || contextMenu.target.type !== 'node') return;

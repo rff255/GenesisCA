@@ -1386,9 +1386,12 @@ export function HelpView() {
 
           <h3 className={styles.h3}>Importing a Macro &mdash; Import as new / Remap / Discard</h3>
           <p className={styles.p}>
-            Right-click the canvas and choose <strong>Import Macro&hellip;</strong>. If the file
-            carries definitions this model does not already have, a dialog asks what to do with
-            each one:
+            Right-click the canvas and choose <strong>Import Macro&hellip;</strong> &mdash; or
+            simply <strong>drop a <code>.gcamacro</code> anywhere on the window</strong> (which
+            switches to the Modeler first if you were on another tab, and places the macro under
+            the drop point when you were already there). Both routes run the same import. If the
+            file carries definitions this model does not already have, a dialog asks what to do
+            with each one:
           </p>
           <ul className={styles.list}>
             <li><strong>Import as new</strong> &mdash; create it here, with a fresh id (and a
@@ -4587,7 +4590,11 @@ export function HelpView() {
             a <code>.gcaproj</code> (or an exported standalone <code>.html</code>) prompts to
             load the project (with the usual unsaved-changes confirmation);
             a <code>.gcastate</code> asks to replace the current simulation state;
-            a <code>.gcapreset</code> is added to the model&apos;s presets; and an
+            a <code>.gcapreset</code> is added to the model&apos;s presets;
+            a <code>.gcamacro</code> is imported into the node graph (switching to the
+            Modeler if you were on another tab, and opening the same import-resolution
+            dialog the canvas&apos; <em>Import Macro&hellip;</em> menu item does when the
+            file carries references); and an
             <strong> image</strong> (PNG/JPEG/BMP/WebP) opens the <strong>Map Image to
             Cells</strong> dialog, just like pasting one with Ctrl+V.
           </p>

@@ -16,6 +16,7 @@ import { ThemeSwitcher } from './components/ThemeSwitcher';
 import { KeyboardShortcutsOverlay } from './components/KeyboardShortcutsOverlay';
 import { BusyOverlay, useBusy } from './components/BusyOverlay';
 import { beginBusy } from './components/busyState';
+import { setPendingMacroImport } from './modeler/vpl/graphState';
 import type { CAModel } from './model/types';
 import styles from './App.module.css';
 
@@ -195,7 +196,8 @@ function AppInner() {
   // changes go through pendingLibLoad). .gcastate → confirm, then replace the
   // sim state via a genesis-load-state-file CustomEvent SimulatorView handles
   // (the exact transport-bar Load State path). .gcapreset → append to the
-  // model's presets (genesis-import-preset-file). Images → the Map Image to
+  // model's presets (genesis-import-preset-file). .gcamacro → the graph
+  // editor's macro import (see the branch below). Images → the Map Image to
   // Cells dialog (genesis-open-image-file — the Ctrl+V clipboard seam).
   // .csv / .tsv / .asc → the Import CSV dialog (genesis-open-csv-file); an Esri
   // ASCII grid takes the same seam and reshapes the dialog from its own header.
@@ -221,13 +223,31 @@ function AppInner() {
       busyHandle.end();
     }
   };
-  const handleDroppedFile = (file: File) => {
+  const handleDroppedFile = (file: File, clientX?: number, clientY?: number) => {
     const ext = (file.name.split('.').pop() ?? '').toLowerCase();
     if (['gcaproj', 'json', 'html', 'htm'].includes(ext)) { void loadDroppedProject(file); return; }
     if (ext === 'gcastate') { setPendingStateDrop(file); return; }
     if (ext === 'gcapreset') {
       window.dispatchEvent(new CustomEvent('genesis-import-preset-file', { detail: { file } }));
       showToast(`Importing preset from "${file.name}"…`);
+      return;
+    }
+    // .gcamacro → the graph editor's macro-import flow — the SAME logic the
+    // canvas "Import Macro…" menu item runs (parseMacroFile → planImport → the
+    // M2 resolution dialog when the file carries references, straight through
+    // when it does not). The editor is UNMOUNTED on every non-Modeler tab, so
+    // the file is stashed in a module-level slot that survives the tab switch
+    // and drained by GraphEditor on mount OR from the event, whichever comes
+    // first (takePendingMacroImport makes the loser a no-op). The drop coords
+    // are carried only when the Modeler was ALREADY active — otherwise the drop
+    // landed on some other view and the editor places the macro at its
+    // viewport centre instead.
+    if (ext === 'gcamacro') {
+      setPendingMacroImport(
+        mode === 'modeler' ? { file, clientX, clientY } : { file },
+      );
+      setMode('modeler');
+      window.dispatchEvent(new CustomEvent('genesis-import-macro-file'));
       return;
     }
     // .asc (Esri ASCII grid) rides the SAME dialog — it decides its own shape
@@ -284,7 +304,7 @@ function AppInner() {
       if (!hasFiles(e)) return;
       e.preventDefault();
       const file = e.dataTransfer?.files?.[0];
-      if (file) handleDroppedFileRef.current(file);
+      if (file) handleDroppedFileRef.current(file, e.clientX, e.clientY);
     };
     window.addEventListener('dragenter', onDragEnter);
     window.addEventListener('dragover', onDragOver);
@@ -459,7 +479,7 @@ function AppInner() {
           background: 'rgba(0, 0, 0, 0.45)', border: '3px dashed var(--color-accent)',
           color: 'var(--color-text-primary)', fontSize: '1.05rem', fontWeight: 600,
         }}>
-          Drop to open — .gcaproj / .gcastate / .gcapreset / .csv / .asc / .tif / .geojson / image
+          Drop to open — .gcaproj / .gcastate / .gcapreset / .gcamacro / .csv / .asc / .tif / .geojson / image
         </div>
       )}
       <BusyOverlay />
