@@ -132,6 +132,49 @@ export function setControlPick(val: ControlPick): void {
 }
 
 // ---------------------------------------------------------------------------
+// EXPLICIT CONTROLS — the OPEN MACRO SCOPE mirror (R7).
+//
+// A closed instance whose def is CURRENTLY OPEN for editing must not be
+// writable from the instance: the open canvas re-syncs that def through the
+// 100 ms debounce (`scheduleSync` → `updateMacro({nodes, edges})`), so an
+// instance-side write would be CLOBBERED a moment later with no error anywhere.
+// Such a control renders disabled with its reason instead (`scope-open`), and
+// `applyControlValue` returns null for it so the handler is structurally inert.
+//
+// Only reachable under macro RECURSION (an instance of B inside B's own
+// subgraph, F5) — rare, silent, and exactly the class of bug that has to be
+// designed out rather than found.
+//
+// A module global in the `activeGraphKind` shape rather than prop-drilling the
+// editor's `currentScopeRef` down through React Flow into every CaNode.
+// `useSyncExternalStore` demands a STABLE snapshot reference, so the setter
+// compares CONTENTS and keeps the previous array when nothing moved.
+//
+// Holds MACRO DEF IDS ONLY — the editor's scope stack carries a leading
+// `'root'` sentinel, which names no def and would never match one.
+// ---------------------------------------------------------------------------
+
+let openMacroScopeGlobal: readonly string[] = [];
+const openMacroScopeListeners = new Set<() => void>();
+
+export function getOpenMacroScope(): readonly string[] {
+  return openMacroScopeGlobal;
+}
+export function subscribeOpenMacroScope(fn: () => void): () => void {
+  openMacroScopeListeners.add(fn);
+  return () => { openMacroScopeListeners.delete(fn); };
+}
+/** `scope` is the editor's raw stack (`['root', defA, defB]`); the sentinel is
+ *  filtered out here so every consumer gets a plain list of def ids. */
+export function setOpenMacroScope(scope: readonly string[]): void {
+  const next = scope.filter(s => s && s !== 'root');
+  const prev = openMacroScopeGlobal;
+  if (prev.length === next.length && prev.every((v, i) => v === next[i])) return;
+  openMacroScopeGlobal = next;
+  openMacroScopeListeners.forEach(fn => fn());
+}
+
+// ---------------------------------------------------------------------------
 // Canvas view settings (port labels / grid / snap) — persisted.
 // GraphEditor unmounts on every Modeler → Simulator tab switch, so its local
 // useState seeds from these module globals; the globals themselves write

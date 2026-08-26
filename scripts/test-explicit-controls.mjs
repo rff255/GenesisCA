@@ -58,8 +58,10 @@ export {
   SCALAR_CONFIG_KEYS, CLASS_C_KEYS, CONTROL_BLOCK_REASON, CONTROL_MAX_CHAIN_DEPTH,
   ownAttrListFor, tagAttrScopeFor,
   orderByGroup, withGroup, applyInterfaceEdit,
+  groupSections, CONTROL_BLOCK_NEEDS_ATTENTION,
 } from '../src/modeler/vpl/explicitControls.ts';
 export { getControlPick, setControlPick, subscribeControlPick } from '../src/modeler/vpl/graphState.ts';
+export { getOpenMacroScope, setOpenMacroScope, subscribeOpenMacroScope } from '../src/modeler/vpl/graphState.ts';
 export { cloneMacroWithFreshIds, countMacroInstances } from '../src/model/macroImport.ts';
 export { serializeModel, parseModelJSON, buildMacroFile, parseMacroFile } from '../src/model/fileOperations.ts';
 export { expandMacros } from '../src/modeler/vpl/compiler/macroExpand.ts';
@@ -704,6 +706,324 @@ console.log('\n--- Tier F: EMIT identity (the structural proof, R8) ---------');
   check('F6 NOTHING under compiler/ imports explicitControls', offenders.length === 0, offenders.join(','));
   const ctlMentions = compilerFiles.filter(f => /\bMacroControl\b|\.controls\b/.test(readFile(join(ROOT, f), 'utf8')));
   check('F7 no compiler file reads `.controls`', ctlMentions.length === 0, ctlMentions.join(','));
+}
+
+// ===========================================================================
+console.log('\n--- Tier G: cascades + the closed instance (P3) --------------');
+// ===========================================================================
+{
+  const { readFileSync } = await import('fs');
+  const src = f => readFileSync(join(ROOT, f), 'utf8');
+
+  /** Drive one reducer action the way the app dispatches it. */
+  const run = (model, action) => M.modelReducer({ model, isDirty: false, modelVersion: 0 }, action).model;
+  /** The in-macro edit path: patch ONE node's config through `UPDATE_MACRO`,
+   *  which is exactly what the open canvas's debounced `scheduleSync` does. */
+  const patchNode = (model, defId, nodeId, config) => run(model, {
+    type: 'UPDATE_MACRO', id: defId,
+    changes: {
+      nodes: defOf(model, defId).nodes.map(n =>
+        (n.id === nodeId ? { ...n, data: { ...n.data, config: { ...n.data.config, ...config } } } : n)),
+    },
+  });
+  const descOf = (model, defId, controlId, openScopes) => {
+    const c = defOf(model, defId).controls.find(k => k.id === controlId);
+    return M.resolveControlDescriptor(model, defId, c, openScopes);
+  };
+
+  /** The def a closed instance renders: three controls (a class-A number, a
+   *  class-B number and an ADAPTIVE class-A tag) and one group, so an ordering
+   *  or a kind bug is legible in a failure message. */
+  const instDef = () => ({
+    id: 'def_g', name: 'G',
+    nodes: [
+      node('mi', 'macroInput', { macroDefId: 'def_g' }),
+      node('rnd', 'getRandom', { randomType: 'float', distribution: 'uniform', _port_min: '2', _port_max: '9' }),
+      node('ps', 'periodicStep', { period: 4, phase: 1 }),
+      node('sa', 'setAttribute', { attributeId: 'a_type', _port_value: '2' }),
+      node('mo', 'macroOutput', { macroDefId: 'def_g' }),
+    ],
+    edges: [],
+    exposedInputs: [], exposedOutputs: [],
+    controls: [
+      ctl('c_max', 'Max', cfgTarget('rnd', '_port_max')),
+      ctl('c_per', 'Period', cfgTarget('ps', 'period'), { groupId: 'gT' }),
+      ctl('c_val', 'Kind', cfgTarget('sa', '_port_value')),
+    ],
+    groups: [{ id: 'gT', name: 'Tuning' }],
+  });
+
+  // --- SECTIONS: the instance renders in the EDITOR's order ----------------
+  {
+    const m0 = buildModel({ macroDefs: [instDef()] });
+    const d = defOf(m0, 'def_g');
+    const secs = M.groupSections(d.controls, d.groups);
+    check('G1 ungrouped head first, then each group under its header',
+      eq(secs.map(s => [s.group?.name ?? null, s.items.map(i => i.id)]),
+        [[null, ['c_max', 'c_val']], ['Tuning', ['c_per']]]),
+      JSON.stringify(secs.map(s => [s.group?.name ?? null, s.items.map(i => i.id)])));
+    // THE structural claim: the instance's order IS `orderByGroup`'s — the same
+    // call the boundary editor reorders `exposedInputs` with.
+    check('G2 …and the FLATTENED sections are exactly `orderByGroup`',
+      eq(secs.flatMap(s => s.items), M.orderByGroup(d.controls, d.groups)));
+    check('G3 every control appears EXACTLY once', secs.flatMap(s => s.items).length === d.controls.length);
+
+    const dead = M.groupSections(
+      [ctl('x', 'X', cfgTarget('ps', 'period'), { groupId: 'gone' })], d.groups);
+    check('G4 a DEAD groupId renders in the ungrouped head, not under a phantom header',
+      dead.length === 1 && dead[0].group === undefined);
+    check('G5 an EMPTY interface produces NO section (no header, no gap)',
+      M.groupSections([], d.groups).length === 0);
+  }
+
+  // --- LIVE values, both directions (D1) -----------------------------------
+  {
+    let m = buildModel({ macroDefs: [instDef()] });
+    check('G6 each control reads the target node\'s LIVE config',
+      descOf(m, 'def_g', 'c_max').value === '9'
+      && descOf(m, 'def_g', 'c_per').value === '4'
+      && descOf(m, 'def_g', 'c_val').value === '2');
+    check('G7 …and the KIND is derived, not stored (the tag control is a tag)',
+      descOf(m, 'def_g', 'c_val').kind === 'tag'
+      && eq(descOf(m, 'def_g', 'c_val').options?.map(o => o.label), ['empty', 'wire', 'head'])
+      && descOf(m, 'def_g', 'c_max').kind === 'number'
+      && descOf(m, 'def_g', 'c_per').kind === 'number');
+
+    // INSIDE → INSTANCE: an in-macro edit reaches the instance with no
+    // propagation machinery at all (there is one storage location).
+    m = patchNode(m, 'def_g', 'rnd', { _port_max: '42' });
+    check('G8 an IN-MACRO edit shows on the instance immediately', descOf(m, 'def_g', 'c_max').value === '42');
+
+    // INSTANCE → INSIDE: `applyControlValue` + ONE `updateMacro`.
+    const before = defOf(m, 'def_g');
+    const patch = M.applyControlValue(m, 'def_g', before.controls[0], '7');
+    check('G9 the write targets the def that OWNS the key', patch && patch.defId === 'def_g');
+    const m2 = run(m, { type: 'UPDATE_MACRO', id: patch.defId, changes: { nodes: patch.nodes } });
+    const after = defOf(m2, 'def_g');
+    check('G10 …exactly one node\'s one key moved',
+      nodeOf(m2, 'def_g', 'rnd').data.config._port_max === '7'
+      && nodeOf(m2, 'def_g', 'rnd').data.config._port_min === '2');
+    check('G11 …every UNTOUCHED node keeps its object identity',
+      after.nodes.every((n, i) => n.id === 'rnd' || n === before.nodes[i]));
+    check('G12 …`controls` / `groups` / `edges` are === untouched',
+      after.controls === before.controls && after.groups === before.groups && after.edges === before.edges);
+    check('G13 …and a SECOND read (a linked sibling instance) sees it',
+      descOf(m2, 'def_g', 'c_max').value === '7');
+
+    // Two instances of the SAME def on the canvas: both resolve from
+    // `model.macroDefs`, so "linked instances share" is structural.
+    const linked = { ...m2, graphNodes: [
+      node('inst1', 'macro', { macroDefId: 'def_g' }),
+      node('inst2', 'macro', { macroDefId: 'def_g' }),
+    ] };
+    check('G14 two instances share ONE def (the linked-count badge\'s input)',
+      M.countMacroInstances(linked, 'def_g') === 2);
+  }
+
+  // --- the target node is DELETED inside the macro (D8) --------------------
+  {
+    const m0 = buildModel({ macroDefs: [instDef()] });
+    const m = run(m0, {
+      type: 'UPDATE_MACRO', id: 'def_g',
+      changes: { nodes: defOf(m0, 'def_g').nodes.filter(n => n.id !== 'rnd') },
+    });
+    const d = descOf(m, 'def_g', 'c_max');
+    check('G15 a deleted target node reports `orphan-node` with its reason',
+      d.block === 'orphan-node' && d.reason === M.CONTROL_BLOCK_REASON['orphan-node']);
+    check('G16 …the control is STILL PRESENT (report, never drop — Ctrl+Z must restore both)',
+      defOf(m, 'def_g').controls.length === 3
+      && !!defOf(m, 'def_g').controls.find(c => c.id === 'c_max'));
+    check('G17 …it counts toward the instance BADGE', M.CONTROL_BLOCK_NEEDS_ATTENTION.has('orphan-node'));
+    check('G18 …and its write is INERT (structurally, not by UI convention)',
+      M.applyControlValue(m, 'def_g', defOf(m, 'def_g').controls[0], '1') === null);
+    check('G19 …while the SIBLING controls are unaffected',
+      !descOf(m, 'def_g', 'c_per').block && descOf(m, 'def_g', 'c_per').value === '4');
+  }
+
+  // --- a MODEL ELEMENT is deleted: the existing cascade does the work (F4) --
+  {
+    const m0 = buildModel({ macroDefs: [instDef()] });
+    const m = run(m0, { type: 'REMOVE_ATTRIBUTE', id: 'a_type' });
+    check('G20 the existing cascade cleared the id INSIDE `macroDefs[*].nodes` (F4)',
+      nodeOf(m, 'def_g', 'sa').data.config.attributeId === '');
+    check('G21 …unrelated controls still resolve LIVE',
+      descOf(m, 'def_g', 'c_max').value === '9' && descOf(m, 'def_g', 'c_per').value === '4');
+    // The bound `value` port's widget is ADAPTIVE: with no attribute the node
+    // renders no value widget at all, so the parameter genuinely no longer
+    // exists. Reported, not silently retyped to a bare number (P3.2).
+    const dv = descOf(m, 'def_g', 'c_val');
+    check('G22 …and the control bound to the now-typeless value reports `orphan-key`', dv.block === 'orphan-key');
+    check('G23 …but is NOT deleted', !!defOf(m, 'def_g').controls.find(c => c.id === 'c_val'));
+  }
+
+  // --- a tagOptions REORDER remaps the bound index -------------------------
+  {
+    const m0 = buildModel({ macroDefs: [instDef()] });
+    check('G24 (precondition) the tag control reads index 2 = "head"',
+      descOf(m0, 'def_g', 'c_val').value === '2');
+    // Move 'head' from index 2 to index 0 — the reducer remaps `_port_value`
+    // inside macroDefs, so the control must follow the VALUE, not the index.
+    const m = run(m0, { type: 'UPDATE_ATTRIBUTE', id: 'a_type', changes: { tagOptions: ['head', 'empty', 'wire'] } });
+    const stored = nodeOf(m, 'def_g', 'sa').data.config._port_value;
+    check('G25 the reducer remapped the stored index (2 → 0)', stored === '0', String(stored));
+    const d = descOf(m, 'def_g', 'c_val');
+    check('G26 …and the control reads the REMAPPED index, still naming "head"',
+      d.value === stored && d.options?.[Number(d.value)]?.label === 'head', JSON.stringify(d.options));
+  }
+
+  // --- a CHAINED control: `orphan-control` then `orphan-def` ---------------
+  {
+    const outer = () => ({
+      id: 'def_o', name: 'Outer',
+      nodes: [node('mi', 'macroInput', { macroDefId: 'def_o' }), node('inner', 'macro', { macroDefId: 'def_g' })],
+      edges: [], exposedInputs: [], exposedOutputs: [],
+      controls: [ctl('c_chain', 'Chained max', { kind: 'control', nodeId: 'inner', controlId: 'c_max' })],
+    });
+    const m0 = buildModel({ macroDefs: [instDef(), outer()] });
+    const chained = defOf(m0, 'def_o').controls[0];
+    check('G27 (precondition) the chain resolves into the NESTED def',
+      M.resolveControlDescriptor(m0, 'def_o', chained).value === '9'
+      && M.applyControlValue(m0, 'def_o', chained, '5').defId === 'def_g');
+
+    const noCtl = run(m0, {
+      type: 'UPDATE_MACRO', id: 'def_g',
+      changes: { controls: defOf(m0, 'def_g').controls.filter(c => c.id !== 'c_max') },
+    });
+    check('G28 removing the inner control reports `orphan-control`',
+      M.resolveControlDescriptor(noCtl, 'def_o', chained).block === 'orphan-control');
+    check('G29 …and the OUTER control is not deleted', defOf(noCtl, 'def_o').controls.length === 1);
+
+    const noDef = run(m0, { type: 'REMOVE_MACRO', id: 'def_g' });
+    check('G30 removing the nested DEF reports `orphan-def`',
+      M.resolveControlDescriptor(noDef, 'def_o', chained).block === 'orphan-def');
+    check('G31 …both orphan kinds count toward the badge',
+      M.CONTROL_BLOCK_NEEDS_ATTENTION.has('orphan-control') && M.CONTROL_BLOCK_NEEDS_ATTENTION.has('orphan-def'));
+  }
+
+  // --- a bound port becomes WIRED, then unwired ----------------------------
+  {
+    const m0 = buildModel({ macroDefs: [instDef()] });
+    const wired = run(m0, {
+      type: 'UPDATE_MACRO', id: 'def_g',
+      changes: { edges: [edge('ew', 'ps', 'rnd', 'output_flow_next', 'input_value_max')] },
+    });
+    const d = descOf(wired, 'def_g', 'c_max');
+    check('G32 a WIRED target renders disabled with its reason',
+      d.block === 'wired' && d.reason === M.CONTROL_BLOCK_REASON.wired);
+    check('G33 …showing the value READ-ONLY (not blanked)', d.value === '9');
+    check('G34 …its write is inert', M.applyControlValue(wired, 'def_g', defOf(wired, 'def_g').controls[0], '1') === null);
+    check('G35 …and it does NOT badge — a wired parameter is a normal macro',
+      !M.CONTROL_BLOCK_NEEDS_ATTENTION.has('wired'));
+    const unwired = run(wired, { type: 'UPDATE_MACRO', id: 'def_g', changes: { edges: [] } });
+    check('G36 unwiring makes it live again, at the same value',
+      !descOf(unwired, 'def_g', 'c_max').block && descOf(unwired, 'def_g', 'c_max').value === '9');
+  }
+
+  // --- R7: the def is OPEN for editing ------------------------------------
+  {
+    const m0 = buildModel({ macroDefs: [instDef()] });
+    const c = defOf(m0, 'def_g').controls[0];
+    check('G37 a control whose def is OPEN renders disabled with the R7 reason',
+      M.resolveControlDescriptor(m0, 'def_g', c, ['def_g']).block === 'scope-open');
+    check('G38 …its write is inert (else the next debounce tick would clobber it)',
+      M.applyControlValue(m0, 'def_g', c, '1', ['def_g']) === null);
+    check('G39 …with the def CLOSED it is live', !M.resolveControlDescriptor(m0, 'def_g', c, []).block
+      && M.applyControlValue(m0, 'def_g', c, '1', []) !== null);
+    check('G40 …and it does NOT badge — the state lasts exactly as long as the macro is open',
+      !M.CONTROL_BLOCK_NEEDS_ATTENTION.has('scope-open'));
+
+    // A CHAINED control blocks on the def that OWNS THE KEY, not the outer one.
+    const outer = {
+      id: 'def_o2', name: 'Outer2',
+      nodes: [node('inner', 'macro', { macroDefId: 'def_g' })], edges: [],
+      exposedInputs: [], exposedOutputs: [],
+      controls: [ctl('c_chain', 'Chained', { kind: 'control', nodeId: 'inner', controlId: 'c_max' })],
+    };
+    const m1 = { ...m0, macroDefs: [...m0.macroDefs, outer] };
+    const ch = outer.controls[0];
+    check('G41 a chained control blocks when the NESTED def is open',
+      M.resolveControlDescriptor(m1, 'def_o2', ch, ['def_g']).block === 'scope-open');
+    check('G42 …and NOT when only the outer def is open',
+      !M.resolveControlDescriptor(m1, 'def_o2', ch, ['def_o2']).block);
+  }
+
+  // --- the open-scope mirror (the graphState global) ----------------------
+  {
+    let hits = 0;
+    const un = M.subscribeOpenMacroScope(() => { hits++; });
+    M.setOpenMacroScope(['root']);
+    check('G43 the `root` sentinel is filtered out — it names no def',
+      eq([...M.getOpenMacroScope()], []) && hits === 0);
+    M.setOpenMacroScope(['root', 'def_g']);
+    check('G44 a scope change notifies and exposes the def ids',
+      hits === 1 && eq([...M.getOpenMacroScope()], ['def_g']));
+    const ref = M.getOpenMacroScope();
+    M.setOpenMacroScope(['root', 'def_g']);
+    check('G45 an EQUAL scope keeps the SAME reference (useSyncExternalStore demands it)',
+      hits === 1 && M.getOpenMacroScope() === ref);
+    M.setOpenMacroScope(['root', 'def_g', 'def_o']);
+    check('G46 a deeper scope notifies and carries the whole chain',
+      hits === 2 && eq([...M.getOpenMacroScope()], ['def_g', 'def_o']));
+    M.setOpenMacroScope([]);
+    check('G47 clearing notifies', hits === 3 && M.getOpenMacroScope().length === 0);
+    un();
+    M.setOpenMacroScope(['root', 'x']);
+    check('G48 unsubscribing really unsubscribes', hits === 3);
+    M.setOpenMacroScope([]);
+  }
+
+  // --- the instance rendering, pinned in SOURCE (it lives in React) --------
+  {
+    const cn = src(join('src', 'modeler', 'vpl', 'CaNode.tsx'));
+    check('G49 the instance renders with `groupSections` — the SAME order the editor applies',
+      cn.includes('groupSections(controls, mdef?.groups ?? [])'));
+    check('G50 …gated on a NON-EMPTY interface (no empty header — the enabled-control doctrine)',
+      cn.includes("nodeData.nodeType === 'macro' && controlSections.length > 0"));
+    // "Report, never drop", at the RENDER: a blocked control must still get a
+    // row (disabled, with its reason). Filtering them out would hide the very
+    // thing the author has to fix — and the def keeps them (G16) either way.
+    check('G50b …and renders a row for EVERY control, blocked ones included',
+      cn.includes('rows: sec.items.map(control => ({'));
+    check('G51 the write is ONE `updateMacro`, at the def that OWNS the key',
+      cn.includes('updateMacro(patch.defId, { nodes: patch.nodes });'));
+    check('G52 …built from the LIVE model ref, never a captured closure',
+      cn.includes('applyControlValue(modelRef.current, macroDefId, control, value, getOpenMacroScope())'));
+    check('G53 …and a blocked control returns null, so the handler is inert',
+      /const patch = M?\.?applyControlValue[\s\S]{0,120}?if \(!patch\) return;/.test(cn));
+    check('G54 the badge rolls up only the BROKEN blocks',
+      cn.includes('CONTROL_BLOCK_NEEDS_ATTENTION.has(r.desc.block)')
+      && cn.includes("${controlIssueCount === 1 ? 'needs' : 'need'} attention"));
+    // F6: handles are absolutely-positioned siblings rendered AFTER the body, so
+    // body height moves NO handle. A control must therefore NOT trigger a
+    // remeasure — and a port GROUP reorder gets one free from `portIdSignature`.
+    const nudges = [...cn.matchAll(/updateNodeInternals\(id\);?\s*\n\s*\}, \[([^\]]*)\]/g)].map(m => m[1]);
+    check('G55 NO `updateNodeInternals` depends on the controls (F6 — rows move no handle)',
+      nudges.every(dep => !dep.includes('controlSections') && !dep.includes('controlIssueCount')),
+      nudges.join(' | '));
+    check('G56 …while a port reorder still remeasures through `portIdSignature`',
+      nudges.some(dep => dep.includes('portIdSignature')));
+    check('G57 the linked-count badge sits on the section header (D1 — sharing must be visible)',
+      /ctlSectionHeader[\s\S]{0,400}?linkCount >= 2/.test(cn));
+    // A COLLAPSED node returns before the body div, so controls vanish with
+    // every other body widget and the BADGE is what still says "needs
+    // attention". (Not drivable through the UI on a macro instance — its
+    // double-click ENTERS the macro — so it is pinned structurally.)
+    const iCollapse = cn.indexOf('if (!showExpanded) {');
+    check('G60 a COLLAPSED node returns BEFORE the body, so it renders no controls',
+      iCollapse > 0 && iCollapse < cn.indexOf('${styles.body} nodrag')
+      && iCollapse < cn.indexOf('controlSections.length > 0'));
+
+    const ge = src(join('src', 'modeler', 'vpl', 'GraphEditor.tsx'));
+    const scopeEffect = ge.slice(ge.indexOf('// Switch displayed graph when scope OR the active graph'));
+    const scopeBody = scopeEffect.slice(0, scopeEffect.indexOf('}, [currentScope, modelVersion, activeGraph]);'));
+    // ⚠ A `.includes()` here would also match the line COMMENTED OUT — the
+    // exact way this mutation slipped through on the first run. Require a real
+    // STATEMENT: only whitespace may precede it.
+    check('G58 the editor mirrors the OPEN SCOPE on every scope / graph / model change',
+      /(^|\n)[ \t]*setOpenMacroScope\(currentScope\);/.test(scopeBody));
+    check('G59 …and clears it on unmount (no editor, no open scope)',
+      /setControlPick\(null\);\s*\n(\s*\/\/[^\n]*\n)*\s*setOpenMacroScope\(\[\]\);/.test(ge));
+  }
 }
 
 // ===========================================================================

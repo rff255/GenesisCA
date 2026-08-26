@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useRef, useState, useMemo, useSyncExternalStore } from 'react';
+import { Fragment, memo, useCallback, useEffect, useRef, useState, useMemo, useSyncExternalStore } from 'react';
 import { Handle, Position, useReactFlow, useUpdateNodeInternals } from '@xyflow/react';
 import type { NodeProps } from '@xyflow/react';
 import { getNodeDef } from './nodes/registry';
@@ -26,8 +26,8 @@ import { is3dModelLike } from './compiler/niCodec';
 import { MULTI_ATTR_TYPES, multiAttrExtraCount, buildExtraSlotPorts } from './compiler/multiAttrExpand';
 // Explicit Controls: the ONE inline-widget resolution + the two attribute
 // scopes, dually consumed here and by a control bound to the same key.
-import { inlineWidgetFor, ownAttrListFor, tagAttrScopeFor, eligibleControlKeys, describeControlTarget, applyInterfaceEdit } from './explicitControls';
-import type { ControlKeyDescriptor, InterfaceEdit } from './explicitControls';
+import { inlineWidgetFor, ownAttrListFor, tagAttrScopeFor, eligibleControlKeys, describeControlTarget, applyInterfaceEdit, groupSections, resolveControlDescriptor, applyControlValue, CONTROL_BLOCK_NEEDS_ATTENTION } from './explicitControls';
+import type { ControlKeyDescriptor, InterfaceEdit, ControlDescriptor } from './explicitControls';
 import { buildCensusPorts, censusAttributes } from './compiler/censusExpand';
 import { buildBondAttrPorts } from './bondAttrPorts';
 import { isGraphFrequencyMetric, degreeHistogramKeys, type GraphMetric } from '../../simulator/engine/graphMetrics';
@@ -53,6 +53,8 @@ import {
   getControlPick,
   subscribeControlPick,
   setControlPick,
+  getOpenMacroScope,
+  subscribeOpenMacroScope,
 } from './graphState';
 
 /** Snapshot getter for useSyncExternalStore — must return a stable reference
@@ -155,6 +157,150 @@ function ColorScaleEditor({ id, nodeData }: { id: string; nodeData: CaNodeData }
     updateNodeData(id, { ...nodeData, config: writeColorScaleStops(nodeData.config, next) as NodeConfig });
   };
   return <GradientStopsEditor stops={stops} onChange={setStops} />;
+}
+
+/**
+ * EXPLICIT CONTROLS — ONE row of a CLOSED macro instance's interface: the
+ * author's label on the left, the LIVE widget on the right.
+ *
+ * There is no local state and no default: `desc.value` is read fresh from
+ * `def.nodes[k].data.config[key]` on every render (D1 — ONE storage location),
+ * so a change made INSIDE the macro, or by a LINKED sibling instance, shows
+ * here on the next paint with no propagation machinery at all.
+ *
+ * The widget KIND is likewise derived per render (D2 / R4): retype the bound
+ * attribute inside the macro and this row swaps number → tag → bool by itself.
+ *
+ * A BLOCKED control renders its value READ-ONLY with the reason underneath
+ * (D8 — report, never drop). Its `onChange` is never reached, and
+ * `applyControlValue` refuses it anyway, so inertness is structural.
+ */
+function MacroControlRow({ desc, onChange, needsAttention }: {
+  desc: ControlDescriptor;
+  onChange: (next: string) => void;
+  needsAttention: boolean;
+}) {
+  const stopDrag = (e: React.MouseEvent) => { if (e.button === 0) e.stopPropagation(); };
+  const stopAll = (e: React.MouseEvent) => e.stopPropagation();
+  const guards = { onMouseDown: stopDrag, onClick: stopAll };
+  const w = styles.ctlWidget;
+
+  const widget = (() => {
+    if (desc.block) {
+      // Read-only: the value the macro currently holds (empty for an orphan).
+      return <span className={styles.ctlBlockedValue}>{desc.value || '—'}</span>;
+    }
+    switch (desc.kind) {
+      case 'number':
+        return (
+          <InlineNumberInput
+            className={`${styles.input} ${w} nodrag`}
+            value={desc.value}
+            onChange={onChange}
+            {...guards}
+          />
+        );
+      case 'bool':
+        return (
+          <InlineBoolSelect
+            className={`${styles.select} ${w} nodrag`}
+            value={desc.value}
+            onChange={onChange}
+            {...guards}
+          />
+        );
+      case 'glyph':
+        return (
+          <InlineGlyphInput
+            className={`${styles.input} ${w} nodrag`}
+            value={desc.value}
+            onChange={onChange}
+            {...guards}
+          />
+        );
+      case 'checkbox':
+        return (
+          <input
+            type="checkbox"
+            className="nodrag"
+            checked={desc.value === 'true'}
+            onChange={e => onChange(e.target.checked ? 'true' : 'false')}
+            {...guards}
+            style={{ flex: '0 0 auto', cursor: 'pointer' }}
+          />
+        );
+      case 'color':
+        return (
+          <input
+            type="color"
+            className={`${w} nodrag`}
+            value={/^#[0-9a-fA-F]{6}$/.test(desc.value) ? desc.value : '#50c8ff'}
+            onChange={e => onChange(e.target.value)}
+            {...guards}
+            style={{ height: 20, padding: 0, background: 'transparent', border: '1px solid var(--color-widget-border)', borderRadius: 3, cursor: 'pointer' }}
+          />
+        );
+      case 'text':
+        return (
+          <input
+            type="text"
+            className={`${styles.input} ${w} nodrag`}
+            value={desc.value}
+            onChange={e => onChange(e.target.value)}
+            {...guards}
+          />
+        );
+      case 'textarea':
+        // A formula is far too wide for the right-hand column — it takes the
+        // whole row below the label (see `ctlRowStacked`).
+        return (
+          <textarea
+            className={`${styles.input} nodrag`}
+            value={desc.value}
+            onChange={e => onChange(e.target.value)}
+            {...guards}
+            rows={2}
+            style={{ width: '100%', resize: 'vertical', fontFamily: 'var(--font-mono, monospace)' }}
+          />
+        );
+      // tag / select / element — all index-or-id keyed option lists.
+      default:
+        return (
+          <select
+            className={`${styles.select} ${w} nodrag`}
+            value={desc.value}
+            onChange={e => onChange(e.target.value)}
+            {...guards}
+          >
+            {(desc.options ?? []).map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+            {/* A value the live option list no longer contains would otherwise
+                render as the FIRST option — a silent lie about what is stored. */}
+            {(desc.options ?? []).every(o => o.value !== desc.value) && (
+              <option value={desc.value}>{desc.value === '' ? '(unset)' : `${desc.value} (?)`}</option>
+            )}
+          </select>
+        );
+    }
+  })();
+
+  const stacked = !desc.block && desc.kind === 'textarea';
+  return (
+    <div className={styles.ctlRowWrap}>
+      <div className={stacked ? styles.ctlRowStacked : styles.ctlRow}>
+        <span className={styles.ctlLabel} title={desc.label}>{desc.label}</span>
+        {widget}
+      </div>
+      {desc.block && (
+        <div
+          className={styles.ctlReason}
+          style={needsAttention ? { color: 'var(--color-danger, #f44336)' } : undefined}
+          title={desc.reason}
+        >
+          {desc.reason}
+        </div>
+      )}
+    </div>
+  );
 }
 
 /** Palette editor for the Categorical Color node: one color swatch per index
@@ -729,6 +875,73 @@ function CaNodeComponent({ id, data }: NodeProps) {
     setControlPick(null);
   }, [model, id, updateMacro]);
 
+  // --- EXPLICIT CONTROLS: the CLOSED INSTANCE's interface (P3) ---------------
+  // The macro def this node instantiates. Hoisted above `configIssues` so the
+  // roll-up below can count blocked controls; `linkCount` / `makeIndependent`
+  // read the same const further down.
+  const macroDefId = nodeData.nodeType === 'macro' ? (nodeData.config.macroDefId as string | undefined) : undefined;
+
+  // R7 — the def(s) currently OPEN for editing. A control whose target lives in
+  // an open def renders disabled: the open canvas re-syncs that def through the
+  // 100 ms debounce, so an instance-side write would be clobbered.
+  const openScopeIds = useSyncExternalStore(subscribeOpenMacroScope, getOpenMacroScope);
+
+  /**
+   * The interface this instance renders, already SECTIONED.
+   *
+   * Ordered by `groupSections`, which is `orderByGroup` — the SAME call the
+   * boundary editor reorders `exposedInputs` with — so the closed instance and
+   * the editor cannot disagree about what the interface looks like.
+   *
+   * Every row carries a resolved descriptor; an unresolvable one comes back
+   * with `block` + a sentence rather than being dropped (D8).
+   */
+  const controlSections = useMemo(() => {
+    if (!macroDefId) return [];
+    const mdef = (model.macroDefs || []).find(m => m.id === macroDefId);
+    const controls = mdef?.controls ?? [];
+    if (controls.length === 0) return [];
+    return groupSections(controls, mdef?.groups ?? []).map(sec => ({
+      group: sec.group,
+      rows: sec.items.map(control => ({
+        control,
+        desc: resolveControlDescriptor(model, macroDefId, control, openScopeIds),
+      })),
+    }));
+  }, [model, macroDefId, openScopeIds]);
+
+  /** How many controls are BROKEN (orphaned / circular) — the badge roll-up.
+   *  `wired` / `scope-open` are deliberate states and deliberately not counted. */
+  const controlIssueCount = useMemo(
+    () => controlSections.reduce(
+      (n, s) => n + s.rows.filter(r => r.desc.block && CONTROL_BLOCK_NEEDS_ATTENTION.has(r.desc.block)).length,
+      0,
+    ),
+    [controlSections],
+  );
+
+  /** The LIVE model, read by the control write handler. A captured closure can
+   *  be one edit behind (the `commitAgentSweep` ref-leads-state trap), and this
+   *  handler builds a whole node array from it. Assigned during render so it
+   *  leads any state the same paint produced. */
+  const modelRef = useRef(model);
+  modelRef.current = model;
+
+  /**
+   * Commit ONE control edit — exactly ONE `updateMacro` (D6).
+   *
+   * `applyControlValue` returns the def that OWNS the key (a NESTED def for a
+   * chained control) with its fully-patched node array, and `null` when the
+   * control is BLOCKED — so a disabled row's handler is inert STRUCTURALLY, not
+   * by a UI convention.
+   */
+  const setControlValue = useCallback((control: MacroControl, value: string) => {
+    if (!macroDefId) return;
+    const patch = applyControlValue(modelRef.current, macroDefId, control, value, getOpenMacroScope());
+    if (!patch) return;
+    updateMacro(patch.defId, { nodes: patch.nodes });
+  }, [macroDefId, updateMacro]);
+
   // Connection-kind hazards (e.g. list-position int wired into a NeighborIndex port).
   // Same single-pub/sub pattern as connectedHandles; identity-stable when unchanged so
   // memoized nodes only re-render when their own hazard list actually changes.
@@ -769,12 +982,17 @@ function CaNodeComponent({ id, data }: NodeProps) {
       // Bubble up internal-node warnings on macro instances so they're visible
       // without expanding the macro (and recursively through nested macros).
       if (nodeData.nodeType === 'macro') {
-        const macroDefId = nodeData.config.macroDefId;
         if (typeof macroDefId === 'string' && macroDefId.length > 0) {
           const innerCount = countMacroSubgraphIssues(macroDefId, model, useWebGPU, useWasm);
           if (innerCount > 0) {
             own.push(`${innerCount} internal warning${innerCount === 1 ? '' : 's'} (expand macro to see)`);
           }
+        }
+        // EXPLICIT CONTROLS (D8) — an orphaned or circular control is REPORTED,
+        // never dropped: the row renders disabled with its reason, and this
+        // rolls it onto the badge so a COLLAPSED instance still says so.
+        if (controlIssueCount > 0) {
+          own.push(`${controlIssueCount} control${controlIssueCount === 1 ? '' : 's'} ${controlIssueCount === 1 ? 'needs' : 'need'} attention`);
         }
       }
       // Connection-kind hazards (typed-port mismatches that the runtime would silently accept)
@@ -829,6 +1047,9 @@ function CaNodeComponent({ id, data }: NodeProps) {
       model.agentGraphEdges,
       connectionHazards,
       connectedInputHandles,
+      // EXPLICIT CONTROLS — the roll-up's own input.
+      macroDefId,
+      controlIssueCount,
     ],
   );
 
@@ -907,7 +1128,7 @@ function CaNodeComponent({ id, data }: NodeProps) {
 
   // Linked-copies badge (Blender-style): how many macro instances share this
   // node's MacroDef. Only shown at 2+ (single-user macros show nothing).
-  const macroDefId = nodeData.nodeType === 'macro' ? (nodeData.config.macroDefId as string | undefined) : undefined;
+  // (`macroDefId` is hoisted above `configIssues` — the control roll-up needs it.)
   const linkCount = useMemo(
     () => (typeof macroDefId === 'string' && macroDefId.length > 0 ? countMacroInstances(model, macroDefId) : 0),
     [model.graphNodes, model.macroDefs, macroDefId],
@@ -3945,6 +4166,47 @@ function CaNodeComponent({ id, data }: NodeProps) {
             <option value="vertical">Flip vertical (negate dRow)</option>
             <option value="both">Flip both (180° rotate)</option>
           </select>
+        )}
+
+        {/* EXPLICIT CONTROLS — the CLOSED INSTANCE's interface (P3).
+            Ungrouped rows first, then each group under its header, ordered by
+            `groupSections` (= `orderByGroup`, the SAME call the boundary editor
+            reorders `exposedInputs` with, so the two cannot disagree).
+
+            An EMPTY interface renders NO section at all — no header, no gap
+            (the enabled-control doctrine). Handles are absolutely-positioned
+            siblings rendered AFTER this body div, at `PORT_TOP_BASE + i*spacing`
+            from the NODE top, so adding rows changes the node's HEIGHT and moves
+            NO handle (F6) — hence no `updateNodeInternals` here. A port GROUP
+            reorder does need one, and gets it for free from the existing
+            `portIdSignature` effect (macro ports ARE `exposedInputs`, in order). */}
+        {nodeData.nodeType === 'macro' && controlSections.length > 0 && (
+          <div className={styles.ctlSection}>
+            <div className={styles.ctlSectionHeader}>
+              <span>Parameters</span>
+              {linkCount >= 2 && (
+                <span
+                  className={styles.ctlLinked}
+                  title={`Shared with ${linkCount - 1} other linked instance${linkCount === 2 ? '' : 's'} — editing here changes all of them (Duplicate Independent to vary one)`}
+                >
+                  ⛓ {linkCount}
+                </span>
+              )}
+            </div>
+            {controlSections.map((sec, si) => (
+              <Fragment key={sec.group?.id ?? `__ungrouped_${si}`}>
+                {sec.group && <div className={styles.ifaceHeader}>{sec.group.name}</div>}
+                {sec.rows.map(({ control, desc }) => (
+                  <MacroControlRow
+                    key={control.id}
+                    desc={desc}
+                    needsAttention={!!desc.block && CONTROL_BLOCK_NEEDS_ATTENTION.has(desc.block)}
+                    onChange={next => setControlValue(control, next)}
+                  />
+                ))}
+              </Fragment>
+            ))}
+          </div>
         )}
 
         {nodeData.nodeType === 'macro' && (

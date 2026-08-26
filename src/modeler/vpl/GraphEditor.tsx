@@ -132,7 +132,7 @@ function graphKindLabel(kind: ActiveGraphKind): string {
   return kind === 'cells' ? 'Cells' : kind === 'agents' ? 'Agents' : 'Overseer';
 }
 
-import { setIsConnecting, setConnectingFrom, setShowPortLabels, showPortLabelsGlobal, showGridGlobal, setShowGrid as setShowGridGlobal, snapEnabledGlobal, setSnapEnabled as setSnapEnabledGlobal, setConnectedHandlesFromEdges, setConnectionHazards, getSavedGraphViewport, setSavedGraphViewport, savedCurrentScope, setSavedCurrentScope, subscribeCurrentModelElementDrag, setCompatibleHandlesForDrag, clearCompatibleHandlesForDrag, setCurrentModelElementDrag, compatibleHandlesForDrag, currentModelElementDrag, setQuickAddApi, setActiveGraphKind, hasPendingMacroImport, takePendingMacroImport, displayNodeLabel, displayNodeDescription, setControlPick, getControlPick, type ActiveGraphKind } from './graphState';
+import { setIsConnecting, setConnectingFrom, setShowPortLabels, showPortLabelsGlobal, showGridGlobal, setShowGrid as setShowGridGlobal, snapEnabledGlobal, setSnapEnabled as setSnapEnabledGlobal, setConnectedHandlesFromEdges, setConnectionHazards, getSavedGraphViewport, setSavedGraphViewport, savedCurrentScope, setSavedCurrentScope, subscribeCurrentModelElementDrag, setCompatibleHandlesForDrag, clearCompatibleHandlesForDrag, setCurrentModelElementDrag, compatibleHandlesForDrag, currentModelElementDrag, setQuickAddApi, setActiveGraphKind, hasPendingMacroImport, takePendingMacroImport, displayNodeLabel, displayNodeDescription, setControlPick, getControlPick, setOpenMacroScope, getOpenMacroScope, type ActiveGraphKind } from './graphState';
 import { modelerUiState } from '../modelerUiState';
 import type { QuickAddPayload } from './graphState';
 import { detectEdgeHazard, isNodeAvailable } from './nodes/nodeValidation';
@@ -1319,6 +1319,10 @@ export function GraphEditorInner() {
     // scope change, a graph swap, AND a model load (`modelVersion` is in this
     // effect's deps). Unmount is covered by the cleanup below.
     setControlPick(null);
+    // EXPLICIT CONTROLS (R7) — mirror the open scope so a CLOSED INSTANCE of a
+    // def that is open for editing renders its controls DISABLED instead of
+    // letting an instance-side write be clobbered by the next debounce tick.
+    setOpenMacroScope(currentScope);
     const scopeId = currentScope[currentScope.length - 1] ?? 'root';
     if (!scopeId || scopeId === 'root') {
       // Root scope shows the ACTIVE graph (Cells / Agents / Overseer).
@@ -1371,10 +1375,16 @@ export function GraphEditorInner() {
     if (import.meta.env.DEV) {
       (window as unknown as Record<string, unknown>).__setControlPick = setControlPick;
       (window as unknown as Record<string, unknown>).__getControlPick = getControlPick;
+      // R7 — the open-scope mirror drives whether a closed instance's controls
+      // are writable. Only observable from a probe through a hook.
+      (window as unknown as Record<string, unknown>).__getOpenMacroScope = getOpenMacroScope;
     }
     return () => {
       document.removeEventListener('keydown', onKey, true);
       setControlPick(null);
+      // R7 — no editor, no open scope. Leaving a stale def id here would keep a
+      // macro instance's controls disabled on a canvas that is no longer shown.
+      setOpenMacroScope([]);
     };
   }, []);
 
