@@ -2465,7 +2465,7 @@ function tierH() {
       ok(!outs('behaviourStep', m2).includes('myVolume') && !outs('divisionEvent', m2).includes('myVolume'),
         'D2: …and on NEITHER in a 2D model (hiddenPorts)');
       ok(outs('behaviourStep', m3).includes('myArea') && outs('behaviourStep', m2).includes('myArea'),
-        'D2: NEG — Area is offered in BOTH dimensions (πr², unchanged), so the check above is about Volume alone');
+        'D2: NEG — Area is offered in BOTH dimensions (its VALUE differs per dimension, see the myArea tier), so the check above is about Volume alone');
       // Volume follows Area into the Body capability's bucket. NB the profile is
       // USAGE-WIDENED (`resolveAgentProfile` -> `inferAgentProfile`), so the model
       // must carry no body-implying node — a Divide Agent alone widens body back
@@ -2479,6 +2479,72 @@ function tierH() {
       const nb = outs('behaviourStep', noBody);
       ok(!nb.includes('myVolume') && !nb.includes('myArea'),
         'D2: Volume follows Area — both hidden when the Body capability is off', nb.join(','));
+    }
+
+    // (f) `myArea` — the agent's EXTENT in the model's OWN dimension: the DISC
+    //     area πr² in 2D, the SPHERE SURFACE area 4πr² in 3D. (It used to report
+    //     the disc in both, i.e. a sphere's cross-section rather than its
+    //     surface.) Three claims, on all three targets:
+    //       • 2D emits the historical expression CHARACTER-FOR-CHARACTER (that
+    //         is the byte-identity guarantee for every existing 2D model);
+    //       • 3D emits the sphere-surface form;
+    //       • the two are DIFFERENT (so the checks above are not vacuous).
+    //     Unlike myVolume this port is emitted UNCONDITIONALLY on JS — it
+    //     predates the usage gate, and gating it would itself be a diff.
+    {
+      const mk = (is3d) => {
+        let seq = 0;
+        const nid = (p) => `${p}${seq++}`;
+        const aN = [], aEd = [];
+        const an = (t, c) => { const n = { id: nid('a'), type: 'caNode', position: { x: 0, y: 0 }, data: { nodeType: t, config: c } }; aN.push(n); return n; };
+        const bs = an('behaviourStep', {});
+        const set = an('setAttribute', { attributeId: 'v' });
+        aEd.push({ id: nid('e'), source: bs.id, target: set.id, sourceHandle: 'output_flow_do', targetHandle: 'input_flow_do' });
+        aEd.push({ id: nid('e'), source: bs.id, target: set.id, sourceHandle: 'output_value_myArea', targetHandle: 'input_value_value' });
+        const m = buildDivideModel({ single: 'tension', is3d });
+        return { ...m, agentGraphNodes: aN, agentGraphEdges: aEd,
+          agentAttributes: [{ id: 'v', name: 'V', type: 'float', defaultValue: '0' }] };
+      };
+      const j2 = (() => { const m = mk(false); return compileAgentGraph(m.agentGraphNodes, m.agentGraphEdges, migrateForHarness(m)); })();
+      const j3 = (() => { const m = mk(true); return compileAgentGraph(m.agentGraphNodes, m.agentGraphEdges, migrateForHarness(m)); })();
+      const DISC = /_myArea = Math\.PI \* _agentRadius\[idx\] \* _agentRadius\[idx\];/;
+      const SPHERE = /_myArea = Math\.PI \* 4 \* _agentRadius\[idx\] \* _agentRadius\[idx\];/;
+      ok(DISC.test(j2.behaviourCode) && !j2.behaviourCode.includes('PI * 4 *'),
+        'myArea: 2D emits the historical πr² on JS, character-for-character (byte-identity for every 2D model)');
+      ok(SPHERE.test(j3.behaviourCode),
+        'myArea: 3D emits the sphere SURFACE area 4πr² on JS');
+      ok(!DISC.test(j3.behaviourCode),
+        'myArea: NEG — the 3D emit is NOT the disc form (so the 2D check above really discriminates)');
+      // The DIVISION root shares the same expression (it is the same `areaExpr`).
+      const withDiv = (is3d) => {
+        const m = mk(is3d);
+        const dv = { id: 'dv', type: 'caNode', position: { x: 0, y: 0 }, data: { nodeType: 'divisionEvent', config: {} } };
+        const set = { id: 'dset', type: 'caNode', position: { x: 0, y: 0 }, data: { nodeType: 'setAttribute', config: { attributeId: 'v' } } };
+        return { ...m,
+          agentGraphNodes: [...m.agentGraphNodes, dv, set],
+          agentGraphEdges: [...m.agentGraphEdges,
+            { id: 'de1', source: 'dv', target: 'dset', sourceHandle: 'output_flow_do', targetHandle: 'input_flow_do' },
+            { id: 'de2', source: 'dv', target: 'dset', sourceHandle: 'output_value_myArea', targetHandle: 'input_value_value' }] };
+      };
+      const d2 = (() => { const m = withDiv(false); return compileAgentGraph(m.agentGraphNodes, m.agentGraphEdges, migrateForHarness(m)); })();
+      const d3 = (() => { const m = withDiv(true); return compileAgentGraph(m.agentGraphNodes, m.agentGraphEdges, migrateForHarness(m)); })();
+      ok(DISC.test(d2.divisionCode) && SPHERE.test(d3.divisionCode),
+        'myArea: the Division Event root follows the same rule (one shared areaExpr)');
+      // WASM — a per-port emitter, so the bytes only carry myArea when it is
+      // wired; the 3D module must DIFFER from the 2D one (the factor is real).
+      const w2 = compileAgentGraphWasmForModel(migrateForHarness(mk(false)));
+      const w3 = compileAgentGraphWasmForModel(migrateForHarness(mk(true)));
+      ok(!w2.error && !w3.error && w2.bytes.length > 0 && w3.bytes.length > 0,
+        'myArea: compiles on WASM in both dimensions', w2.error ?? w3.error ?? '');
+      ok(w2.bytes.length !== w3.bytes.length || !w2.bytes.every((b, i) => b === w3.bytes[i]),
+        'myArea: …and the 3D WASM module DIFFERS from the 2D one (the dimension reaches the emit)');
+      // WGSL — same split, and the 2D shader must NOT carry the factor.
+      const g2 = compileAgentGraphWebGPUForModel(migrateForHarness(mk(false)));
+      const g3 = compileAgentGraphWebGPUForModel(migrateForHarness(mk(true)));
+      ok(!g3.error && /3\.14159265358979 \* 4\.0 \* /.test(g3.shaderCode ?? ''),
+        'myArea: WebGPU emits 4πr² in 3D', g3.error ?? 'no 4π in the shader');
+      ok(!g2.error && /3\.14159265358979 \* /.test(g2.shaderCode ?? '') && !/3\.14159265358979 \* 4\.0 \* /.test(g2.shaderCode ?? ''),
+        'myArea: …and πr² in 2D (no factor)', g2.error ?? '');
     }
   }
 }

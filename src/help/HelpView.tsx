@@ -2964,11 +2964,13 @@ export function HelpView() {
           </p>
           <p className={styles.p}>
             To read the sizes back: <em>Behaviour Step</em> and <em>Division Event</em> expose{' '}
-            <strong>Area</strong> and, in a 3D model, <strong>Volume</strong>. Note that{' '}
-            <strong>Area is &pi;r&sup2; in 2D <em>and</em> 3D</strong> &mdash; a disc area, not a
-            sphere&apos;s surface &mdash; so in 3D use <strong>Volume</strong> ((4/3)&pi;r&sup3;).
-            There are no separate Get/Set Area nodes: an area is <em>Get Radius</em> plus one Math
-            node, and setting one is an <em>Expression</em> (<code>sqrt(A/pi)</code>) into{' '}
+            <strong>Area</strong> and, in a 3D model, <strong>Volume</strong>.{' '}
+            <strong>Area is the agent&apos;s extent in the model&apos;s own dimension</strong>
+            &nbsp;&mdash; the disc area <code>&pi;r&sup2;</code> in 2D, the sphere&apos;s{' '}
+            <em>surface</em> area <code>4&pi;r&sup2;</code> in 3D &mdash; and{' '}
+            <strong>Volume</strong> is the enclosed <code>(4/3)&pi;r&sup3;</code>. There are no
+            separate Get/Set Area nodes: an area is <em>Get Radius</em> plus one Math node, and
+            setting one is an <em>Expression</em> (<code>sqrt(A/pi)</code>) into{' '}
             <em>Set Agent Radius</em>.
           </p>
           <h3 className={styles.h3}>The Division Event: configuring the daughters</h3>

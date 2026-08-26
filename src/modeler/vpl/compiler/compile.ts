@@ -2909,6 +2909,16 @@ export function compileAgentGraph(
   const volumeExpr = is3d
     ? 'Math.PI * 4 / 3 * _agentRadius[idx] * _agentRadius[idx] * _agentRadius[idx]'
     : '0';
+  /** `myArea` is the agent's EXTENT in the model's own dimension: the DISC area
+   *  πr² in 2D, the SPHERE SURFACE area 4πr² in 3D. (It used to be πr² in both,
+   *  which reported a disc for a sphere; the 2D expression below is unchanged
+   *  character-for-character, so every 2D model's emit is byte-identical.)
+   *  The operand ORDER is mirrored by the WASM emitter (`PI, 4, MUL, r, MUL,
+   *  r, MUL`) so the two targets agree bit for bit — f64 multiplication is not
+   *  associative, so the order is the contract, not the algebra. */
+  const areaExpr = is3d
+    ? 'Math.PI * 4 * _agentRadius[idx] * _agentRadius[idx]'
+    : 'Math.PI * _agentRadius[idx] * _agentRadius[idx]';
 
   const behaviourCode = [
     `(function(${params}) {`,
@@ -2929,7 +2939,7 @@ export function compileAgentGraph(
     // file whose compile() is () => '', mirroring InitEvent's z/maxZ-in-the-decode).
     ...(is3d ? [`    const _v${bsId}_myZ = _agentZ[idx];`] : []),
     `    const _v${bsId}_myRadius = _agentRadius[idx];`,
-    `    const _v${bsId}_myArea = Math.PI * _agentRadius[idx] * _agentRadius[idx];`,
+    `    const _v${bsId}_myArea = ${areaExpr};`,
     // D2 — emitted only when something reads it (see rootPortConsumed); the
     // expression is the typed default 0 in 2D (volumeExpr).
     ...(rootPortConsumed(bsId, 'myVolume') ? [`    const _v${bsId}_myVolume = ${volumeExpr};`] : []),
@@ -2988,7 +2998,7 @@ export function compileAgentGraph(
       // `_divideAxisZ` BUFFER, stamped onto both daughters at the division site
       // (worker buildDivisionArgs ABI note ~:547). Read it from the buffer here.
       ...(is3d ? [`  const _v${dId}_axisDefaultZ = _divideAxisZ[idx];`] : []),
-      `  const _v${dId}_myArea = Math.PI * _agentRadius[idx] * _agentRadius[idx];`,
+      `  const _v${dId}_myArea = ${areaExpr};`,
       // D2 — emitted only when something reads it; 0 in 2D (see volumeExpr).
       ...(rootPortConsumed(dId, 'myVolume') ? [`  const _v${dId}_myVolume = ${volumeExpr};`] : []),
       '  let _rs = _rngState[0] || 0x12345678;',

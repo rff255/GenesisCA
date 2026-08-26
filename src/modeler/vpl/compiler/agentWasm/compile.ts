@@ -953,10 +953,18 @@ function compileValueNode(ctx: AgentWasmCtx, nodeId: string, portId: string): Va
         else if (portId === 'myY') pushF64Elem(em, ctx.layout.f64['y']!, ctx.idxLocal);
         else if (portId === 'myZ') pushF64Elem(em, ctx.layout.f64['z']!, ctx.idxLocal);
         else if (portId === 'myRadius') pushF64Elem(em, ctx.layout.f64['radius']!, ctx.idxLocal);
+        // `myArea` is the agent's EXTENT in the model's own dimension: the DISC
+        // area πr² in 2D, the SPHERE SURFACE area 4πr² in 3D. The operand ORDER
+        // MIRRORS the JS emit exactly (`Math.PI * r * r` / `Math.PI * 4 * r * r`)
+        // so the two targets agree bit for bit — f64 multiplication is not
+        // associative, and the previous `(r*r)*PI` form here disagreed with JS's
+        // `(PI*r)*r` on ~35 % of radii (a latent parity defect: no model read
+        // this port, and the emitter is per-port on demand, so it never shipped).
         else if (portId === 'myArea') {
-          pushF64Elem(em, ctx.layout.f64['radius']!, ctx.idxLocal);
-          pushF64Elem(em, ctx.layout.f64['radius']!, ctx.idxLocal);
-          em.op(OP_F64_MUL); em.f64Const(Math.PI); em.op(OP_F64_MUL);
+          em.f64Const(Math.PI);
+          if (ctx.is3d) { em.f64Const(4); em.op(OP_F64_MUL); }
+          pushF64Elem(em, ctx.layout.f64['radius']!, ctx.idxLocal); em.op(OP_F64_MUL);
+          pushF64Elem(em, ctx.layout.f64['radius']!, ctx.idxLocal); em.op(OP_F64_MUL);
         }
         // D2 — `myVolume` = (4/3)πr³ (3D only; the port is hidden in 2D). Emitted
         // ONLY when a consumer resolves this port, like every other case here, so

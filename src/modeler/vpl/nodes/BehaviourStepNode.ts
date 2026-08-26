@@ -14,8 +14,9 @@ import { resolveAgentProfile } from '../../../model/agentCapabilities';
  *  `myBondDegree`/`myAge`. (`myZ` + `myVolume` are hidden in 2D models via
  *  `hiddenPorts`, like the Init Event's `z`.)
  *
- *  ⚠ `Area` is πr² — a DISC area, in 2D and 3D alike (that is what every
- *  existing model reads, on all three targets). In 3D use `Volume` = (4/3)πr³.
+ *  `Area` is the agent's EXTENT in the model's own dimension: the DISC area πr²
+ *  in 2D, the SPHERE SURFACE area 4πr² in 3D. For the enclosed 3D quantity use
+ *  `Volume` = (4/3)πr³.
  *
  *  Requirements: `bondGraph` — available only in an Agents-topology model, on
  *  the Agents sub-tab.
@@ -50,9 +51,9 @@ export const BehaviourStepNode: NodeTypeDef = {
   //     preamble, so an existing wire keeps working; the badge is informational).
   hiddenPorts: (_config, model) => {
     const hidden: string[] = [];
-    // `myVolume` is (4/3)πr³ — a 3D quantity, so it exists only in a 3D world
-    // (`myArea` stays πr² in BOTH dimensions: a disc area, which is what a 2D
-    // agent has and what every existing model reads).
+    // `myVolume` is (4/3)πr³ — a 3D quantity, so it exists only in a 3D world.
+    // (`myArea` exists in BOTH dimensions, but MEANS the dimension's own extent:
+    // πr² disc in 2D, 4πr² sphere surface in 3D — see the compiler's areaExpr.)
     if (!is3dModelLike(model)) hidden.push('myZ', 'myVolume');
     if (model?.topologyMode?.agents) {
       const p = resolveAgentProfile(model);

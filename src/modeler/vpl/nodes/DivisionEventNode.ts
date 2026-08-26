@@ -12,8 +12,9 @@ import { is3dModelLike } from '../compiler/niCodec';
  *  `siblingId` (D3 — the OTHER daughter's agent id, so ONE invocation can
  *  configure BOTH daughters by id, or bond them to a third party),
  *  `axisDefaultX`/`axisDefaultY` (the engine's chosen division axis), `myArea`
- *  (πr² — a DISC area, in 2D and 3D alike) and, in a 3D model, `myVolume`
- *  ((4/3)πr³). Singleton (one per Agents graph, like Behaviour Step).
+ *  (the dimension's own extent — πr² disc in 2D, 4πr² sphere surface in 3D) and,
+ *  in a 3D model, `myVolume` ((4/3)πr³). Singleton (one per Agents graph, like
+ *  Behaviour Step).
  *
  *  D4 — the four bond verbs (Form / Break / Rewire / Transfer Bond) are valid
  *  here: the requests they queue are drained by a SECOND structural pass right
