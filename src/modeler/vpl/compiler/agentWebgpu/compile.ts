@@ -845,9 +845,13 @@ function emitBehaviourStep(ctx: AgentWgpuCtx, portId: string): ValueRef {
       ? emitLet(ctx, 'f32', f32At(ctx, 'z', 'idx'), 'myZ')
       : { expr: '0.0', type: 'f32' };
     case 'myRadius': return emitLet(ctx, 'f32', f32At(ctx, 'radius', 'idx'), 'myR');
+    // `myArea` is the agent's EXTENT in the model's own dimension: the DISC area
+    // πr² in 2D, the SPHERE SURFACE area 4πr² in 3D. (f32 here, so statistical
+    // parity with the f64 targets — like every other agent value on this target.)
     case 'myArea': {
       const r = f32At(ctx, 'radius', 'idx');
-      return emitLet(ctx, 'f32', `(3.14159265358979 * ${r} * ${r})`, 'myA');
+      const k = ctx.is3d ? '3.14159265358979 * 4.0' : '3.14159265358979';
+      return emitLet(ctx, 'f32', `(${k} * ${r} * ${r})`, 'myA');
     }
     // D2 — `myVolume` = (4/3)πr³, 3D only (the port is hidden in 2D, and a 2D
     // WGSL module has no meaningful sphere volume). Statistical parity with the

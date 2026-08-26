@@ -2746,6 +2746,97 @@ entries.push({
   name: '[synthetic] Division conserve (area vs volume codes + 3D myVolume)',
   raw: buildDivideConserveModel(), setup: setupDivideConserveStores, invariant: divideConserveInvariant,
 });
+// ---------------------------------------------------------------------------
+// `myArea` — the agent's EXTENT in the model's own dimension: the DISC area πr²
+// in 2D, the SPHERE SURFACE area 4πr² in 3D. Shipped in BOTH dimensions, and
+// both halves need pinning for DIFFERENT reasons:
+//   • 3D is the new semantics (it used to report the disc area for a sphere);
+//   • 2D pins the historical πr² AND the JS↔WASM operand ORDER. The WASM emitter
+//     used to fold `(r*r)*PI` against JS's `(PI*r)*r` — algebraically equal,
+//     bit-DIFFERENT on ~35 % of radii. It never shipped (no model reads the port
+//     and the emitter is per-port on demand), so it was invisible until now.
+// Parity alone would pass a wrong-but-identical formula on both targets, so the
+// VALUE invariant recomputes the answer from the store's OWN radius, with the
+// same association the emits use, and asserts the fixture DISCRIMINATES (the
+// other dimension's formula must NOT pass).
+// ---------------------------------------------------------------------------
+function buildMyAreaModel(is3d) {
+  const used = new Set();
+  const nid = (p) => { let id; do { id = p + Math.random().toString(36).slice(2, 8); } while (used.has(id)); used.add(id); return id; };
+  const aN = [], aEd = [];
+  const an = (t, c) => { const n = { id: nid('a'), type: 'caNode', position: { x: 0, y: 0 }, data: { nodeType: t, config: c } }; aN.push(n); return n; };
+  const aE = (s, sp, tt, tp, cat) => aEd.push({ id: nid('e'), source: s.id, target: tt.id, sourceHandle: `output_${cat}_${sp}`, targetHandle: `input_${cat}_${tp}` });
+
+  const bs = an('behaviourStep', {});
+  // Record this agent's area + radius so the invariant can recompute one from the
+  // other WITHOUT re-deriving the emit.
+  const rec = an('setAttribute', { attributeId: 'area', extraCount: 1, attr_2: 'rad' });
+  aE(bs, 'myArea', rec, 'value', 'value');
+  aE(bs, 'myRadius', rec, 'value_2', 'value');
+  aE(bs, 'do', rec, 'do', 'flow');
+
+  return {
+    schemaVersion: 1,
+    properties: { name: `myArea Parity Test (${is3d ? '3D' : '2D'})`, dimension: is3d ? '3d' : '2d', gridWidth: 24, gridHeight: 24, gridDepth: is3d ? 12 : 1, topology: '2d-grid', boundaryTreatment: 'torus', useWasm: false, useWebGPU: false },
+    topologyMode: { gridCells: false, agents: true },
+    centerBased: { enabled: true, maxAgents: 100, maxBonds: 0, worldWidth: 24, worldHeight: 24, worldDepth: is3d ? 12 : 1, seedCount: 40, seedPattern: 'scatter', defaultRadius: 0.5, growthRate: 0, repulsionStiffness: 0, adhesionStiffness: 0, interactionRange: 1.5, drag: 1, timeStep: 0.1, momentum: 0, maxSpeed: 0, neighbourQueryRadius: 8, useBondingPhysics: false, autoBond: false, bondStiffness: 0, bondRestLength: 1.5, formDistance: 1.2, breakDistance: 2.0, agentTarget: 'wasm', agentUpdateMode: 'async',
+      agentCapabilities: { motion: 'force', body: true, collision: 'off', bonds: 'off', autoBond: false, growth: false, division: false, lifespan: false, populationBirth: false, populationDeath: false, sensing: false, sensingHeadingSource: 'velocity', orientation: false, fieldCoupling: false, appearance: true } },
+    attributes: [], modelAttributes: [], neighborhoods: [],
+    agentAttributes: [
+      { id: 'area', name: 'Area', type: 'float', defaultValue: '0' },
+      { id: 'rad', name: 'Radius', type: 'float', defaultValue: '0' },
+    ],
+    variables: [], agentVariables: [], indicators: [], mappings: [],
+    graphNodes: [], graphEdges: [], agentGraphNodes: aN, agentGraphEdges: aEd, macroDefs: [],
+  };
+}
+
+/** DISTINCT radii, so an emit that ignored the agent's own radius (or dropped
+ *  the 4) cannot pass by coincidence. Applied identically to both stores, so
+ *  parity is unaffected. */
+function setupMyAreaStores(stores) {
+  for (const s of stores) {
+    for (let i = 0; i < s.highWater; i++) s.radius[i] = 0.25 + 0.0125 * i;
+  }
+}
+
+/** THE VALUE INVARIANT for the myArea synthetic (one closure per dimension). */
+function myAreaInvariant(is3d) {
+  return (st) => {
+    let checked = 0;
+    for (let i = 0; i < st.highWater; i++) {
+      if (!st.alive[i]) continue;
+      const r = st.attrRead.rad[i];
+      if (!(r > 0)) return `agent ${i}: myRadius read back as ${r}`;
+      // The SAME association BOTH emits use — f64 multiplication is not
+      // associative, so a re-grouped expectation would be an ULP off.
+      const disc = Math.PI * r * r;
+      const sphere = Math.PI * 4 * r * r;
+      const want = is3d ? sphere : disc;
+      const other = is3d ? disc : sphere;
+      if (!Object.is(st.attrRead.area[i], want)) {
+        return `agent ${i}: myArea ${st.attrRead.area[i]} !== ${is3d ? '4πr² (sphere surface)' : 'πr² (disc)'} ${want} (r=${r})`;
+      }
+      // DISCRIMINATOR: the other dimension's formula must not also pass, or the
+      // check above would hold whichever formula shipped.
+      if (Object.is(st.attrRead.area[i], other)) {
+        return `fixture does not discriminate at agent ${i}: both formulas give ${want}`;
+      }
+      checked++;
+    }
+    if (checked === 0) return 'the run never evaluated a live agent';
+    return null;
+  };
+}
+
+entries.push({
+  name: '[synthetic] myArea 3D (sphere SURFACE area 4πr²)',
+  raw: buildMyAreaModel(true), setup: setupMyAreaStores, invariant: myAreaInvariant(true),
+});
+entries.push({
+  name: '[synthetic] myArea 2D (disc area πr² + the JS↔WASM operand order)',
+  raw: buildMyAreaModel(false), setup: setupMyAreaStores, invariant: myAreaInvariant(false),
+});
 entries.push({
   name: '[synthetic] By-id targeting (Kill / Set Velocity / Set Target Radius, self + by id)',
   raw: buildByIdTargetingModel(), invariant: byIdTargetingInvariant,
