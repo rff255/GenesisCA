@@ -1113,6 +1113,11 @@ export function HelpView() {
             right-click it &rarr; <strong>Dissolve Reroute</strong>) and everything it fed
             is rewired straight to whatever was feeding it. In a chain, only the reroute
             you clicked goes, so the rest of the chain stays put.
+            To clear several at once, <strong>select them and right-click &rarr;
+            &quot;Dissolve Reroutes&quot;</strong> &mdash; they all go in one step (a single
+            undo), each consumer landing on the nearest source that is <em>not</em> being
+            dissolved, so dissolving a whole chain wires its end straight to the start. A
+            mixed selection dissolves only the reroutes and leaves everything else alone.
             A new reroute is <strong>named after the port it relays</strong> (or, when placed
             on another reroute&rsquo;s wire, after that reroute&rsquo;s &mdash; possibly renamed
             &mdash; label), shown above the dot.
