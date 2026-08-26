@@ -132,7 +132,7 @@ function graphKindLabel(kind: ActiveGraphKind): string {
   return kind === 'cells' ? 'Cells' : kind === 'agents' ? 'Agents' : 'Overseer';
 }
 
-import { setIsConnecting, setConnectingFrom, setShowPortLabels, showPortLabelsGlobal, showGridGlobal, setShowGrid as setShowGridGlobal, snapEnabledGlobal, setSnapEnabled as setSnapEnabledGlobal, setConnectedHandlesFromEdges, setConnectionHazards, getSavedGraphViewport, setSavedGraphViewport, savedCurrentScope, setSavedCurrentScope, subscribeCurrentModelElementDrag, setCompatibleHandlesForDrag, clearCompatibleHandlesForDrag, setCurrentModelElementDrag, compatibleHandlesForDrag, currentModelElementDrag, setQuickAddApi, setActiveGraphKind, hasPendingMacroImport, takePendingMacroImport, displayNodeLabel, displayNodeDescription, type ActiveGraphKind } from './graphState';
+import { setIsConnecting, setConnectingFrom, setShowPortLabels, showPortLabelsGlobal, showGridGlobal, setShowGrid as setShowGridGlobal, snapEnabledGlobal, setSnapEnabled as setSnapEnabledGlobal, setConnectedHandlesFromEdges, setConnectionHazards, getSavedGraphViewport, setSavedGraphViewport, savedCurrentScope, setSavedCurrentScope, subscribeCurrentModelElementDrag, setCompatibleHandlesForDrag, clearCompatibleHandlesForDrag, setCurrentModelElementDrag, compatibleHandlesForDrag, currentModelElementDrag, setQuickAddApi, setActiveGraphKind, hasPendingMacroImport, takePendingMacroImport, displayNodeLabel, displayNodeDescription, setControlPick, getControlPick, type ActiveGraphKind } from './graphState';
 import { modelerUiState } from '../modelerUiState';
 import type { QuickAddPayload } from './graphState';
 import { detectEdgeHazard, isNodeAvailable } from './nodes/nodeValidation';
@@ -1313,6 +1313,12 @@ export function GraphEditorInner() {
   // clearHistory()-on-swap guard for free — Ctrl+Z after an Agents→Cells switch
   // can't apply an agent-graph snapshot onto the cells graph (Decision R2).
   useEffect(() => {
+    // EXPLICIT CONTROLS (R10) — a pick armed against a def that is no longer on
+    // screen is a DEAD MODE, and a stranded one would bind into the WRONG def.
+    // This ONE line covers all three cancel triggers the design requires: a
+    // scope change, a graph swap, AND a model load (`modelVersion` is in this
+    // effect's deps). Unmount is covered by the cleanup below.
+    setControlPick(null);
     const scopeId = currentScope[currentScope.length - 1] ?? 'root';
     if (!scopeId || scopeId === 'root') {
       // Root scope shows the ACTIVE graph (Cells / Agents / Overseer).
@@ -1344,6 +1350,33 @@ export function GraphEditorInner() {
     }, 50);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentScope, modelVersion, activeGraph]);
+
+  // EXPLICIT CONTROLS — Esc cancels pick mode, and the editor is torn down with
+  // it cancelled (R10). ONE listener here rather than one per CaNode; it is
+  // CAPTURE-phase on `document` with `stopPropagation` so it cannot also reach
+  // the editor's own Escape handling (the KeyboardShortcutsOverlay precedent),
+  // and it does nothing at all unless a pick is actually armed.
+  //
+  // DEV hook: React Flow ignores synthetic pointer events, so `__setControlPick`
+  // is the only way to drive pick mode from a probe (the
+  // `__openConnectionDropMenu` precedent).
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape' || !getControlPick()) return;
+      e.stopPropagation();
+      e.preventDefault();
+      setControlPick(null);
+    };
+    document.addEventListener('keydown', onKey, true);
+    if (import.meta.env.DEV) {
+      (window as unknown as Record<string, unknown>).__setControlPick = setControlPick;
+      (window as unknown as Record<string, unknown>).__getControlPick = getControlPick;
+    }
+    return () => {
+      document.removeEventListener('keydown', onKey, true);
+      setControlPick(null);
+    };
+  }, []);
 
   // Bond-Graph Agents: keep the active sub-tab on a graph that actually exists —
   // if Agents is turned off while on the Agents tab → back to Cells; if Grid Cells
