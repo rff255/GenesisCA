@@ -102,6 +102,23 @@ export const CONTROL_BLOCK_REASON: Readonly<Record<ControlBlock, string>> = {
   'scope-open': 'the macro is open for editing — edit it there',
 };
 
+/**
+ * The block reasons the closed instance ROLLS UP onto its amber badge.
+ *
+ * The BROKEN ones only. `wired` and `scope-open` are deliberate, legitimate,
+ * self-explaining states (a wired parameter is driven by a wire, which is how
+ * macros are normally built; `scope-open` lasts exactly as long as the macro is
+ * open) — badging them would fire the "something is wrong" signal on a healthy
+ * model, which is the noise the enabled-control doctrine exists to prevent.
+ * Both still render DISABLED WITH THEIR REASON on the row itself, which is the
+ * surfacing they need.
+ *
+ * ONE definition so the badge, the harness and any later consumer agree.
+ */
+export const CONTROL_BLOCK_NEEDS_ATTENTION: ReadonlySet<ControlBlock> = new Set<ControlBlock>([
+  'orphan-node', 'orphan-key', 'orphan-control', 'orphan-def', 'cycle',
+]);
+
 /** Mirrors `expandMacros`' depth-20 guard and `MAX_MACRO_DEPTH`. */
 export const CONTROL_MAX_CHAIN_DEPTH = 20;
 
@@ -131,6 +148,42 @@ export function orderByGroup<T extends { groupId?: string }>(
   const live = new Set(groups.map(g => g.id));
   const out: T[] = items.filter(i => !i.groupId || !live.has(i.groupId));
   for (const g of groups) for (const i of items) if (i.groupId === g.id) out.push(i);
+  return out;
+}
+
+/** One rendered section of a macro's interface: an optional group header plus
+ *  the members under it. The leading section (`group: undefined`) is the
+ *  ungrouped head. */
+export interface InterfaceSection<T> { group?: MacroInterfaceGroup; items: T[] }
+
+/**
+ * `orderByGroup`, sliced into the SECTIONS the closed instance draws.
+ *
+ * Deliberately built BY CALLING `orderByGroup` and partitioning its output into
+ * consecutive runs, rather than by re-deriving the order: the instance's
+ * rendering and the editor's array reordering must be the SAME order, and the
+ * only way to guarantee that is for both to come from the one call. (The
+ * partition is exact because `orderByGroup` emits the ungrouped head first and
+ * then each group CONTIGUOUSLY, so a run boundary IS a section boundary.)
+ *
+ * A member naming a DEAD group counts as ungrouped in both, for the same
+ * reason — `orderByGroup` already placed it in the head.
+ */
+export function groupSections<T extends { groupId?: string }>(
+  items: readonly T[],
+  groups: readonly MacroInterfaceGroup[],
+): InterfaceSection<T>[] {
+  const live = new Map(groups.map(g => [g.id, g] as const));
+  const out: InterfaceSection<T>[] = [];
+  let cur: InterfaceSection<T> | null = null;
+  for (const item of orderByGroup(items, groups)) {
+    const g = item.groupId ? live.get(item.groupId) : undefined;
+    if (!cur || cur.group !== g) {
+      cur = g ? { group: g, items: [] } : { items: [] };
+      out.push(cur);
+    }
+    cur.items.push(item);
+  }
   return out;
 }
 

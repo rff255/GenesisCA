@@ -414,6 +414,106 @@
   user-select: none;
 }
 
+/* --- EXPLICIT CONTROLS: the CLOSED INSTANCE's interface (P3) -------------- */
+
+/* The whole section. Only rendered when the def HAS controls, so an ordinary
+   macro instance is byte-identical to before (no header, no gap). */
+.ctlSection {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+/* "Parameters" + the linked-count pill. Same weight as `.ifaceHeader` so the
+   instance's interface and the boundary editor's read as the same thing. */
+.ctlSectionHeader {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+  font-size: 0.5rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--color-text-tertiary);
+  user-select: none;
+}
+
+/* D1 made visible: this value is SHARED with every linked instance, and the
+   sharing has to be legible AT THE POINT OF EDITING. */
+.ctlLinked {
+  padding: 0 3px;
+  font-size: 0.45rem;
+  font-weight: 700;
+  letter-spacing: 0;
+  color: var(--color-accent);
+  background: var(--color-accent-soft);
+  border-radius: var(--radius-sm);
+  cursor: help;
+}
+
+.ctlRowWrap {
+  display: flex;
+  flex-direction: column;
+}
+
+/* label-left / widget-right */
+.ctlRow {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: 20px;
+}
+
+/* A formula is far wider than the right-hand column, so it takes the whole row
+   under its label. */
+.ctlRowStacked {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.ctlLabel {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 0.55rem;
+  color: var(--color-text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  user-select: none;
+}
+
+.ctlWidget {
+  flex: 0 0 auto;
+  width: 84px;
+  max-width: 84px;
+}
+
+/* A BLOCKED control shows what the macro currently HOLDS, read-only. */
+.ctlBlockedValue {
+  flex: 0 0 auto;
+  max-width: 84px;
+  font-size: 0.55rem;
+  font-family: var(--font-mono, monospace);
+  color: var(--color-text-tertiary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  opacity: 0.7;
+}
+
+/* "report, never drop" — the sentence, on the row, always. */
+.ctlReason {
+  margin: 0 0 var(--space-1) 2px;
+  font-size: 0.5rem;
+  color: var(--color-text-tertiary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  user-select: none;
+}
+
 /* --- EXPLICIT CONTROLS: pick mode ---------------------------------------- */
 
 /* Class A — the REAL inline widget, outlined IN PLACE and made inert. `outline`
