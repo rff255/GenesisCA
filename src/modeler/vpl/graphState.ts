@@ -198,6 +198,46 @@ export function setQuickAddApi(api: QuickAddApi | null): void {
   quickAddApi = api;
 }
 
+// --- Pending `.gcamacro` drop --------------------------------------------
+// A `.gcamacro` dropped anywhere on the app is routed by App.tsx to the SAME
+// import flow the "Import Macro..." menu item uses. But the graph editor is
+// UNMOUNTED on every non-Modeler tab, so a window CustomEvent dispatched while
+// the user is on the Simulator/Library has NO listener and would be lost. This
+// module-level slot survives the tab switch: App.tsx stashes the file here and
+// switches to the Modeler; GraphEditor DRAINS it both on mount and from the
+// event listener, and `takePendingMacroImport` clears it, so whichever fires
+// first wins and the other is a no-op (idempotent by construction).
+
+/** A `.gcamacro` awaiting import by the graph editor. */
+export interface PendingMacroImport {
+  file: File;
+  /** Client coords of the drop, carried ONLY when the Modeler was already the
+   *  active tab (so the drop really did land on the canvas). Absent ⇒ the
+   *  editor places the macro at its viewport centre. */
+  clientX?: number;
+  clientY?: number;
+}
+
+let pendingMacroImport: PendingMacroImport | null = null;
+
+export function setPendingMacroImport(pending: PendingMacroImport | null): void {
+  pendingMacroImport = pending;
+}
+
+/** Is an import waiting? (Does NOT consume — the editor peeks before deciding
+ *  whether it is ready to place a node, so a not-yet-measured canvas retries
+ *  instead of losing the file.) */
+export function hasPendingMacroImport(): boolean {
+  return pendingMacroImport !== null;
+}
+
+/** Consume the pending import (clears the slot). */
+export function takePendingMacroImport(): PendingMacroImport | null {
+  const pending = pendingMacroImport;
+  pendingMacroImport = null;
+  return pending;
+}
+
 /** Info about the handle being dragged for connection (for port compatibility highlighting
  *  AND the connection-drop-to-pane feature that pops the Add Node menu filtered to
  *  compatible nodes). `portId` and `dataType` populated when known so the drop-on-pane
