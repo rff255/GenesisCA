@@ -28,12 +28,16 @@ interface PickRect { l: number; t: number; w: number; h: number }
 interface PickRectMaps {
   /** `data-ctl-key` → box: a class-A/B/C parameter widget. */
   keys: Record<string, PickRect>;
+  /** `data-ctl-facet` → box: a class-D MULTI-KEY EDITOR block (D11). Its OWN
+   *  namespace, so a config key that happened to share a facet's name could
+   *  never claim its hotspot. */
+  facets: Record<string, PickRect>;
   /** `data-ctl-chain` → box: a nested macro instance's own control row (D4). */
   chains: Record<string, PickRect>;
 }
 /** Stable identity so "nothing measured" compares `===` and the measure pass can
  *  clear without allocating a fresh object every commit. */
-const EMPTY_PICK_RECTS: PickRectMaps = { keys: {}, chains: {} };
+const EMPTY_PICK_RECTS: PickRectMaps = { keys: {}, facets: {}, chains: {} };
 const NOOP = () => {};
 
 /** Sub-pixel churn (a font landing, a zoom rounding) must not restart the
@@ -57,8 +61,8 @@ import { is3dModelLike } from './compiler/niCodec';
 import { MULTI_ATTR_TYPES, multiAttrExtraCount, buildExtraSlotPorts } from './compiler/multiAttrExpand';
 // Explicit Controls: the ONE inline-widget resolution + the two attribute
 // scopes, dually consumed here and by a control bound to the same key.
-import { inlineWidgetFor, ownAttrListFor, tagAttrScopeFor, eligibleControlKeys, partitionPickTargets, describeControlTarget, applyInterfaceEdit, groupSections, interfaceRows, resolveControlDescriptor, applyControlValue, elementOptionsFor, resolveTarget, collapsedGroupIds, toggleCollapsedGroup, CTL_COLLAPSED_KEY, CONTROL_BLOCK_REASON, CONTROL_BLOCK_NEEDS_ATTENTION } from './explicitControls';
-import type { ControlKeyDescriptor, InterfaceEdit, ControlDescriptor } from './explicitControls';
+import { inlineWidgetFor, ownAttrListFor, tagAttrScopeFor, eligibleControlKeys, partitionPickTargets, controlTargetOf, describeControlTarget, applyInterfaceEdit, groupSections, interfaceRows, resolveControlDescriptor, applyControlValue, applyControlFacet, elementOptionsFor, resolveTarget, collapsedGroupIds, toggleCollapsedGroup, CTL_COLLAPSED_KEY, CONTROL_BLOCK_REASON, CONTROL_BLOCK_NEEDS_ATTENTION } from './explicitControls';
+import type { ControlKeyDescriptor, InterfaceEdit, ControlDescriptor, FacetValue } from './explicitControls';
 import { useListReorder } from '../panels/useListReorder';
 import { buildCensusPorts, censusAttributes } from './compiler/censusExpand';
 import { buildBondAttrPorts } from './bondAttrPorts';
@@ -104,11 +108,12 @@ function getCompatibleHandlesSnapshot() {
 import styles from './CaNode.module.css';
 import { InlineNumberInput, InlineBoolSelect, InlineTagSelect, InlineGlyphInput } from './widgets/InlineWidgets';
 import { ColorField } from './widgets/ColorField';
-import { hexToRgba, rgbaToHex, isOpaque, OPAQUE } from '../../model/colorHex';
-import { readCategoricalEntries, readCategoricalDefault, categoricalHasAlpha, type CategoricalEntry } from './nodes/CategoricalColorNode';
+import { hexToRgba, rgbaToHex } from '../../model/colorHex';
+import { readCategoricalEntries, readCategoricalDefault, writeCategoricalPalette, categoricalHasAlpha } from './nodes/CategoricalColorNode';
 import { readColorScaleStopsRaw, writeColorScaleStops, colorScaleHasAlpha } from './nodes/ColorScaleNode';
-import { colorConstantHasAlpha } from './nodes/GetColorConstantNode';
+import { colorConstantHasAlpha, readColorConstant, writeColorConstant } from './nodes/GetColorConstantNode';
 import { GradientStopsEditor, type GradStop } from './widgets/GradientStopsEditor';
+import { CategoricalPaletteEditor } from './widgets/CategoricalPaletteEditor';
 
 /** Pick the handle CSS class for a port based on its category + data type.
  *  Flow → green; NeighborIndex value → amber; everything else → cyan. */
@@ -187,7 +192,13 @@ function ColorScaleEditor({ id, nodeData }: { id: string; nodeData: CaNodeData }
   const setStops = (next: GradStop[]) => {
     updateNodeData(id, { ...nodeData, config: writeColorScaleStops(nodeData.config, next) as NodeConfig });
   };
-  return <GradientStopsEditor stops={stops} onChange={setStops} />;
+  // `data-ctl-facet` is pick mode's POSITION marker for the whole editor block
+  // (D11) — the facet binds the editor, never one of its `stop_N_*` keys.
+  return (
+    <div data-ctl-facet="colorScaleStops">
+      <GradientStopsEditor stops={stops} onChange={setStops} />
+    </div>
+  );
 }
 
 /**
@@ -206,9 +217,12 @@ function ColorScaleEditor({ id, nodeData }: { id: string; nodeData: CaNodeData }
  * (D8 — report, never drop). Its `onChange` is never reached, and
  * `applyControlValue` refuses it anyway, so inertness is structural.
  */
-function MacroControlRow({ desc, onChange, needsAttention, chainId }: {
+function MacroControlRow({ desc, onChange, onFacetChange, needsAttention, chainId }: {
   desc: ControlDescriptor;
   onChange: (next: string) => void;
+  /** class D (D11) — the multi-key editor emits its WHOLE value, which
+   *  `applyControlFacet` hands straight to the node's own writer. */
+  onFacetChange: (next: FacetValue) => void;
   needsAttention: boolean;
   /** EXPLICIT CONTROLS chaining (D4) — the id of the control this row renders,
    *  marked on the row so pick mode can measure a hotspot over it. A nested
@@ -226,6 +240,44 @@ function MacroControlRow({ desc, onChange, needsAttention, chainId }: {
       return <span className={styles.ctlBlockedValue}>{desc.value || '—'}</span>;
     }
     switch (desc.kind) {
+      // class D — the SAME widget component the node itself renders (D11), so
+      // the two cannot drift. `nodrag` on the wrapper: `GradientStopsEditor`
+      // drags its stops with window listeners, which React Flow's own node drag
+      // would otherwise swallow.
+      case 'facet': {
+        const f = desc.facet;
+        if (!f) return <span className={styles.ctlBlockedValue}>—</span>;
+        if (f.widget === 'gradient') {
+          return (
+            <div className="nodrag" style={{ width: '100%' }} {...guards}>
+              <GradientStopsEditor
+                stops={f.stops as GradStop[]}
+                onChange={stops => onFacetChange({ widget: 'gradient', stops })}
+              />
+            </div>
+          );
+        }
+        if (f.widget === 'palette') {
+          return (
+            <div className="nodrag" style={{ width: '100%' }} {...guards}>
+              <CategoricalPaletteEditor
+                entries={f.entries}
+                fallback={f.fallback}
+                onChange={(entries, fallback) => onFacetChange({ widget: 'palette', entries, fallback })}
+              />
+            </div>
+          );
+        }
+        return (
+          <div className="nodrag" style={{ width: '100%' }} {...guards}>
+            <ColorField
+              value={rgbaToHex(f.color)}
+              onChange={h => onFacetChange({ widget: 'color', color: hexToRgba(h) })}
+              style={{ height: 24, width: '100%' }}
+            />
+          </div>
+        );
+      }
       case 'number':
         return (
           <InlineNumberInput
@@ -323,7 +375,9 @@ function MacroControlRow({ desc, onChange, needsAttention, chainId }: {
     }
   })();
 
-  const stacked = !desc.block && desc.kind === 'textarea';
+  // A formula, a gradient and a palette are all far too wide for the right-hand
+  // column — they take the whole row below the label.
+  const stacked = !desc.block && (desc.kind === 'textarea' || desc.kind === 'facet');
   return (
     <div className={styles.ctlRowWrap} data-ctl-chain={chainId}>
       <div className={stacked ? styles.ctlRowStacked : styles.ctlRow}>
@@ -345,68 +399,27 @@ function MacroControlRow({ desc, onChange, needsAttention, chainId }: {
 
 /** Palette editor for the Categorical Color node: one color swatch per index
  *  entry (entry i == index i), plus a default color for out-of-range indices.
- *  Entries live in node.data.config as `count` + `entry_<i>_(r|g|b)` + `default_(r|g|b)`. */
+ *  Entries live in node.data.config as `count` + `entry_<i>_(r|g|b)` + `default_(r|g|b)`.
+ *
+ *  A thin wrapper, exactly like `ColorScaleEditor`: the WIDGET is the shared
+ *  `CategoricalPaletteEditor` (which the Explicit-Controls facet control renders
+ *  too) and the CONFIG mapping is the node's OWN `readCategoricalEntries` /
+ *  `readCategoricalDefault` / `writeCategoricalPalette` — so the in-node editor,
+ *  the instance control and the five compilers can never disagree about what the
+ *  config means, and the Option-A alpha gate lives in exactly one place. */
 function CategoricalColorEditor({ id, nodeData }: { id: string; nodeData: CaNodeData }) {
   const { updateNodeData } = useReactFlow();
-  // `a` optional — absent means opaque. Reuses the node's OWN parsers so the
-  // editor and the compiler can never disagree about what the config means.
-  type E = CategoricalEntry;
-  const entries: E[] = readCategoricalEntries(nodeData.config);
-  const def: E = readCategoricalDefault(nodeData.config);
-  const stopDrag = (e: React.MouseEvent) => { if (e.button === 0) e.stopPropagation(); };
-  // Any entry declaring alpha widens the WHOLE palette's config (a mixed palette
-  // must write every entry's `a`, else an opaque one would read as undefined and
-  // silently take the pre-alpha emit path for that entry).
-  const anyAlpha = (list: E[], d: E) => list.some(e => !isOpaque(e)) || !isOpaque(d);
-  const writeAll = (next: E[], d: E) => {
-    const cfg: NodeConfig = { ...nodeData.config };
-    for (const k of Object.keys(cfg)) if (/^entry_\d+_(r|g|b|a)$/.test(k)) delete cfg[k];
-    delete cfg.default_a;
-    const withA = anyAlpha(next, d);
-    next.forEach((e, i) => {
-      cfg[`entry_${i}_r`] = String(e.r | 0);
-      cfg[`entry_${i}_g`] = String(e.g | 0);
-      cfg[`entry_${i}_b`] = String(e.b | 0);
-      if (withA) cfg[`entry_${i}_a`] = String((e.a ?? OPAQUE) | 0);
-    });
-    cfg.default_r = String(d.r | 0);
-    cfg.default_g = String(d.g | 0);
-    cfg.default_b = String(d.b | 0);
-    if (withA) cfg.default_a = String((d.a ?? OPAQUE) | 0);
-    cfg.count = next.length;
-    updateNodeData(id, { ...nodeData, config: cfg });
-  };
-  const writeEntries = (next: E[]) => writeAll(next, def);
-  const setDefault = (c: E) => writeAll(entries, c);
-  const swatch = (val: E, onChange: (c: E) => void) => (
-    <ColorField
-      value={rgbaToHex(val)}
-      onChange={(h) => {
-        const n = hexToRgba(h);
-        onChange(n.a === OPAQUE ? { r: n.r, g: n.g, b: n.b } : { r: n.r, g: n.g, b: n.b, a: n.a });
-      }}
-      style={{ height: 24, flex: 1 }}
-    />
-  );
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }} onMouseDown={stopDrag}>
-      {entries.map((e, i) => (
-        <div key={i} style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
-          <span style={{ width: 28, fontSize: '0.7rem', opacity: 0.8 }}>#{i}</span>
-          {swatch(e, c => writeEntries(entries.map((x, j) => (j === i ? c : x))))}
-          <button onClick={() => writeEntries(entries.filter((_, j) => j !== i))}
-            style={{ background: 'none', border: 'none', color: '#f44336', cursor: 'pointer', fontSize: '0.7rem', padding: '0 2px' }}
-            title="Delete this color">x</button>
-        </div>
-      ))}
-      <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
-        <span style={{ width: 28, fontSize: '0.7rem', opacity: 0.6 }}>else</span>
-        {swatch(def, setDefault)}
-      </div>
-      <button className={styles.select} style={{ cursor: 'pointer', textAlign: 'center' }}
-        onClick={() => writeEntries([...entries, def])}>
-        + Add Color
-      </button>
+    <div data-ctl-facet="categoricalPalette">
+      <CategoricalPaletteEditor
+        entries={readCategoricalEntries(nodeData.config)}
+        fallback={readCategoricalDefault(nodeData.config)}
+        buttonClassName={styles.select}
+        onChange={(entries, fallback) => updateNodeData(id, {
+          ...nodeData,
+          config: writeCategoricalPalette(nodeData.config, entries, fallback) as NodeConfig,
+        })}
+      />
     </div>
   );
 }
@@ -1007,8 +1020,9 @@ function CaNodeComponent({ id, data }: NodeProps) {
       const bx = root.clientLeft;
       const by = root.clientTop;
       const keys: Record<string, PickRect> = {};
+      const facets: Record<string, PickRect> = {};
       const chains: Record<string, PickRect> = {};
-      for (const el of Array.from(root.querySelectorAll<HTMLElement>('[data-ctl-key],[data-ctl-chain]'))) {
+      for (const el of Array.from(root.querySelectorAll<HTMLElement>('[data-ctl-key],[data-ctl-facet],[data-ctl-chain]'))) {
         const b = el.getBoundingClientRect();
         if (!b.width || !b.height) continue;
         const rect: PickRect = {
@@ -1021,12 +1035,15 @@ function CaNodeComponent({ id, data }: NodeProps) {
         // one of them renders for a given node type, so a second hit would be a
         // duplicate rather than a different parameter.
         const k = el.dataset.ctlKey;
+        const f = el.dataset.ctlFacet;
         const c = el.dataset.ctlChain;
         if (k && !(k in keys)) keys[k] = rect;
+        if (f && !(f in facets)) facets[f] = rect;
         if (c && !(c in chains)) chains[c] = rect;
       }
       setPickRects(prev => (
-        samePickRects(prev.keys, keys) && samePickRects(prev.chains, chains) ? prev : { keys, chains }
+        samePickRects(prev.keys, keys) && samePickRects(prev.facets, facets) && samePickRects(prev.chains, chains)
+          ? prev : { keys, facets, chains }
       ));
     };
     measurePickRef.current = measure;
@@ -1044,9 +1061,10 @@ function CaNodeComponent({ id, data }: NodeProps) {
   }, [pickArmed]);
 
   const measuredPickKeys = useMemo(() => new Set(Object.keys(pickRects.keys)), [pickRects]);
+  const measuredPickFacets = useMemo(() => new Set(Object.keys(pickRects.facets)), [pickRects]);
   const { hotspots: pickHotspots, fallback: pickFallbackRows } = useMemo(
-    () => partitionPickTargets(pickRows, measuredPickKeys),
-    [pickRows, measuredPickKeys],
+    () => partitionPickTargets(pickRows, measuredPickKeys, measuredPickFacets),
+    [pickRows, measuredPickKeys, measuredPickFacets],
   );
   // The chaining rows split the same way — a nested instance's control row IS
   // the widget, so a rendered one gets a hotspot and a collapsed one a fallback.
@@ -1092,8 +1110,11 @@ function CaNodeComponent({ id, data }: NodeProps) {
     setControlPick(null);
   }, [model, updateMacro]);
 
+  /** Bind ONE offered row. `controlTargetOf` is the ONE place a row's shape
+   *  decides the target's shape (a class-D row binds a FACET), so nothing here
+   *  branches on `klass`. */
   const bindPick = useCallback(
-    (configKey: string, label: string) => bindPickTarget({ kind: 'config', nodeId: id, configKey }, label),
+    (row: ControlKeyDescriptor) => bindPickTarget(controlTargetOf(id, row), row.label),
     [bindPickTarget, id],
   );
 
@@ -1183,6 +1204,16 @@ function CaNodeComponent({ id, data }: NodeProps) {
   const setControlValue = useCallback((control: MacroControl, value: string) => {
     if (!macroDefId) return;
     const patch = applyControlValue(modelRef.current, macroDefId, control, value, getOpenMacroScope());
+    if (!patch) return;
+    updateMacro(patch.defId, { nodes: patch.nodes });
+  }, [macroDefId, updateMacro]);
+
+  /** The class-D twin (D11). The WHOLE next config is built by the target node's
+   *  OWN writer inside `applyControlFacet`, so an instance edit produces exactly
+   *  the config the in-node editor would — the alpha gate included. */
+  const setControlFacet = useCallback((control: MacroControl, value: FacetValue) => {
+    if (!macroDefId) return;
+    const patch = applyControlFacet(modelRef.current, macroDefId, control, value, getOpenMacroScope());
     if (!patch) return;
     updateMacro(patch.defId, { nodes: patch.nodes });
   }, [macroDefId, updateMacro]);
@@ -1950,11 +1981,11 @@ function CaNodeComponent({ id, data }: NodeProps) {
             <div className={styles.pickOverlayHead}>not shown on the node</div>
             {pickFallbackRows.map(r => (
               <button
-                key={r.configKey}
+                key={r.facet ? `facet:${r.facet}` : r.configKey}
                 type="button"
                 className={`${styles.pickRow} nodrag`}
                 onMouseDown={e => e.stopPropagation()}
-                onClick={e => { e.stopPropagation(); bindPick(r.configKey, r.label); }}
+                onClick={e => { e.stopPropagation(); bindPick(r); }}
                 title={r.wired ? `${r.label} — wired inside the macro; the control will show that reason` : r.label}
               >
                 <span className={styles.pickRowLabel}>{r.label}</span>
@@ -3349,28 +3380,21 @@ function CaNodeComponent({ id, data }: NodeProps) {
         })()}
 
         {nodeData.nodeType === 'getColorConstant' && (() => {
-          const r = parseInt(String(nodeData.config.r ?? '128'), 10) || 0;
-          const g = parseInt(String(nodeData.config.g ?? '128'), 10) || 0;
-          const b = parseInt(String(nodeData.config.b ?? '128'), 10) || 0;
-          const rawA = nodeData.config.a;
-          const a = rawA === undefined ? OPAQUE : (parseInt(String(rawA), 10) || 0);
           return (
             <>
-              <ColorField
-                value={rgbaToHex({ r, g, b, a })}
-                onChange={(h) => {
-                  const n = hexToRgba(h);
-                  const cfg: NodeConfig = {
-                    ...nodeData.config,
-                    r: String(n.r), g: String(n.g), b: String(n.b),
-                  };
-                  // Drop the `a` key entirely when opaque, so the node keeps its
-                  // pre-alpha config + 3-port shape + byte-identical emit.
-                  if (n.a === OPAQUE) delete cfg.a; else cfg.a = String(n.a);
-                  updateNodeData(id, { ...nodeData, config: cfg });
-                }}
-                style={{ height: 24, width: '100%' }}
-              />
+              {/* The node's OWN reader / writer, so the facet control writes the
+                  same config this does — and the alpha gate (drop the `a` key
+                  when opaque, keeping the pre-alpha 3-port shape) lives once. */}
+              <div data-ctl-facet="colorConstant">
+                <ColorField
+                  value={rgbaToHex(readColorConstant(nodeData.config))}
+                  onChange={(h) => updateNodeData(id, {
+                    ...nodeData,
+                    config: writeColorConstant(nodeData.config, hexToRgba(h)) as NodeConfig,
+                  })}
+                  style={{ height: 24, width: '100%' }}
+                />
+              </div>
               <InlineNumberInput className={styles.input} placeholder="R" min={0} max={255}
                 value={(nodeData.config.r as string) || '128'}
                 onChange={v => updateConfig('r', v)} />
@@ -3755,7 +3779,7 @@ function CaNodeComponent({ id, data }: NodeProps) {
         )}
 
         {(nodeData.nodeType === 'colorScale' || nodeData.nodeType === 'proportionMap') && (
-          <select
+          <select data-ctl-key="method"
             className={styles.select}
             value={(nodeData.config.method as string) || DEFAULT_INTERPOLATION_METHOD}
             onChange={e => updateConfig('method', e.target.value)}
@@ -4327,6 +4351,7 @@ function CaNodeComponent({ id, data }: NodeProps) {
                   chainId={control.id}
                   needsAttention={!!desc.block && CONTROL_BLOCK_NEEDS_ATTENTION.has(desc.block)}
                   onChange={next => setControlValue(control, next)}
+                  onFacetChange={next => setControlFacet(control, next)}
                 />
               ));
               // The ungrouped head is ALWAYS visible — there is no separator
@@ -4853,16 +4878,18 @@ function CaNodeComponent({ id, data }: NodeProps) {
           (`.node { position: relative }`) the rects were measured against, and
           painting last puts these over every widget without a z-index race. */}
       {pickHotspots.map(r => {
-        const box = pickRects.keys[r.configKey];
+        // A class-D row is measured in the FACET namespace — the whole
+        // multi-key editor block, not one of its member widgets (D11).
+        const box = r.facet ? pickRects.facets[r.facet] : pickRects.keys[r.configKey];
         return box && (
           <button
-            key={`k:${r.configKey}`}
+            key={r.facet ? `f:${r.facet}` : `k:${r.configKey}`}
             type="button"
             className={`${styles.pickHotspot} nodrag`}
             style={{ left: box.l, top: box.t, width: box.w, height: box.h }}
             title={`Bind “${r.label}” as an explicit parameter`}
             onMouseDown={e => e.stopPropagation()}
-            onClick={e => { e.stopPropagation(); bindPick(r.configKey, r.label); }}
+            onClick={e => { e.stopPropagation(); bindPick(r); }}
           />
         );
       })}

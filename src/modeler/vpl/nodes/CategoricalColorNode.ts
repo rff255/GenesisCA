@@ -39,6 +39,46 @@ export function readCategoricalDefault(
   return readEntry(config, 'default');
 }
 
+/**
+ * Write a whole palette back to config keys, applying the Option-A alpha gate.
+ *
+ * The WRITER twin of {@link readCategoricalEntries} / {@link readCategoricalDefault},
+ * and — like {@link writeColorScaleStops} — THE writer both the in-node editor
+ * and the Explicit-Controls FACET control must use, so the config an instance
+ * edit produces is byte-identical to the same edit made inside the macro.
+ *
+ * Any entry declaring alpha widens the WHOLE palette's config: a mixed palette
+ * must write every entry's `a`, else an opaque one would read back as
+ * `undefined` and silently take the pre-alpha emit path for that entry. When
+ * nothing is non-opaque, NO `a` key is written at all — dragging alpha to full
+ * and back leaves no trace, which is what keeps an untouched palette
+ * byte-identical through the compiler.
+ *
+ * Returns a NEW config; the caller owns the update dispatch.
+ */
+export function writeCategoricalPalette(
+  config: Record<string, string | number | boolean>,
+  entries: CategoricalEntry[],
+  fallback: CategoricalEntry,
+): Record<string, string | number | boolean> {
+  const next = { ...config };
+  for (const k of Object.keys(next)) if (/^entry_\d+_(r|g|b|a)$/.test(k)) delete next[k];
+  delete next.default_a;
+  const withA = entries.some(e => !isOpaque(e)) || !isOpaque(fallback);
+  entries.forEach((e, i) => {
+    next[`entry_${i}_r`] = String(e.r | 0);
+    next[`entry_${i}_g`] = String(e.g | 0);
+    next[`entry_${i}_b`] = String(e.b | 0);
+    if (withA) next[`entry_${i}_a`] = String((e.a ?? OPAQUE) | 0);
+  });
+  next.default_r = String(fallback.r | 0);
+  next.default_g = String(fallback.g | 0);
+  next.default_b = String(fallback.b | 0);
+  if (withA) next.default_a = String((fallback.a ?? OPAQUE) | 0);
+  next.count = entries.length;
+  return next;
+}
+
 /** Does this palette declare a non-opaque alpha anywhere (entries OR the
  *  out-of-range default)?
  *

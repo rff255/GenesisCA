@@ -36,6 +36,11 @@ import { censusAttributes } from './compiler/censusExpand';
 import { indicatorScalarBlocker } from '../../model/indicatorValue';
 import { typeDisplayName } from '../../model/typeLabels';
 import { CURRENT_VIEWER_SENTINEL } from './nodes/SetCellLooksNode';
+import { readColorScaleStopsRaw, writeColorScaleStops, type ColorScaleStop } from './nodes/ColorScaleNode';
+import {
+  readCategoricalEntries, readCategoricalDefault, writeCategoricalPalette, type CategoricalEntry,
+} from './nodes/CategoricalColorNode';
+import { readColorConstant, writeColorConstant } from './nodes/GetColorConstantNode';
 import { vectorPortDims } from './compiler/vectorAttr';
 import { MULTI_ATTR_SET_TYPES, resolveSlotAttr } from './compiler/multiAttrExpand';
 import { INTERPOLATION_METHODS } from './nodes/interpolationMethods';
@@ -48,9 +53,10 @@ import { FORMULA_NODE_TYPES } from './compiler/expression/parser';
 export type ControlWidgetKind =
   | 'number' | 'bool' | 'tag' | 'glyph'                    // class A (inline port widgets)
   | 'select' | 'checkbox' | 'text' | 'textarea' | 'color'  // class B (scalar config keys)
-  | 'element';                                             // class C (model-element pickers, P4)
+  | 'element'                                              // class C (model-element pickers, P4)
+  | 'facet';                                               // class D (multi-key editors, D11)
 
-export type ControlClass = 'A' | 'B' | 'C';
+export type ControlClass = 'A' | 'B' | 'C' | 'D';
 
 export interface ControlOption {
   value: string;
@@ -65,7 +71,10 @@ export interface ControlOption {
 
 /** ONE eligible parameter of ONE node — what pick mode offers. */
 export interface ControlKeyDescriptor {
+  /** `''` for a class-D FACET row, whose address is `facet` instead. */
   configKey: string;
+  /** class D only — the multi-key editor this row binds (D11). */
+  facet?: string;
   /** the parameter's own label — the default control name and the pick-mode row text */
   label: string;
   kind: ControlWidgetKind;
@@ -78,8 +87,12 @@ export interface ControlKeyDescriptor {
 
 /** The fully-resolved WRITE ADDRESS of a control. ⚠ `defId` may be a NESTED def
  *  when the control is chained (D4) — the write does NOT necessarily land in the
- *  def that owns the control. */
-export interface ResolvedTarget { defId: string; nodeId: string; configKey: string }
+ *  def that owns the control.
+ *
+ *  A FACET target sets `facet` and leaves `configKey` empty: it addresses a
+ *  whole multi-key editor, whose keys are written by the node's OWN writer
+ *  rather than one at a time (D11). */
+export interface ResolvedTarget { defId: string; nodeId: string; configKey: string; facet?: string }
 
 export type ControlBlock =
   | 'orphan-node'      // the target node was deleted inside the macro
@@ -98,6 +111,10 @@ export interface ControlDescriptor {
   value: string;
   label: string;
   options?: ReadonlyArray<ControlOption>;
+  /** class D only, and only when NOT blocked: the multi-key editor's whole
+   *  value, parsed by the node's OWN reader (D11). `value` stays `''` — a
+   *  gradient has no one string. */
+  facet?: FacetValue;
   resolved: ResolvedTarget | null;
   block?: ControlBlock;
   reason?: string;
@@ -594,7 +611,12 @@ export function inlineWidgetFor(
 
 /** Keys whose in-node widget is a COUNT STEPPER: they change which PORTS the
  *  node has, hence what `expandMacros` emits and which internal edges survive. */
-const COUNT_STEPPER_KEYS = new Set(['extraCount', 'caseCount', 'visibleCount', 'payloadCount', 'axisCount', 'count']);
+const COUNT_STEPPER_KEYS = new Set([
+  'extraCount', 'caseCount', 'visibleCount', 'payloadCount', 'axisCount',
+  // `count` / `stopCount` are the two multi-key editors' own lengths — maintained
+  // by the FACET's writer (D11), never bindable on their own.
+  'count', 'stopCount',
+]);
 
 /** Display-only layout keys — never eligible, in any class. */
 const DISPLAY_ONLY_KEYS = new Set(['_exprW', '_exprH', '_namesExpanded', '_exprExpanded', CTL_COLLAPSED_KEY]);
@@ -611,7 +633,10 @@ const DISPLAY_ONLY_KEYS = new Set(['_exprW', '_exprH', '_namesExpanded', '_exprE
  *  - the count steppers — **structural** (they change the port set).
  *  - `_varName_*` — multi-key AND structural (they relabel ports).
  *  - the multi-key families `stop_*` / `entry_*` / `default_*` — one control ↔
- *    one value does not hold.
+ *    one value does not hold. **They stay excluded even now that the editors
+ *    they belong to ARE bindable**: a class-D FACET binds the WHOLE editor and
+ *    writes through the node's own writer (D11), so the two mechanisms never
+ *    overlap and no path can write one member of a coupled write.
  *  - the display-only layout keys.
  *
  * This is an ACTIVE FILTER for class A (whose key set is derived from
@@ -1105,10 +1130,113 @@ export function elementOptionsFor(
 }
 
 // ---------------------------------------------------------------------------
+// Class D — MULTI-KEY EDITORS as FACETS (D11)
+// ---------------------------------------------------------------------------
+
+/**
+ * ═══ WHY THE MULTI-KEY EXCLUSION DISSOLVED ═══
+ *
+ * v1 excluded gradients, palettes and RGB triples because *"one control ↔ one
+ * value does not hold"* — a control writes ONE key, an in-node gradient editor
+ * writes `stopCount` plus five keys per stop. That argument is about a control
+ * binding ONE MEMBER of a coupled write (P1.2 / D3), and it stands: `stop_0_r`
+ * is still refused, by `isExcludedControlKey`, forever.
+ *
+ * A FACET is the opposite shape. It binds the WHOLE editor and writes through
+ * the NODE'S OWN writer — `writeColorScaleStops` / `writeCategoricalPalette` /
+ * `writeColorConstant`, the very functions the in-node editors call — so the
+ * config an instance edit produces is byte-identical to the same edit made
+ * inside the macro, BY CONSTRUCTION rather than by care. Nothing can be half
+ * written, because the write is not decomposed at all.
+ *
+ * Three properties follow, and each is what makes this safe:
+ *
+ *  1. **The Option-A alpha gate is honoured for free.** Those writers own it
+ *     (an all-opaque palette writes NO `a` key), so an instance edit cannot
+ *     invent an alpha channel and turn a byte-identical model red.
+ *  2. **The member keys stay unbindable.** `isExcludedControlKey` still rejects
+ *     `stop_N_*` / `entry_N_*` / `default_*`, so the two mechanisms cannot
+ *     overlap: a facet is bound as a facet or not at all.
+ *  3. **DUAL CONSUMPTION, again.** The instance renders the SAME widget
+ *     component the node does (`GradientStopsEditor` /
+ *     `CategoricalPaletteEditor` / `ColorField`), so behaviour cannot drift.
+ *
+ * `stopCount` / `count` are NOT facets and NOT bindable — they are the count
+ * steppers the facet's own writer maintains.
+ */
+
+/** The whole value of one multi-key editor. Tagged by WIDGET so the instance can
+ *  render it and `applyControlFacet` can refuse a mismatched write. */
+export type FacetValue =
+  | { widget: 'gradient'; stops: ColorScaleStop[] }
+  | { widget: 'palette'; entries: CategoricalEntry[]; fallback: CategoricalEntry }
+  | { widget: 'color'; color: { r: number; g: number; b: number; a: number } };
+
+export type FacetWidget = FacetValue['widget'];
+
+export interface FacetSpec {
+  /** the parameter's own name — the pick-mode row text and the default control name */
+  label: string;
+  widget: FacetWidget;
+  /** the NODE'S OWN reader */
+  read: (config: NodeConfig) => FacetValue;
+  /** the NODE'S OWN writer — the whole point (see the block comment above) */
+  write: (config: NodeConfig, value: FacetValue) => NodeConfig;
+}
+
+type Cfg = Record<string, string | number | boolean>;
+
+/**
+ * `(nodeType → facet name → spec)`. An ALLOWLIST, exactly like class B: a
+ * multi-key editor is a facet only when its node exports a read/write PAIR, so
+ * a hand-rolled editor can never be promoted.
+ */
+export const FACET_SPECS: ReadonlyMap<string, ReadonlyMap<string, FacetSpec>> = new Map<string, Map<string, FacetSpec>>([
+  ['colorScale', new Map([['colorScaleStops', {
+    label: 'Gradient',
+    widget: 'gradient' as const,
+    // RAW (unsorted): the widget addresses stops by ARRAY INDEX, so a sorted
+    // read would retarget a drag past a neighbour mid-gesture.
+    read: (config: NodeConfig): FacetValue => ({ widget: 'gradient', stops: readColorScaleStopsRaw(config as Cfg) }),
+    write: (config: NodeConfig, v: FacetValue): NodeConfig =>
+      (v.widget === 'gradient' ? writeColorScaleStops(config as Cfg, v.stops) as NodeConfig : config),
+  }]])],
+  ['categoricalColor', new Map([['categoricalPalette', {
+    label: 'Palette',
+    widget: 'palette' as const,
+    read: (config: NodeConfig): FacetValue => ({
+      widget: 'palette',
+      entries: readCategoricalEntries(config as Cfg),
+      fallback: readCategoricalDefault(config as Cfg),
+    }),
+    write: (config: NodeConfig, v: FacetValue): NodeConfig =>
+      (v.widget === 'palette' ? writeCategoricalPalette(config as Cfg, v.entries, v.fallback) as NodeConfig : config),
+  }]])],
+  ['getColorConstant', new Map([['colorConstant', {
+    label: 'Colour',
+    widget: 'color' as const,
+    read: (config: NodeConfig): FacetValue => ({ widget: 'color', color: readColorConstant(config as Cfg) }),
+    write: (config: NodeConfig, v: FacetValue): NodeConfig =>
+      (v.widget === 'color' ? writeColorConstant(config as Cfg, v.color) as NodeConfig : config),
+  }]])],
+]);
+
+/** The spec for one (nodeType, facet), or `undefined` when that node declares no
+ *  such facet. */
+export function facetSpecFor(nodeType: string, facet: string): FacetSpec | undefined {
+  return FACET_SPECS.get(nodeType)?.get(facet);
+}
+
+/** Every facet a node type declares, in table order. */
+function facetsFor(nodeType: string): string[] {
+  return [...(FACET_SPECS.get(nodeType)?.keys() ?? [])];
+}
+
+// ---------------------------------------------------------------------------
 // Eligibility — what pick mode offers
 // ---------------------------------------------------------------------------
 
-const DEFAULT_CLASSES: ReadonlySet<ControlClass> = new Set<ControlClass>(['A', 'B', 'C']);
+const DEFAULT_CLASSES: ReadonlySet<ControlClass> = new Set<ControlClass>(['A', 'B', 'C', 'D']);
 
 /**
  * Every parameter of ONE node a control may bind, in render order: the inline
@@ -1176,7 +1304,25 @@ export function eligibleControlKeys(
     }
   }
 
+  if (classes.has('D')) {
+    // A facet has no `configKey` — it addresses the WHOLE editor, so the member
+    // keys stay excluded and cannot be reached from here either.
+    for (const facet of facetsFor(nodeType)) {
+      out.push({ configKey: '', facet, label: facetSpecFor(nodeType, facet)!.label, kind: 'facet', klass: 'D' });
+    }
+  }
+
   return out;
+}
+
+/**
+ * The `ControlTarget` one offered row binds to — the ONE place the row's shape
+ * decides the target's shape, so no caller has to branch on `klass`.
+ */
+export function controlTargetOf(nodeId: string, row: ControlKeyDescriptor): ControlTarget {
+  return row.facet
+    ? { kind: 'facet', nodeId, facet: row.facet }
+    : { kind: 'config', nodeId, configKey: row.configKey };
 }
 
 /** The two ways pick mode can OFFER one eligible parameter. */
@@ -1213,14 +1359,24 @@ export interface PickTargetPartition {
  * would make a genuinely bindable parameter unreachable, which is the opposite
  * of what the enabled-control doctrine asks for — so they are offered, visibly
  * subordinate to the in-place hotspots.
+ *
+ * ⚠ **FACETS ARE MEASURED IN THEIR OWN NAMESPACE** (`data-ctl-facet`, hence a
+ * second set). Folding them into `measuredKeys` would make a config key that
+ * happens to share a facet's name able to claim its hotspot — impossible today,
+ * but exactly the class of silent mis-binding the position/authority split
+ * exists to rule out.
  */
 export function partitionPickTargets(
   rows: readonly ControlKeyDescriptor[],
   measuredKeys: ReadonlySet<string>,
+  measuredFacets: ReadonlySet<string> = new Set(),
 ): PickTargetPartition {
   const hotspots: ControlKeyDescriptor[] = [];
   const fallback: ControlKeyDescriptor[] = [];
-  for (const r of rows) (measuredKeys.has(r.configKey) ? hotspots : fallback).push(r);
+  for (const r of rows) {
+    const on = r.facet ? measuredFacets.has(r.facet) : measuredKeys.has(r.configKey);
+    (on ? hotspots : fallback).push(r);
+  }
   return { hotspots, fallback };
 }
 
@@ -1258,6 +1414,9 @@ export function resolveTarget(
   if (!node) return { ok: false, block: 'orphan-node' };
 
   if (target.kind === 'config') return { ok: true, at: { defId, nodeId: node.id, configKey: target.configKey } };
+  // A FACET is a leaf exactly like a config key — it names a multi-key editor of
+  // THIS node, so the walk ends here (D11).
+  if (target.kind === 'facet') return { ok: true, at: { defId, nodeId: node.id, configKey: '', facet: target.facet } };
 
   // Chained: the node must be a macro INSTANCE, and the def it points at must
   // still declare the named control.
@@ -1318,6 +1477,21 @@ export function resolveControlDescriptor(
   const nodeType = node.data?.nodeType;
   if (!nodeType || !getNodeDef(nodeType)) return blocked('orphan-node', at);
   const config = (node.data.config ?? {}) as NodeConfig;
+
+  // --- class D: a FACET resolves to the node's own parse of its editor -------
+  if (at.facet) {
+    const spec = facetSpecFor(nodeType, at.facet);
+    // A node retyped (or a hand-edited facet name) no longer declaring it is the
+    // facet's `orphan-key` — reported, never silently dropped.
+    if (!spec) return blocked('orphan-key', at);
+    const base: ControlDescriptor = {
+      kind: 'facet', value: '', label, facet: spec.read(config), resolved: at,
+    };
+    if (openScopeIds && openScopeIds.includes(at.defId)) {
+      return { ...base, block: 'scope-open', reason: CONTROL_BLOCK_REASON['scope-open'] };
+    }
+    return base;
+  }
 
   if (isExcludedControlKey(at.configKey)) return blocked('orphan-key', at);
 
@@ -1405,13 +1579,19 @@ export function describeControlTarget(
   const nodeType = node?.data?.nodeType;
   const def = nodeType ? getNodeDef(nodeType) : undefined;
   if (!def || !node) return { text: CONTROL_BLOCK_REASON['orphan-node'], block: 'orphan-node' };
+  const nodeLabelOf = () => node.data?.label?.trim() || displayNodeLabel(def);
+  if (res.at.facet) {
+    const spec = facetSpecFor(nodeType!, res.at.facet);
+    return spec
+      ? { text: `${nodeLabelOf()} · ${spec.label}` }
+      : { text: CONTROL_BLOCK_REASON['orphan-key'], block: 'orphan-key' };
+  }
   const built = describeKey(nodeType!, (node.data.config ?? {}) as NodeConfig, model, res.at.configKey, ownerDef!, res.at.nodeId);
   const keyLabel = built
     ? (eligibleControlKeys(nodeType!, (node.data.config ?? {}) as NodeConfig, model)
       .find(k => k.configKey === res.at.configKey)?.label ?? res.at.configKey)
     : res.at.configKey;
-  const nodeLabel = node.data?.label?.trim() || displayNodeLabel(def);
-  return { text: `${nodeLabel} · ${keyLabel}`, ...(built ? {} : { block: 'orphan-key' as const }) };
+  return { text: `${nodeLabelOf()} · ${keyLabel}`, ...(built ? {} : { block: 'orphan-key' as const }) };
 }
 
 // ---------------------------------------------------------------------------
@@ -1440,16 +1620,72 @@ export function applyControlValue(
   value: string,
   openScopeIds?: readonly string[],
 ): { defId: string; nodes: GraphNode[] } | null {
+  const at = writableTarget(model, defId, control, openScopeIds);
+  // A FACET is written by `applyControlFacet`; a one-key write against one would
+  // be exactly the half-state the coupled-write rule forbids.
+  if (!at || at.facet) return null;
+  return patchNodeConfig(model, at, cfg => ({ ...cfg, [at.configKey]: value }));
+}
+
+/**
+ * Build the ONE `updateMacro` a class-D FACET edit dispatches (D11).
+ *
+ * ⚠ **THE WHOLE CONFIG IS BUILT BY THE NODE'S OWN WRITER**, never key by key
+ * here — that is what makes an instance edit byte-identical to the same edit
+ * made inside the macro, and what carries the Option-A alpha gate for free. A
+ * value whose `widget` tag does not match the spec's is REFUSED (returning
+ * `null`) rather than coerced.
+ *
+ * Same contract as `applyControlValue` otherwise: `null` for a blocked control,
+ * the OWNING def (a nested one for a chained control), and every untouched node
+ * keeps its object identity.
+ */
+export function applyControlFacet(
+  model: CAModel,
+  defId: string,
+  control: MacroControl,
+  value: FacetValue,
+  openScopeIds?: readonly string[],
+): { defId: string; nodes: GraphNode[] } | null {
+  const at = writableTarget(model, defId, control, openScopeIds);
+  if (!at || !at.facet) return null;
+  const ownerDef = findDef(model.macroDefs ?? [], at.defId);
+  const node = ownerDef?.nodes.find(n => n.id === at.nodeId);
+  const nodeType = node?.data?.nodeType;
+  const spec = nodeType ? facetSpecFor(nodeType, at.facet) : undefined;
+  if (!spec || spec.widget !== value.widget) return null;
+  return patchNodeConfig(model, at, cfg => spec.write(cfg, value));
+}
+
+/** The resolved write address of a control that is actually WRITABLE — `null`
+ *  when it is blocked (orphaned / circular / wired / scope-open). Returning null
+ *  is what makes a disabled control's handler inert STRUCTURALLY rather than by
+ *  UI convention. */
+function writableTarget(
+  model: CAModel,
+  defId: string,
+  control: MacroControl,
+  openScopeIds?: readonly string[],
+): ResolvedTarget | null {
   const desc = resolveControlDescriptor(model, defId, control, openScopeIds);
-  if (desc.block || !desc.resolved) return null;
-  const at = desc.resolved;
+  return desc.block || !desc.resolved ? null : desc.resolved;
+}
+
+/** Rebuild ONE node's config inside its owning def, preserving every other
+ *  node's object IDENTITY (so React's memoised nodes do not re-render for a
+ *  sibling's edit). */
+function patchNodeConfig(
+  model: CAModel,
+  at: ResolvedTarget,
+  next: (config: NodeConfig) => NodeConfig,
+): { defId: string; nodes: GraphNode[] } | null {
   const ownerDef = findDef(model.macroDefs ?? [], at.defId);
   if (!ownerDef) return null;
   let hit = false;
   const nodes = ownerDef.nodes.map(n => {
     if (n.id !== at.nodeId) return n;
     hit = true;
-    return { ...n, data: { ...n.data, config: { ...n.data.config, [at.configKey]: value } } };
+    return { ...n, data: { ...n.data, config: next((n.data.config ?? {}) as NodeConfig) } };
   });
   if (!hit) return null;
   return { defId: at.defId, nodes };

@@ -727,7 +727,22 @@ export type ControlTarget =
   /** an internal node's config key inside THIS def */
   | { kind: 'config'; nodeId: string; configKey: string }
   /** a nested macro INSTANCE's own control — chaining (D4) */
-  | { kind: 'control'; nodeId: string; controlId: string };
+  | { kind: 'control'; nodeId: string; controlId: string }
+  /**
+   * A MULTI-KEY EDITOR of an internal node — a gradient, a palette, an RGB(A)
+   * triple (D11). The binding names the FACET, never its member keys, and the
+   * write goes through the NODE'S OWN writer, so the config shape an instance
+   * edit produces is identical to the in-node editor's BY CONSTRUCTION.
+   *
+   * That is what dissolves the original one-control-one-key exclusion: the
+   * coupled-write rule forbids a control that writes ONE of several keys the
+   * in-node editor writes together — it says nothing about a control that
+   * drives the whole editor through the very function the node uses.
+   *
+   * `facet` is a def-local NAME from `explicitControls.FACET_SPECS` (a string
+   * here so `types.ts` stays engine-import-free, the `graphMetric` precedent).
+   */
+  | { kind: 'facet'; nodeId: string; facet: string };
 
 /** A parameter of the subgraph promoted to a named control on the CLOSED
  *  instance — a REMOTE CONTROL, never a copy.

@@ -1364,12 +1364,18 @@ export function HelpView() {
             </li>
             <li>
               <strong>What can be promoted:</strong> a node&apos;s inline port values, its
-              plain settings (operations, counts, modes, checkboxes), and its model-element
+              plain settings (operations, counts, modes, checkboxes), its model-element
               pickers (attribute / neighborhood / mapping / indicator / variable / sprite /
-              table / preset). A handful of settings are deliberately not offered &mdash;
-              the ones whose in-node editor changes <em>several</em> things at once (picking
-              a tag attribute also resets the value beside it, for instance), which a
-              single-value shortcut could not do faithfully.
+              table / preset), and its <strong>whole multi-value editors</strong> &mdash;
+              a Color Scale&apos;s <em>gradient</em>, a Categorical Color&apos;s
+              <em> palette</em>, a Color Constant&apos;s <em>colour</em>. Promote one of
+              those and the closed instance renders the <em>same editor</em> the node draws:
+              drag its stops, add and delete colours, set transparency, apply a preset.
+              A handful of settings are deliberately not offered &mdash; the ones whose
+              in-node editor changes <em>several</em> things at once (picking a tag attribute
+              also resets the value beside it, for instance), which a single-value shortcut
+              could not do faithfully. For the same reason a multi-value editor is promoted
+              <em> as a whole</em>, never one stop or one palette entry at a time.
             </li>
             <li>
               <strong>Reordering:</strong> every row in the parameter list &mdash; and every

@@ -23,7 +23,7 @@ function genId(prefix: string): string {
  *   - every node.id in the subgraph (including group/commentNode children)
  *   - every edge.id, edge.source, edge.target
  *   - MacroPort.internalNodeId references (to keep boundary ports wired)
- *   - MacroControl.target.nodeId — for BOTH target kinds (Explicit Controls,
+ *   - MacroControl.target.nodeId — for ALL THREE target kinds (Explicit Controls,
  *     impact-map F1/R2). A control that survives with an UN-remapped nodeId is
  *     worse than one that vanishes: it resolves to a DIFFERENT internal node and
  *     silently edits the wrong parameter.
@@ -38,7 +38,8 @@ function genId(prefix: string): string {
  * MacroDef.id differs.
  *
  * PRESERVED for the SAME reason: MacroControl.id, MacroControl.groupId,
- * MacroInterfaceGroup.id, and a chained target's `controlId` — the last one is a
+ * MacroInterfaceGroup.id, a facet target's `facet` name, and a chained target's
+ * `controlId` — the last one is a
  * def-local id an OUTER def names, and both defs are cloned in the same
  * operation, so preserving it is exactly what keeps the chain resolving.
  *
@@ -114,10 +115,12 @@ export function cloneMacroWithFreshIds(rawIn: MacroDef): MacroDef {
   });
 
   // `...c` carries id / name / groupId / description VERBATIM; only the target's
-  // nodeId moves. Both arms remap it: a `config` target names an internal node,
-  // and a `control` target names a nested macro INSTANCE node — both live in
-  // `raw.nodes` and therefore in `idMap`. `configKey` and `controlId` are
-  // preserved (the portId rule — see the doc block above).
+  // nodeId moves. ALL THREE arms remap it: a `config` target names an internal
+  // node, a `control` target names a nested macro INSTANCE node, and a `facet`
+  // target names an internal node whose multi-key editor it binds (D11) — all
+  // live in `raw.nodes` and therefore in `idMap`. The spread is deliberately
+  // kind-AGNOSTIC, so a fourth target kind inherits the remap; `configKey`,
+  // `controlId` and `facet` are preserved (the portId rule — see the doc block).
   const remapControl = (c: MacroControl): MacroControl => ({
     ...c,
     target: { ...c.target, nodeId: idMap.get(c.target.nodeId) ?? c.target.nodeId },
