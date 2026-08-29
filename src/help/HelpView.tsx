@@ -1344,12 +1344,12 @@ export function HelpView() {
           <ul className={styles.list}>
             <li>
               <strong>To promote one:</strong> enter the macro, and on the <strong>Macro
-              Input</strong> or <strong>Macro Output</strong> boundary node use
-              <strong> + Explicit Parameter</strong>. The button arms <em>pick mode</em>:
-              every eligible setting on every node in the macro lights up &mdash; click the
-              one you want. Rename the row, or press <strong>&#9998;</strong> to re-bind it
-              to a different setting, or <strong>x</strong> to remove it (nothing inside the
-              macro is deleted; only the shortcut goes away).
+              Input</strong> boundary node use <strong>+ Parameter</strong>. The button arms
+              <em> pick mode</em>: every eligible setting on every node in the macro lights
+              up &mdash; click the one you want. Rename the row, or press
+              <strong> &#9998;</strong> to re-bind it to a different setting, or
+              <strong> x</strong> to remove it (nothing inside the macro is deleted; only
+              the shortcut goes away).
             </li>
             <li>
               <strong>It is a remote control, not a copy.</strong> The row edits the
@@ -1368,10 +1368,28 @@ export function HelpView() {
               single-value shortcut could not do faithfully.
             </li>
             <li>
-              <strong>Groups</strong> (<strong>+ Group</strong> on the same boundary node)
-              are named sections. Assign a port or a parameter to a group and the closed
-              instance renders it under that heading &mdash; the group order is the section
-              order. Grouping a port only reorders it; no wire is touched.
+              <strong>Reordering:</strong> every row in the parameter list &mdash; and every
+              port row above it &mdash; has a <strong>&#8942;&#8942;</strong> grip. Drag to
+              reorder. The parameter order is what the closed instance shows; the port order
+              is the order of its handles, and reordering ports never touches a wire.
+            </li>
+            <li>
+              <strong>Groups are separators.</strong> <strong>+ Group</strong> drops a named
+              separator at the bottom of the parameter list; drag it up over the parameters
+              it should contain. <em>Whatever sits under a separator, up to the next one,
+              belongs to that group</em> &mdash; so you group a parameter by dragging it
+              under the separator (or drag the separator up to capture it), and un-group it
+              by dragging it above every separator. The <strong>+</strong> on a separator
+              adds a new parameter straight into that group. Removing a separator
+              (<strong>x</strong>) merges its parameters into the section above &mdash;
+              nothing is deleted, and nothing moves.
+            </li>
+            <li>
+              <strong>On the closed instance each group is a box you can collapse</strong>
+              (click its header). That is a per-instance view setting: collapse a group on
+              one copy and its linked copies stay as they were. Collapsed, the header shows
+              how many parameters are hidden, plus a red <strong>!</strong> if one of them
+              needs attention.
             </li>
             <li>
               <strong>Chaining:</strong> if your macro contains <em>another</em> macro, pick

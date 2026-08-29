@@ -109,7 +109,7 @@ export function cloneMacroWithFreshIds(rawIn: MacroDef): MacroDef {
   }));
 
   const remapPort = (p: MacroPort): MacroPort => ({
-    ...p,                       // carries `groupId` for free
+    ...p,
     internalNodeId: idMap.get(p.internalNodeId) ?? p.internalNodeId,
   });
 

@@ -414,7 +414,96 @@
   user-select: none;
 }
 
+/* --- EXPLICIT CONTROLS: the boundary editor's DRAG LIST (D5b) ------------- */
+
+/* The `⋮⋮` grip. `touch-action: none` so a pointer drag is not stolen by the
+   browser's scroll gesture; the row it sits in lives inside `.body`, which
+   already carries `nodrag`, so React Flow never sees the drag either. */
+.ifaceDrag {
+  flex: 0 0 auto;
+  width: 12px;
+  padding: 0;
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-sm);
+  color: var(--color-text-tertiary);
+  font-size: 0.7rem;
+  line-height: 1;
+  letter-spacing: -0.08em;
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+}
+
+.ifaceDrag:hover {
+  color: var(--color-emphasis);
+  background: var(--color-accent-soft);
+}
+
+.ifaceDrag:active { cursor: grabbing; }
+
+/* The row being dragged, and the line marking where it would land. */
+.ifaceRowDragging { opacity: 0.4; }
+.ifaceDropBefore { box-shadow: 0 -2px 0 0 var(--color-accent) inset; }
+.ifaceDropAfter { box-shadow: 0 2px 0 0 var(--color-accent) inset; }
+
+/* A GROUP SEPARATOR row. It reads as a rule across the list rather than as
+   another parameter, because that is exactly what it is: everything under it
+   and above the next one belongs to it. */
+.ifaceSepRow {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  margin-top: var(--space-1);
+  padding-top: 2px;
+  border-top: 1px solid var(--color-accent-soft);
+}
+
 /* --- EXPLICIT CONTROLS: the CLOSED INSTANCE's interface (P3) -------------- */
+
+/* One collapsible group box. The border is what makes "these belong together"
+   readable at a glance; collapsing hides only the BODY, so the node's height
+   changes and not one handle offset does (handles are absolutely-positioned
+   siblings of the body). */
+.ctlGroup {
+  margin-top: 2px;
+  border: 1px solid var(--color-border-muted);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+
+.ctlGroupHeader {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  width: 100%;
+  padding: 1px 3px;
+  background: var(--color-overlay-row);
+  border: none;
+  color: var(--color-text-tertiary);
+  font-size: 0.5rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  text-align: left;
+  cursor: pointer;
+  user-select: none;
+}
+
+.ctlGroupHeader:hover { color: var(--color-emphasis); }
+
+.ctlGroupChevron {
+  flex: 0 0 auto;
+  font-size: 0.45rem;
+  line-height: 1;
+}
+
+.ctlGroupBody {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 2px 3px 3px;
+}
 
 /* The whole section. Only rendered when the def HAS controls, so an ordinary
    macro instance is byte-identical to before (no header, no gap). */

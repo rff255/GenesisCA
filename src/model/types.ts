@@ -718,13 +718,6 @@ export interface MacroPort {
   category: 'value' | 'flow';
   internalNodeId: string;    // which internal node this maps to
   internalPortId: string;    // which handle on that internal node
-  /** Membership in `MacroDef.groups` (Explicit Controls, D5). Absent ⇒ ungrouped.
-   *  Display metadata ONLY — no compiler reads it. Assigning a port to a group
-   *  REORDERS `exposedInputs`/`exposedOutputs` so the handle order matches the
-   *  displayed order; that is free because every consumer matches by `portId`
-   *  (`expandMacros` L88-95, CaNode's port map, and the `input_value_<portId>`
-   *  edge handles), so no edge is ever touched. */
-  groupId?: string;
 }
 
 /** What an EXPLICIT CONTROL points AT. Never a value — the value lives in the
@@ -748,14 +741,26 @@ export interface MacroControl {
   /** author-given label shown on the instance */
   name: string;
   target: ControlTarget;
-  /** membership in `MacroDef.groups` (D5). Absent ⇒ ungrouped. */
+  /** Membership in `MacroDef.groups` (D5). Absent ⇒ ungrouped.
+   *
+   *  ⚠ This is the BOUNDARY MARKER of a POSITIONAL model, not a user-picked
+   *  field (D5b): the interface is ONE flat ordered list of controls and group
+   *  SEPARATORS, and a control belongs to whichever separator it sits under.
+   *  Every edit builder re-derives this key from the resulting positions and
+   *  leaves the `controls` array in canonical form (ungrouped head, then each
+   *  group's members CONTIGUOUSLY, in `groups` order), so "position in the
+   *  array" and "membership" can never disagree. Never write it by hand — go
+   *  through `applyInterfaceEdit`. */
   groupId?: string;
   /** optional tooltip */
   description?: string;
 }
 
 /** A named section of the macro's interface — display metadata only (D5).
- *  ORDERED: the array order IS the render order of the sections. */
+ *  ORDERED: the array order IS the order of the SEPARATORS in the flat
+ *  interface list, and therefore the order of the group boxes on the closed
+ *  instance. Reordering the array (by dragging a separator) is what moves a
+ *  whole section. */
 export interface MacroInterfaceGroup {
   /** def-local, stable — PRESERVED across clones, like `MacroControl.id`. */
   id: string;

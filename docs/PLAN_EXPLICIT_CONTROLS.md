@@ -820,3 +820,157 @@ source mutations proven caught · `test-macro-references` ·
 ### What v1 leaves behind
 
 The follow-ups register (§8) gained ONE row — **`attr_N` multi-attr slot pickers** (P4.5) — and is otherwise unchanged: per-instance overrides, `_port_bondAttr_*` / `partTag_*`, the count steppers, multi-key editors, instance-side port reordering, per-control defaults, macro self-recursion and a macro-level interface panel all stay out of v1 for the reasons recorded there. Everything §7 asked P4 to deliver — class C, chaining UX, the M1/M2/clipboard proof, the docs sweep and the final gates — shipped.
+
+---
+
+## 15. Follow-up round — INTERFACE ORDERING (D5b) — 2026-08-29
+
+*Requested after P4 shipped: **(1)** controls must be reorderable, **(2)** groups
+become **separators**, not memberships — the author adds and MOVES separators and
+parameters in one list and membership follows POSITION; on the closed instance a
+group is a **collapsible box, per instance**.*
+
+*Gates: `tsc` · `npm run build` · `check-compile-identity --compare` **31 models,
+all surfaces unchanged** · `test-explicit-controls` **317 → 357 checks** with
+**seven** source mutations proven caught · `test-macro-references` ·
+`verify-handle-remeasure --self-test`.*
+
+### 15.1 THE ORDERING AUTHORITY (the decision everything else falls out of)
+
+**The interface is ONE flat ordered list of controls and group SEPARATORS, and it
+is DERIVED — never stored as a list — from two orthogonal facts plus a boundary
+marker.** `interfaceRows(controls, groups)` emits *the ungrouped head, then each
+group's separator followed by its members*, and it is the ONE partition: the
+editor's drag list, the instance's `groupSections` and the plain `orderByGroup`
+member order are all built by calling it.
+
+| what | who owns it |
+|---|---|
+| order **within** a bucket | the `controls` array order |
+| order **of the sections** | the `groups` array order |
+| **which** bucket a control is in | `MacroControl.groupId` — the boundary marker |
+
+`groupId` is not a second copy of the order (order and membership are different
+questions); it is the compact encoding of where the boundaries fall. The
+invariant that makes *position ⇔ membership* a bijection is that **every edit
+builder leaves `controls` CANONICAL** (ungrouped head, then each group's members
+contiguously, in `groups` order) — which is exactly what `interfaceRows` emits,
+so `interfaceRows → reorderInterface` round trips as the identity (H27c).
+
+`reorderInterface` IS the positional model, in eight lines: scan the reordered
+rows, the "current group" is the last separator seen (empty before the first),
+and every member is stamped with it. So a drag writes the new position **and**
+the `groupId` that position implies, in one builder call, and the author never
+picks a group from a dropdown — **that dropdown is deleted**, which is the
+literal content of "groups become separators, not memberships" (pinned by H58).
+
+**PORTS LEFT THE GROUP MODEL ENTIRELY.** `MacroPort.groupId` is REMOVED. A
+group's only visible form is a box around CONTROL rows and a handle cannot live
+in a box, so port grouping only ever reordered handles invisibly; ports now get
+a plain drag reorder of their own — strictly better than what grouping gave
+them, and it removes the ugly alternative (separator rows duplicated in a ports
+list and a controls list on the same node).
+
+**Rejected: a stored `interfaceOrder: string[]`.** It would have been a SECOND
+representation of the port/control order that must agree with the arrays — the
+"dual representation that can drift" the brief forbids — bought nothing, and
+would have needed its own repair rule for an id it does not name.
+
+**Rejected: a separator CARRIES its members when dragged.** Under the shipped
+rule a separator moves ALONE and captures whatever now falls under it. That is
+the ONE rule the model rests on, it needs no second rule for headers, and it
+makes *drag the header up over two controls to capture them* a natural gesture —
+which "carry" makes impossible. Verified live: dragging the empty **Advanced**
+separator up over `Rand type` moved it into Advanced.
+
+**Accepted expressiveness limit, documented:** the ungrouped head is always
+FIRST, so "ungrouped controls after a group" is not expressible. Dropping a row
+below the last separator puts it in that group, which is the useful reading.
+
+### 15.2 What each edit does
+
+| edit | effect |
+|---|---|
+| `control-reorder { order }` | row ids to `reorderInterface`: new member order + membership + (if a separator moved) new `groups` order. `groups` rides the dispatch only when it actually moved (H27b) |
+| `port-reorder { side, order }` | portIds to the array, re-keyed by id. `def.edges` is never read (H17 asserts it comes back `===`) |
+| `group-add` | appended, i.e. an empty separator at the BOTTOM, ready to be dragged up |
+| `group-remove` | **MERGES its members into the section ABOVE** (ungrouped when it was first). Under positional membership that *is* "the separator was removed"; not one control changes row (H28c). Replaces P2's clear-to-ungrouped, which would have made them jump to the top |
+
+`control-group` / `port-group` are GONE.
+
+### 15.3 The closed instance
+
+Each group is a `.ctlGroup` box with a clickable header (chevron + name +, when
+collapsed, a count and a `!` if something inside needs attention — a collapsed
+box must still say so, since the node badge names a count, not a section). The
+**ungrouped head is never collapsible**: there is no separator above it, and
+hiding it could make a macro's whole interface vanish with nothing left to bring
+it back.
+
+**Collapse state is `_ctlCollapsed` on the INSTANCE NODE's config** — a
+comma-joined id list (`NodeConfig` is scalars-only), `_`-prefixed and neither
+`_port_*` nor `_varName_*`, so accessor-CSE's purity filter drops it; it is also
+in `DISPLAY_ONLY_KEYS`, so no control can bind it. Two LINKED instances share a
+`macroDefId` but never a node config, which is exactly what makes collapse
+per-instance. **F3c proves it emit-invisible**, which matters because the macro
+node's config IS hashed by the purity key.
+
+**An EMPTY group draws no box** (a chevron revealing nothing is the enabled
+control the doctrine forbids) while remaining a real, draggable separator in the
+editor, where it means something (G5b/G5c).
+
+### 15.4 A doc claim the measurement corrected
+
+P3 recorded that collapsing "changes the node's HEIGHT and moves NO handle".
+Measured: the vertical offsets are indeed unchanged (7 / 28 / 50 px across a
+collapse), but the node's **WIDTH** shrinks when the hidden rows were its widest
+content, which carries the right-edge OUTPUT handles horizontally. That is a
+SIZE change, which React Flow's own ResizeObserver re-measures;
+`updateNodeInternals` is only needed for the opposite case (offsets moving with
+no size change). The comment now says this precisely.
+
+### 15.5 The seven source mutations, and what each broke
+
+| mutation | caught by |
+|---|---|
+| the instance's sections lose the group identity (editor shows separators, instance shows none) | G1, G5b, G5d |
+| a separator delete DROPS its members instead of merging them upward | H28, H28b, H28c, H29 |
+| a PORT reorder rewrites `def.edges` | H17, H19, H22 |
+| `reorderInterface` stops re-stamping membership from the POSITION | H24, H24b, H25, H26 |
+| the collapse key escapes the display-only exclusion (becomes bindable) | G5k |
+| the group BOX becomes unconditional (collapse hides nothing) | H61 |
+| the collapse toggle stops writing the instance config | H59 |
+
+### 15.6 Real-UI evidence (dev server, real drags, **0 app console errors**)
+
+- A fixture macro with 3 ports, 4 controls and 2 groups, instanced TWICE (linked).
+- The boundary editor renders the flat list `[Min · sep Tuning · Max · Rand type
+  · sep Advanced · Math op]` with a grip on every row, separators included.
+- **Dragging `Math op` to the top** (a real pointerdown on the grip + window
+  pointermove/pointerup through the shipped `useListReorder`) moved it above
+  every separator, i.e. **ungrouped**, and the closed instance re-rendered in
+  exactly that order.
+- **Dragging the `Advanced` separator up over `Rand type`** captured it —
+  positional membership, through the separator rather than the member.
+- **Deleting the `Advanced` separator** merged `Rand type` into `Tuning` with
+  **not one control changing row** (6 rows to 5, same relative order).
+- **Port reorder**: dragging `Cap` above `Seed` swapped their handle offsets on
+  the closed instance while the handleid SET stayed identical (no re-key, so no
+  edge can dangle); the model then compiled with **no error** and the Simulator
+  stepped.
+- **Collapse**: collapsing `Tuning` on instance 1 hid its rows, shrank the node
+  210 to 158 px, left every input handle offset unchanged, and left instance 2
+  **untouched** — and it survived a Modeler / Simulator / Modeler round trip.
+- **`+` on a separator** arms pick mode into THAT group (10 pick rows appeared on
+  the canvas) and the picked parameter landed under that separator.
+- A shipped model's control-free macros (`Game of Life`) render **no interface
+  section at all** — byte-identical to before.
+
+### 15.7 Process note
+
+A source mutation was reverted with `cp` from a backup taken **before** the
+session's work, which silently destroyed the whole of `explicitControls.ts` —
+the same trap the runbook already records for `git checkout <file>`, in a
+different spelling. **Snapshot the WORKING file immediately before each
+mutation, never restore from a pre-work backup**, and prove the restore (the
+harness passing again) before starting the next one.

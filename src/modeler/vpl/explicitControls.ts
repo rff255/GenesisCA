@@ -136,32 +136,148 @@ export const CONTROL_BLOCK_NEEDS_ATTENTION: ReadonlySet<ControlBlock> = new Set<
 export const CONTROL_MAX_CHAIN_DEPTH = 20;
 
 // ---------------------------------------------------------------------------
-// Groups — the ONE interface ordering (D5 / F8)
+// Groups — the ONE interface ordering (D5 / D5b / F8)
 // ---------------------------------------------------------------------------
 
 /**
- * THE render order of a macro's interface: **ungrouped members first, in their
- * existing order, then each group in `groups` order** — so adding a group never
- * reorders what was already there.
+ * ═══ THE ORDERING AUTHORITY (D5b) ═══
  *
- * Shared by the boundary-node editor (which APPLIES it to `exposedInputs` /
- * `exposedOutputs` so the HANDLE order matches the display — F8 proves that is
- * free, since every consumer matches by `portId` and no edge is touched) and by
- * the closed instance's rendering. ONE definition, so the two cannot disagree.
+ * A macro's interface is ONE FLAT ORDERED LIST of controls and group
+ * SEPARATORS, and **membership is POSITIONAL**: a control belongs to whichever
+ * separator it sits under, up to the next one. Controls above the first
+ * separator are ungrouped.
+ *
+ * That list is not stored as a list. It is DERIVED, by `interfaceRows`, from
+ * two orthogonal facts that between them cannot drift:
+ *
+ *   • **the `controls` array ORDER** — the order within each bucket;
+ *   • **the `groups` array ORDER** — the order of the separators;
+ *   • `MacroControl.groupId` — the BOUNDARY MARKER saying which bucket a
+ *     control is in. It is not a second copy of the order (order and
+ *     membership are different questions); it is the compact encoding of where
+ *     the boundaries fall.
+ *
+ * The invariant that makes "position ⇔ membership" a bijection: **every edit
+ * builder leaves `controls` in CANONICAL form** (ungrouped head first, then
+ * each group's members contiguously, in `groups` order) — which is exactly
+ * what `interfaceRows` emits, so a round trip through
+ * `interfaceRows → reorderInterface` is the identity. The user never picks a
+ * group from a dropdown; a drag writes the new position AND the `groupId` the
+ * position implies, in one builder call.
+ *
+ * PORTS are deliberately NOT part of this list. A group's only visible form is
+ * a box around CONTROL rows on the closed instance, and a handle cannot live
+ * in a box — so `exposedInputs` / `exposedOutputs` get a plain drag reorder of
+ * their own (which is what the handle order was always for) and carry no
+ * `groupId` at all.
+ */
+
+/** One row of the flat interface list — a group SEPARATOR or a member. */
+export type InterfaceRow<T> =
+  | { rowId: string; kind: 'group'; group: MacroInterfaceGroup }
+  | { rowId: string; kind: 'item'; item: T };
+
+/** Row-id namespaces. Prefixed so a control id can never collide with a group
+ *  id in the one flat `order` array a reorder hands back. */
+export const ifaceGroupRowId = (groupId: string): string => `g:${groupId}`;
+export const ifaceItemRowId = (itemId: string): string => `i:${itemId}`;
+
+/**
+ * THE flat interface list: **the ungrouped head first, then each group's
+ * SEPARATOR followed by its members**, in `groups` order.
+ *
+ * ONE partition, consumed three ways — the boundary editor's drag list, the
+ * closed instance's sections (`groupSections`) and the plain member order
+ * (`orderByGroup`) are all built from this call, so they cannot disagree.
+ *
+ * **EVERY live group emits a separator row, including an EMPTY one** — that is
+ * what gives a freshly-added group a position to be dragged to, and a place to
+ * drop the first control into.
  *
  * A member whose `groupId` names no LIVE group counts as ungrouped, so a
- * deleted group degrades gracefully. It is a TOTAL partition — every member
- * lands in exactly one bucket — which is what guarantees the member SET is
- * identical before and after (the invariant tier H asserts).
+ * deleted group degrades gracefully (and the next reorder clears the dead key
+ * for good). It is a TOTAL partition — every member lands in exactly one
+ * bucket — which is what guarantees the member SET is identical before and
+ * after (the invariant tier H asserts).
+ */
+export function interfaceRows<T extends { groupId?: string }>(
+  items: readonly T[],
+  groups: readonly MacroInterfaceGroup[],
+  idOf?: (item: T) => string,
+): InterfaceRow<T>[] {
+  const live = new Set(groups.map(g => g.id));
+  const row = (item: T): InterfaceRow<T> =>
+    ({ rowId: ifaceItemRowId(idOf ? idOf(item) : ''), kind: 'item', item });
+  const out: InterfaceRow<T>[] = items.filter(i => !i.groupId || !live.has(i.groupId)).map(row);
+  for (const g of groups) {
+    out.push({ rowId: ifaceGroupRowId(g.id), kind: 'group', group: g });
+    for (const i of items) if (i.groupId === g.id) out.push(row(i));
+  }
+  return out;
+}
+
+/**
+ * The members of `interfaceRows`, separators dropped — i.e. THE canonical
+ * member order. Derived from the one partition rather than re-deriving it, so
+ * "what the editor drags" and "what the array holds" are the same sequence.
  */
 export function orderByGroup<T extends { groupId?: string }>(
   items: readonly T[],
   groups: readonly MacroInterfaceGroup[],
 ): T[] {
-  const live = new Set(groups.map(g => g.id));
-  const out: T[] = items.filter(i => !i.groupId || !live.has(i.groupId));
-  for (const g of groups) for (const i of items) if (i.groupId === g.id) out.push(i);
+  const out: T[] = [];
+  for (const r of interfaceRows(items, groups)) if (r.kind === 'item') out.push(r.item);
   return out;
+}
+
+/**
+ * Read a REORDERED flat list back into `{ items, groups }` — the inverse of
+ * `interfaceRows`, and the whole of the positional model in eight lines.
+ *
+ * Scanning top to bottom, the "current group" is the last separator seen (`''`
+ * before the first one), and every member is stamped with it. So:
+ *
+ *   • dragging a control under a separator JOINS that group;
+ *   • dragging it above the first separator UN-groups it;
+ *   • dragging a SEPARATOR moves the separator ALONE, and whatever now falls
+ *     under it becomes its members. **That is deliberate**: it is the one rule
+ *     the whole model rests on ("what sits under a separator belongs to it"),
+ *     it makes "drag the header up over two controls to capture them" a
+ *     natural gesture, and the alternative (a separator carries its members)
+ *     would need a second rule AND would make capturing impossible.
+ *
+ * The output is CANONICAL by construction — each group's members come out
+ * contiguously, in the order they appeared — so the array it produces round
+ * trips through `interfaceRows` unchanged.
+ *
+ * A row id `order` does not name is APPENDED in its existing relative order
+ * (defensive: an `order` computed against a stale render can only misplace,
+ * never DROP — "report, never drop" applied to the author's own interface).
+ */
+export function reorderInterface<T extends { groupId?: string }>(
+  items: readonly T[],
+  groups: readonly MacroInterfaceGroup[],
+  idOf: (item: T) => string,
+  order: readonly string[],
+): { items: T[]; groups: MacroInterfaceGroup[] } {
+  const rows = interfaceRows(items, groups, idOf);
+  const byId = new Map(rows.map(r => [r.rowId, r] as const));
+  const seq: InterfaceRow<T>[] = [];
+  const seen = new Set<string>();
+  for (const id of order) {
+    const r = byId.get(id);
+    if (r && !seen.has(id)) { seq.push(r); seen.add(id); }
+  }
+  for (const r of rows) if (!seen.has(r.rowId)) seq.push(r);
+
+  let cur = '';
+  const nextItems: T[] = [];
+  const nextGroups: MacroInterfaceGroup[] = [];
+  for (const r of seq) {
+    if (r.kind === 'group') { cur = r.group.id; nextGroups.push(r.group); }
+    else nextItems.push(withGroup(r.item, cur));
+  }
+  return { items: nextItems, groups: nextGroups };
 }
 
 /** One rendered section of a macro's interface: an optional group header plus
@@ -170,32 +286,34 @@ export function orderByGroup<T extends { groupId?: string }>(
 export interface InterfaceSection<T> { group?: MacroInterfaceGroup; items: T[] }
 
 /**
- * `orderByGroup`, sliced into the SECTIONS the closed instance draws.
+ * `interfaceRows`, sliced into the SECTIONS the closed instance draws — each
+ * one a collapsible group box, the leading one the always-visible ungrouped
+ * head.
  *
- * Deliberately built BY CALLING `orderByGroup` and partitioning its output into
- * consecutive runs, rather than by re-deriving the order: the instance's
- * rendering and the editor's array reordering must be the SAME order, and the
- * only way to guarantee that is for both to come from the one call. (The
- * partition is exact because `orderByGroup` emits the ungrouped head first and
- * then each group CONTIGUOUSLY, so a run boundary IS a section boundary.)
+ * Deliberately built BY CALLING `interfaceRows` and cutting at its separator
+ * rows, rather than by re-deriving the order: the instance's rendering and the
+ * editor's drag list must be the SAME sequence, and the only way to guarantee
+ * that is for both to come from the one call.
  *
- * A member naming a DEAD group counts as ungrouped in both, for the same
- * reason — `orderByGroup` already placed it in the head.
+ * **An EMPTY group emits NO section.** A box with a chevron that reveals
+ * nothing is precisely the enabled control the doctrine forbids; the empty
+ * group is still a real, draggable separator in the EDITOR, which is where it
+ * means something.
+ *
+ * A member naming a DEAD group counts as ungrouped, for the same reason as in
+ * `interfaceRows` — it was already placed in the head.
  */
 export function groupSections<T extends { groupId?: string }>(
   items: readonly T[],
   groups: readonly MacroInterfaceGroup[],
 ): InterfaceSection<T>[] {
-  const live = new Map(groups.map(g => [g.id, g] as const));
   const out: InterfaceSection<T>[] = [];
-  let cur: InterfaceSection<T> | null = null;
-  for (const item of orderByGroup(items, groups)) {
-    const g = item.groupId ? live.get(item.groupId) : undefined;
-    if (!cur || cur.group !== g) {
-      cur = g ? { group: g, items: [] } : { items: [] };
-      out.push(cur);
-    }
-    cur.items.push(item);
+  // Held back until it has its FIRST member, which is what drops an empty group.
+  let pending: InterfaceSection<T> = { items: [] };
+  for (const r of interfaceRows(items, groups)) {
+    if (r.kind === 'group') { pending = { group: r.group, items: [] }; continue; }
+    if (pending.items.length === 0) out.push(pending);
+    pending.items.push(r.item);
   }
   return out;
 }
@@ -228,8 +346,12 @@ export type InterfaceEdit =
   | { kind: 'control-rename'; controlId: string; name: string }
   | { kind: 'control-remove'; controlId: string }
   | { kind: 'control-rebind'; controlId: string; target: ControlTarget }
-  | { kind: 'control-group'; controlId: string; groupId: string }
-  | { kind: 'port-group'; side: 'in' | 'out'; portId: string; groupId: string }
+  /** The whole flat interface list, reordered — `order` is ROW ids
+   *  (`ifaceGroupRowId` / `ifaceItemRowId`). Membership AND group order both
+   *  fall out of the new positions (D5b). */
+  | { kind: 'control-reorder'; order: string[] }
+  /** One side's handle order — plain `portId`s, no groups involved. */
+  | { kind: 'port-reorder'; side: 'in' | 'out'; order: string[] }
   | { kind: 'group-add'; group: MacroInterfaceGroup }
   | { kind: 'group-rename'; groupId: string; name: string }
   | { kind: 'group-remove'; groupId: string };
@@ -244,12 +366,16 @@ export type InterfaceEdit =
  *  1. **RE-BINDING PRESERVES `id` / `name` / `groupId`.** Only `target` moves. A
  *     fresh id would strand every CHAINED target naming this control — the same
  *     reason `MacroPort.portId` is preserved across clones.
- *  2. **Grouping a member REORDERS its array** so the closed instance's handle
- *     order matches the displayed order (D5 / F8). The portId SET is unchanged
- *     and **no edge is touched** — every consumer matches by `portId`.
- *  3. **Deleting a group CLEARS its members' `groupId`; it deletes NOTHING.**
- *     Destroying the author's ports/controls on a mis-click is exactly what
- *     "report, never drop" forbids.
+ *  2. **A REORDER writes position AND membership together** (D5b), leaving the
+ *     `controls` array canonical, so the flat list the author sees is exactly
+ *     the array that is stored. A PORT reorder moves the handles and **touches
+ *     NO edge** — every consumer matches by `portId` (F8), so the portId SET is
+ *     unchanged and `def.edges` comes back `===`.
+ *  3. **Deleting a group MERGES its members into the PREVIOUS section; it
+ *     deletes NOTHING.** Under positional membership that is exactly "the
+ *     separator was removed, so what was under it now falls under the one
+ *     above" — the members do not move a single row. Destroying the author's
+ *     controls on a mis-click is what "report, never drop" forbids.
  *
  * An array that would end up EMPTY comes back as `undefined`, so removing the
  * last control (or group) restores the pristine record shape — `stringifyCompact`
@@ -271,35 +397,93 @@ export function applyInterfaceEdit(def: MacroDef, edit: InterfaceEdit): Partial<
     case 'control-rebind':
       // Rule 1 — `target` only.
       return packC(controls.map(c => (c.id === edit.controlId ? { ...c, target: edit.target } : c)));
-    case 'control-group':
-      return packC(orderByGroup(
-        controls.map(c => (c.id === edit.controlId ? withGroup(c, edit.groupId) : c)),
-        groups,
-      ));
-    case 'port-group': {
-      // Rule 2 — reorder, never re-key.
+    case 'control-reorder': {
+      // Rule 2 — ONE builder writes the new order, the new membership and (if a
+      // separator moved) the new section order, all read off the flat list.
+      const next = reorderInterface(controls, groups, c => c.id, edit.order);
+      const groupOrderMoved = next.groups.length !== groups.length
+        || next.groups.some((g, i) => g.id !== groups[i]?.id);
+      return {
+        ...packC(next.items),
+        ...(groupOrderMoved ? { groups: next.groups.length ? next.groups : undefined } : {}),
+      };
+    }
+    case 'port-reorder': {
+      // Rule 2, the handle half. Re-keyed by `portId`, so `def.edges` is never
+      // read, let alone written (F8).
       const field = edit.side === 'in' ? 'exposedInputs' : 'exposedOutputs';
-      const next = def[field].map(p => (p.portId === edit.portId ? withGroup(p, edit.groupId) : p));
-      return { [field]: orderByGroup(next, groups) };
+      const cur = def[field];
+      const byId = new Map(cur.map(p => [p.portId, p] as const));
+      const seen = new Set<string>();
+      const next = edit.order.flatMap(pid => {
+        const p = byId.get(pid);
+        if (!p || seen.has(pid)) return [];
+        seen.add(pid);
+        return [p];
+      });
+      // A port `order` does not name keeps its place at the end — misplace,
+      // never drop.
+      for (const p of cur) if (!seen.has(p.portId)) next.push(p);
+      return { [field]: next };
     }
     case 'group-add':
+      // Appended ⇒ a new separator at the BOTTOM of the flat list, empty, ready
+      // to be dragged up over the controls it should capture.
       return { groups: [...groups, edit.group] };
     case 'group-rename':
       return { groups: groups.map(g => (g.id === edit.groupId ? { ...g, name: edit.name } : g)) };
     case 'group-remove': {
-      // Rule 3 — clear membership everywhere, delete nothing, and re-order both
-      // port arrays against the SURVIVING groups so the handles keep matching.
+      // Rule 3 — the separator goes; its members fall under the one ABOVE it
+      // (or become ungrouped when it was the first). Canonical order is
+      // preserved exactly, so not one control changes row.
+      const idx = groups.findIndex(g => g.id === edit.groupId);
+      if (idx < 0) return {};
+      const into = idx > 0 ? groups[idx - 1]!.id : '';
       const nextGroups = groups.filter(g => g.id !== edit.groupId);
-      const strip = <T extends { groupId?: string }>(x: T): T => (x.groupId === edit.groupId ? withGroup(x, '') : x);
-      const nextControls = controls.map(strip);
+      const merged = controls.map(c => (c.groupId === edit.groupId ? withGroup(c, into) : c));
       return {
         groups: nextGroups.length ? nextGroups : undefined,
-        exposedInputs: orderByGroup(def.exposedInputs.map(strip), nextGroups),
-        exposedOutputs: orderByGroup(def.exposedOutputs.map(strip), nextGroups),
-        ...(nextControls.length ? { controls: orderByGroup(nextControls, nextGroups) } : { controls: undefined }),
+        ...(merged.length ? { controls: orderByGroup(merged, nextGroups) } : { controls: undefined }),
       };
     }
   }
+}
+
+// ---------------------------------------------------------------------------
+// The closed instance's per-INSTANCE collapse state
+// ---------------------------------------------------------------------------
+
+/**
+ * Which group boxes this ONE instance has collapsed.
+ *
+ * On the instance NODE's config, not on the def — two linked instances share a
+ * `macroDefId` but never a node config, so each collapses independently, which
+ * is what "per instance" means.
+ *
+ * COMPILER-INVISIBLE by the documented convention (`_namesExpanded` / `_exprW`):
+ * `_`-prefixed and neither `_port_*` nor `_varName_*`, so accessor-CSE's purity
+ * filter drops it; `expandMacros` reads only `macroDefId`, so no emitter can
+ * see it either. It is additionally in `DISPLAY_ONLY_KEYS`, so a control can
+ * never bind it.
+ *
+ * Stored as a comma-joined id list because `NodeConfig` is scalars-only.
+ */
+export const CTL_COLLAPSED_KEY = '_ctlCollapsed';
+
+export function collapsedGroupIds(config: NodeConfig): Set<string> {
+  const raw = config[CTL_COLLAPSED_KEY];
+  if (typeof raw !== 'string' || !raw) return new Set();
+  return new Set(raw.split(',').filter(Boolean));
+}
+
+/** The next `_ctlCollapsed` value with `groupId` flipped. `''` when nothing is
+ *  collapsed, so an all-expanded instance stores the pristine empty string
+ *  rather than accumulating a key that means nothing. */
+export function toggleCollapsedGroup(config: NodeConfig, groupId: string): string {
+  const set = collapsedGroupIds(config);
+  if (set.has(groupId)) set.delete(groupId);
+  else set.add(groupId);
+  return [...set].join(',');
 }
 
 // ---------------------------------------------------------------------------
@@ -413,7 +597,7 @@ export function inlineWidgetFor(
 const COUNT_STEPPER_KEYS = new Set(['extraCount', 'caseCount', 'visibleCount', 'payloadCount', 'axisCount', 'count']);
 
 /** Display-only layout keys — never eligible, in any class. */
-const DISPLAY_ONLY_KEYS = new Set(['_exprW', '_exprH', '_namesExpanded', '_exprExpanded']);
+const DISPLAY_ONLY_KEYS = new Set(['_exprW', '_exprH', '_namesExpanded', '_exprExpanded', CTL_COLLAPSED_KEY]);
 
 /**
  * TRUE for every key shape a control may NOT bind:
