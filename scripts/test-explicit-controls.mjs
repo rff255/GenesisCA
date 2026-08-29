@@ -88,6 +88,10 @@ export { getEffectivePorts } from '../src/modeler/vpl/effectivePorts.ts';
 export { getActiveGraphKind, setActiveGraphKind } from '../src/modeler/vpl/graphState.ts';
 export { writeGraphClipboard, readGraphClipboard } from '../src/modeler/vpl/graphClipboard.ts';
 export { elementSpecFor } from '../src/modeler/vpl/explicitControls.ts';
+export { applyControlFacet, controlTargetOf, facetSpecFor, FACET_SPECS } from '../src/modeler/vpl/explicitControls.ts';
+export { readColorScaleStopsRaw, writeColorScaleStops, colorScaleHasAlpha } from '../src/modeler/vpl/nodes/ColorScaleNode.ts';
+export { readCategoricalEntries, readCategoricalDefault, writeCategoricalPalette, categoricalHasAlpha } from '../src/modeler/vpl/nodes/CategoricalColorNode.ts';
+export { readColorConstant, writeColorConstant, colorConstantHasAlpha } from '../src/modeler/vpl/nodes/GetColorConstantNode.ts';
 export { collectMacroExportDefs, collectMacroReferences, buildReferenceBundle, defaultSelection } from '../src/model/macroReferences.ts';
 export { planImport, applyImportPlan } from '../src/model/macroImportPlan.ts';
 export { collectMacroDefBundle, remapNestedMacroRefs } from '../src/modeler/vpl/graphClipboard.ts';
@@ -1717,8 +1721,10 @@ console.log('\n--- Tier K: the CHAINING pick rows (P4 / D4) ------------------')
     && /res = resolveTarget\(defs, controlPick\.defId, \{ kind: 'control', nodeId: id, controlId: c\.id \}, seen\)/.test(cn));
   check('K13 …a circular row is rendered DISABLED and cannot bind',
     /disabled=\{r\.cycle\}/.test(cn) && /if \(!r\.cycle\) bindPickTarget\(\{ kind: 'control', nodeId: id, controlId: r\.id \}/.test(cn));
+  // The key/facet rows go through `controlTargetOf`, which is the ONE place a
+  // row's shape decides the target's shape — nothing in CaNode branches on class.
   check('K14 …and both row kinds bind through the ONE dispatch path',
-    /const bindPick = useCallback\(\s*\(configKey: string, label: string\) => bindPickTarget\(\{ kind: 'config', nodeId: id, configKey \}, label\)/.test(cn));
+    /const bindPick = useCallback\(\s*\(row: ControlKeyDescriptor\) => bindPickTarget\(controlTargetOf\(id, row\), row\.label\)/.test(cn));
 }
 
 // ===========================================================================
@@ -1863,13 +1869,19 @@ console.log('\n--- Tier L: pick-mode HOTSPOTS — the eligibility intersection -
     });
     const types = new Set([...M.SCALAR_CONFIG_KEYS.keys()]);
     for (const t of ['getCellAttribute', 'setCellLooks', 'getVariable', 'setAgentSprite', 'lookupInteraction']) types.add(t);
+    // …and every node that declares a class-D FACET, so an unmarked multi-key
+    // editor fails here rather than shipping a parameter pick mode cannot offer.
+    for (const t of M.FACET_SPECS.keys()) types.add(t);
     const want = new Set();
+    const wantFacets = new Set();
     for (const t of types) {
       for (const r of M.eligibleControlKeys(t, {}, model)) {
         // class A is marked ONCE, generically, in the input-port loop.
-        if (r.klass !== 'A') want.add(r.configKey);
+        if (r.klass === 'D') wantFacets.add(r.facet);
+        else if (r.klass !== 'A') want.add(r.configKey);
       }
     }
+    const missingFacets = [...wantFacets].filter(f => !cn.includes(`data-ctl-facet="${f}"`));
     // A handful of keys are marked through a SHARED render helper rather than a
     // literal, so the attribute never appears as a string. Named here (with the
     // helper pinned below) so the coverage check stays honest instead of being
@@ -1885,6 +1897,8 @@ console.log('\n--- Tier L: pick-mode HOTSPOTS — the eligibility intersection -
     check('L10b …and the shared-helper markers really are marked, once, by that helper',
       /const cbx = \(key: string,[\s\S]{0,400}?data-ctl-key=\{key\}/.test(cn)
       && [...DYNAMIC_MARKERS.keys()].every(k => cn.includes(`cbx('${k}'`)));
+    check(`L10c every class-D FACET has a marked editor block (${wantFacets.size} facets)`,
+      wantFacets.size >= 3 && missingFacets.length === 0, missingFacets.join(' '));
     check('L11 …and the coverage set is not vacuous', want.size > 40, String(want.size));
     check('L12 class A is marked ONCE, from the port loop', cn.includes('data-ctl-key={configKey}'));
     check('L13 …and the chaining rows carry their own marker',
@@ -1897,16 +1911,16 @@ console.log('\n--- Tier L: pick-mode HOTSPOTS — the eligibility intersection -
     const cn = readFileSync(join(ROOT, 'src', 'modeler', 'vpl', 'CaNode.tsx'), 'utf8');
     const css = readFileSync(join(ROOT, 'src', 'modeler', 'vpl', 'CaNode.module.css'), 'utf8');
     check('L14 the hotspots come from the SHARED intersection, not a local filter',
-      /partitionPickTargets\(pickRows, measuredPickKeys\)/.test(cn));
-    check('L15 the measure reads BOTH marker kinds off the node root',
-      cn.includes("root.querySelectorAll<HTMLElement>('[data-ctl-key],[data-ctl-chain]')"));
+      /partitionPickTargets\(pickRows, measuredPickKeys, measuredPickFacets\)/.test(cn));
+    check('L15 the measure reads ALL THREE marker kinds off the node root',
+      cn.includes("root.querySelectorAll<HTMLElement>('[data-ctl-key],[data-ctl-facet],[data-ctl-chain]')"));
     // React Flow scales the viewport; deriving the zoom from the node itself
     // keeps every node off the store's pan/zoom re-render path.
     check('L16 …and derives the zoom from the NODE, never from the store',
       cn.includes('const zoom = rootRect.width / root.offsetWidth;')
       && !/useStore\([^)]*transform/.test(cn));
     check('L17 the measure→setState loop is broken by an identity-preserving compare',
-      /samePickRects\(prev\.keys, keys\) && samePickRects\(prev\.chains, chains\) \? prev :/.test(cn));
+      /samePickRects\(prev\.keys, keys\) && samePickRects\(prev\.facets, facets\) && samePickRects\(prev\.chains, chains\)\s*\r?\n?\s*\? prev :/.test(cn));
     check('L18 the ResizeObserver is installed only while ARMED',
       /if \(!pickArmed \|\| !root \|\| typeof ResizeObserver === 'undefined'\) return;/.test(cn));
     // The class-A widget is inert because the hotspot takes the pointer — the
@@ -1926,6 +1940,306 @@ console.log('\n--- Tier L: pick-mode HOTSPOTS — the eligibility intersection -
       /\.pickHotspot \{[\s\S]*?opacity: 0\.\d+;/.test(css));
     check('L25 a chained row that would CYCLE is offered but refused',
       cn.includes('styles.pickHotspotBlocked') && /disabled=\{r\.cycle\}/.test(cn));
+  }
+}
+
+// ===========================================================================
+console.log('\n--- Tier M: class D — MULTI-KEY EDITORS as FACETS (D11) --------');
+// ===========================================================================
+// A facet binds a WHOLE multi-key editor and writes through the NODE'S OWN
+// writer, which is what dissolves v1's one-control-one-value exclusion. The
+// property that makes it safe is EQUIVALENCE: the config an instance edit
+// produces must be byte-identical to the same edit made inside the macro — so
+// the load-bearing checks here compare the two configs, not just "it changed".
+{
+  const gradCfg = () => ({
+    method: 'linear', stopCount: 2,
+    stop_0_position: '0', stop_0_r: '0', stop_0_g: '0', stop_0_b: '0',
+    stop_1_position: '1', stop_1_r: '255', stop_1_g: '255', stop_1_b: '255',
+  });
+  const palCfg = () => ({ count: 2, entry_0_r: '10', entry_0_g: '20', entry_0_b: '30', entry_1_r: '40', entry_1_g: '50', entry_1_b: '60', default_r: '1', default_g: '2', default_b: '3' });
+  const constCfg = () => ({ r: '10', g: '20', b: '30' });
+
+  /** A def whose three internal nodes each carry one multi-key editor. */
+  const buildFacetDef = () => ({
+    id: 'def_f', name: 'Facets',
+    nodes: [
+      node('mi', 'macroInput', { macroDefId: 'def_f' }),
+      node('cs', 'colorScale', gradCfg()),
+      node('cc', 'categoricalColor', palCfg()),
+      node('gk', 'getColorConstant', constCfg()),
+      node('mo', 'macroOutput', { macroDefId: 'def_f' }),
+    ],
+    edges: [],
+    exposedInputs: [], exposedOutputs: [],
+  });
+  const facetModel = (controls) => buildModel({
+    macroDefs: [{ ...buildFacetDef(), ...(controls ? { controls } : {}) }],
+  });
+  const fTarget = (nodeId, facet) => ({ kind: 'facet', nodeId, facet });
+  const cfgOf = (model, defId, nodeId) => nodeOf(model, defId, nodeId).data.config;
+
+  // --- eligibility ---------------------------------------------------------
+  {
+    const m = facetModel();
+    const gRows = M.eligibleControlKeys('colorScale', gradCfg(), m);
+    const gFacets = gRows.filter(r => r.klass === 'D');
+    check('M1 Color Scale offers its GRADIENT as one facet',
+      gFacets.length === 1 && gFacets[0].facet === 'colorScaleStops' && gFacets[0].kind === 'facet',
+      JSON.stringify(gFacets));
+    check('M1b …with an empty configKey — a facet has no single key to name',
+      gFacets[0].configKey === '');
+    check('M2 …and its `method` stays a SEPARATE class-B parameter',
+      gRows.some(r => r.klass === 'B' && r.configKey === 'method'));
+    // THE COUPLED-WRITE RULE STILL HOLDS: the members are never bindable.
+    const memberKeys = ['stop_0_r', 'stop_1_position', 'stopCount', 'entry_0_g', 'default_b', 'count'];
+    check('M3 the facet\'s MEMBER keys are still refused, one by one',
+      memberKeys.every(k => M.isExcludedControlKey(k))
+      && !gRows.some(r => memberKeys.includes(r.configKey)), memberKeys.filter(k => !M.isExcludedControlKey(k)).join(' '));
+    check('M3b …and a hand-edited control naming ONE member reports `orphan-key`',
+      memberKeys.every(k => M.resolveControlDescriptor(
+        facetModel([ctl('c_x', 'X', cfgTarget('cs', k))]), 'def_f', ctl('c_x', 'X', cfgTarget('cs', k)),
+      ).block === 'orphan-key'));
+    const pRows = M.eligibleControlKeys('categoricalColor', palCfg(), m).filter(r => r.klass === 'D');
+    check('M4 Categorical Color offers its PALETTE as one facet',
+      pRows.length === 1 && pRows[0].facet === 'categoricalPalette');
+    const kRows = M.eligibleControlKeys('getColorConstant', constCfg(), m).filter(r => r.klass === 'D');
+    check('M5 Color Constant offers its RGB(A) as one facet',
+      kRows.length === 1 && kRows[0].facet === 'colorConstant');
+    check('M6 a node with NO multi-key editor offers no facet at all',
+      M.eligibleControlKeys('statement', {}, m).every(r => r.klass !== 'D'));
+    check('M7 `controlTargetOf` reads the row\'s shape — facet vs config',
+      eq(M.controlTargetOf('cs', gFacets[0]), { kind: 'facet', nodeId: 'cs', facet: 'colorScaleStops' })
+      && eq(M.controlTargetOf('cs', gRows.find(r => r.configKey === 'method')),
+        { kind: 'config', nodeId: 'cs', configKey: 'method' }));
+  }
+
+  // --- the descriptor ------------------------------------------------------
+  {
+    const controls = [
+      ctl('c_g', 'Ramp', fTarget('cs', 'colorScaleStops')),
+      ctl('c_p', 'Palette', fTarget('cc', 'categoricalPalette')),
+      ctl('c_k', 'Tint', fTarget('gk', 'colorConstant')),
+    ];
+    const m = facetModel(controls);
+    const dg = M.resolveControlDescriptor(m, 'def_f', controls[0]);
+    check('M8 a gradient facet resolves to the node\'s OWN raw (unsorted) parse',
+      dg.kind === 'facet' && !dg.block && dg.facet.widget === 'gradient'
+      && eq(dg.facet.stops, M.readColorScaleStopsRaw(gradCfg())), JSON.stringify(dg));
+    check('M8b …and carries no scalar `value` (a gradient has no one string)', dg.value === '');
+    const dp = M.resolveControlDescriptor(m, 'def_f', controls[1]);
+    check('M9 a palette facet resolves to entries + the out-of-range default',
+      dp.facet.widget === 'palette' && dp.facet.entries.length === 2
+      && eq(dp.facet.fallback, { r: 1, g: 2, b: 3, a: undefined }), JSON.stringify(dp.facet));
+    const dk = M.resolveControlDescriptor(m, 'def_f', controls[2]);
+    check('M10 a colour facet resolves to a COMPLETE rgba (absent a ⇒ opaque)',
+      dk.facet.widget === 'color' && eq(dk.facet.color, { r: 10, g: 20, b: 30, a: 255 }));
+    check('M11 the interface editor names the facet by its own label',
+      M.describeControlTarget(m, 'def_f', controls[0]).text.endsWith('· Gradient')
+      && M.describeControlTarget(m, 'def_f', controls[1]).text.endsWith('· Palette'));
+
+    // D8 — report, never drop.
+    const gone = { ...m, macroDefs: [{ ...m.macroDefs[0], nodes: m.macroDefs[0].nodes.filter(n => n.id !== 'cs') }] };
+    check('M12 a deleted target node reports `orphan-node`',
+      M.resolveControlDescriptor(gone, 'def_f', controls[0]).block === 'orphan-node');
+    const retyped = {
+      ...m,
+      macroDefs: [{ ...m.macroDefs[0], nodes: m.macroDefs[0].nodes.map(n => (n.id === 'cs' ? node('cs', 'statement', {}) : n)) }],
+    };
+    check('M13 …and a node RETYPED out of its facet reports `orphan-key`',
+      M.resolveControlDescriptor(retyped, 'def_f', controls[0]).block === 'orphan-key');
+    check('M14 a hand-edited unknown facet name reports `orphan-key`, never throws',
+      M.resolveControlDescriptor(m, 'def_f', ctl('c_x', 'X', fTarget('cs', 'nonsense'))).block === 'orphan-key');
+    // R7 — the def is open for editing.
+    check('M15 an OPEN def reports `scope-open` and is not writable',
+      M.resolveControlDescriptor(m, 'def_f', controls[0], ['def_f']).block === 'scope-open'
+      && M.applyControlFacet(m, 'def_f', controls[0], { widget: 'gradient', stops: [] }, ['def_f']) === null);
+  }
+
+  // --- ⚠ THE EQUIVALENCE: an instance write == the same in-node write -------
+  {
+    const controls = [
+      ctl('c_g', 'Ramp', fTarget('cs', 'colorScaleStops')),
+      ctl('c_p', 'Palette', fTarget('cc', 'categoricalPalette')),
+      ctl('c_k', 'Tint', fTarget('gk', 'colorConstant')),
+    ];
+    const m = facetModel(controls);
+
+    const nextStops = [
+      { p: 0, r: 255, g: 0, b: 0 },
+      { p: 0.5, r: 0, g: 255, b: 0 },
+      { p: 1, r: 0, g: 0, b: 255 },
+    ];
+    const patchG = M.applyControlFacet(m, 'def_f', controls[0], { widget: 'gradient', stops: nextStops });
+    const instG = patchG.nodes.find(n => n.id === 'cs').data.config;
+    // THE in-node edit, verbatim: the node's own writer over the same config.
+    const inNodeG = M.writeColorScaleStops(gradCfg(), nextStops);
+    check('M16 a gradient instance write is BYTE-IDENTICAL to the in-node write',
+      eq(instG, inNodeG), JSON.stringify(instG) + ' vs ' + JSON.stringify(inNodeG));
+    check('M16b …so it grows the stop count and keeps every unrelated key',
+      instG.stopCount === 3 && instG.stop_2_b === '255' && instG.method === 'linear');
+    check('M17 …and every UNTOUCHED node keeps its object identity',
+      patchG.defId === 'def_f'
+      && patchG.nodes.filter(n => n.id !== 'cs').every((n, i) => n === m.macroDefs[0].nodes.filter(x => x.id !== 'cs')[i]));
+
+    const nextEntries = [{ r: 9, g: 9, b: 9 }];
+    const nextDefault = { r: 7, g: 7, b: 7 };
+    const patchP = M.applyControlFacet(m, 'def_f', controls[1], { widget: 'palette', entries: nextEntries, fallback: nextDefault });
+    const instP = patchP.nodes.find(n => n.id === 'cc').data.config;
+    check('M18 a palette instance write is BYTE-IDENTICAL to the in-node write',
+      eq(instP, M.writeCategoricalPalette(palCfg(), nextEntries, nextDefault)));
+    check('M18b …and the removed entry\'s keys are GONE, not left stale',
+      instP.count === 1 && instP.entry_1_r === undefined);
+
+    const patchK = M.applyControlFacet(m, 'def_f', controls[2], { widget: 'color', color: { r: 1, g: 2, b: 3, a: 255 } });
+    const instK = patchK.nodes.find(n => n.id === 'gk').data.config;
+    check('M19 a colour instance write is BYTE-IDENTICAL to the in-node write',
+      eq(instK, M.writeColorConstant(constCfg(), { r: 1, g: 2, b: 3, a: 255 })));
+
+    // ── THE OPTION-A ALPHA GATE, which the facet inherits from the writer ──
+    const withAlpha = M.applyControlFacet(m, 'def_f', controls[0], {
+      widget: 'gradient',
+      stops: [{ p: 0, r: 0, g: 0, b: 0, a: 128 }, { p: 1, r: 255, g: 255, b: 255 }],
+    }).nodes.find(n => n.id === 'cs').data.config;
+    check('M20 a NON-opaque instance edit writes every stop\'s `a`',
+      withAlpha.stop_0_a === '128' && withAlpha.stop_1_a === '255'
+      && M.colorScaleHasAlpha(withAlpha) === true);
+    const backOpaque = M.applyControlFacet({ ...m, macroDefs: [{ ...m.macroDefs[0], nodes: m.macroDefs[0].nodes.map(n => (n.id === 'cs' ? { ...n, data: { ...n.data, config: withAlpha } } : n)) }] },
+      'def_f', controls[0], { widget: 'gradient', stops: [{ p: 0, r: 0, g: 0, b: 0 }, { p: 1, r: 255, g: 255, b: 255 }] })
+      .nodes.find(n => n.id === 'cs').data.config;
+    check('M21 …and dragging alpha back to full leaves NO `a` key at all',
+      backOpaque.stop_0_a === undefined && backOpaque.stop_1_a === undefined
+      && M.colorScaleHasAlpha(backOpaque) === false);
+    const kAlphaBack = M.applyControlFacet(
+      { ...m, macroDefs: [{ ...m.macroDefs[0], nodes: m.macroDefs[0].nodes.map(n => (n.id === 'gk' ? { ...n, data: { ...n.data, config: { ...constCfg(), a: '40' } } } : n)) }] },
+      'def_f', controls[2], { widget: 'color', color: { r: 10, g: 20, b: 30, a: 255 } },
+    ).nodes.find(n => n.id === 'gk').data.config;
+    check('M22 …the colour facet DELETES its `a` key the same way',
+      kAlphaBack.a === undefined && M.colorConstantHasAlpha(kAlphaBack) === false);
+
+    // A mismatched widget is REFUSED rather than coerced.
+    check('M23 a value whose widget does not match the facet is refused',
+      M.applyControlFacet(m, 'def_f', controls[0], { widget: 'palette', entries: [], fallback: { r: 0, g: 0, b: 0 } }) === null);
+    check('M24 a SCALAR write against a facet control is refused (never half a state)',
+      M.applyControlValue(m, 'def_f', controls[0], 'nonsense') === null
+      && eq(cfgOf(m, 'def_f', 'cs'), gradCfg()));
+    check('M25 …and a FACET write against a scalar control is refused too',
+      M.applyControlFacet(facetModel([ctl('c_m', 'Curve', cfgTarget('cs', 'method'))]), 'def_f',
+        ctl('c_m', 'Curve', cfgTarget('cs', 'method')), { widget: 'gradient', stops: [] }) === null);
+  }
+
+  // --- the clone (R2 — the highest-risk edit) ------------------------------
+  {
+    const controls = [
+      ctl('c_g', 'Ramp', fTarget('cs', 'colorScaleStops')),
+      ctl('c_k', 'Tint', fTarget('gk', 'colorConstant')),
+    ];
+    const src = { ...buildFacetDef(), controls };
+    const clone = M.cloneMacroWithFreshIds(src);
+    const csClone = clone.nodes.find(n => n.data.nodeType === 'colorScale');
+    const cg = clone.controls.find(c => c.id === 'c_g');
+    check('M26 the clone carries the facet controls', clone.controls.length === 2);
+    check('M27 …REMAPS `target.nodeId` (an un-remapped one edits the WRONG node)',
+      cg.target.nodeId === csClone.id && cg.target.nodeId !== 'cs');
+    check('M28 …and PRESERVES the facet NAME and the control id',
+      cg.target.kind === 'facet' && cg.target.facet === 'colorScaleStops' && cg.id === 'c_g');
+    const cloneModel = buildModel({ macroDefs: [clone] });
+    const dc = M.resolveControlDescriptor(cloneModel, clone.id, cg);
+    check('M29 …so the cloned control still resolves, to ITS OWN node',
+      !dc.block && dc.resolved.nodeId === csClone.id && dc.facet.widget === 'gradient');
+    check('M30 a facet-free def still clones with NO `controls` key',
+      M.cloneMacroWithFreshIds(buildFacetDef()).controls === undefined);
+  }
+
+  // --- chaining onto a facet (D4 × D11) ------------------------------------
+  {
+    const inner = { ...buildFacetDef(), controls: [ctl('ic', 'Inner ramp', fTarget('cs', 'colorScaleStops'))] };
+    const outer = {
+      id: 'def_o', name: 'Outer',
+      nodes: [node('inst', 'macro', { macroDefId: 'def_f' })],
+      edges: [], exposedInputs: [], exposedOutputs: [],
+      controls: [ctl('oc', 'Ramp', { kind: 'control', nodeId: 'inst', controlId: 'ic' })],
+    };
+    const m = buildModel({ macroDefs: [inner, outer] });
+    const res = M.resolveTarget(m.macroDefs, 'def_o', outer.controls[0].target);
+    check('M31 a chain ending in a FACET resolves to the inner def\'s node + facet',
+      res.ok && res.at.defId === 'def_f' && res.at.nodeId === 'cs' && res.at.facet === 'colorScaleStops');
+    const d = M.resolveControlDescriptor(m, 'def_o', outer.controls[0]);
+    check('M32 …and renders the inner editor under the OUTER control\'s name',
+      d.kind === 'facet' && d.label === 'Ramp' && !d.block && d.facet.widget === 'gradient');
+    const patch = M.applyControlFacet(m, 'def_o', outer.controls[0], {
+      widget: 'gradient', stops: [{ p: 0, r: 1, g: 2, b: 3 }, { p: 1, r: 4, g: 5, b: 6 }],
+    });
+    check('M33 …and a chained facet write lands in the NESTED def',
+      patch.defId === 'def_f' && patch.nodes.find(n => n.id === 'cs').data.config.stop_0_r === '1');
+    check('M34 …while the OPEN inner def still blocks the outer control (R7)',
+      M.resolveControlDescriptor(m, 'def_o', outer.controls[0], ['def_f']).block === 'scope-open');
+  }
+
+  // --- serialization / sanitize -------------------------------------------
+  {
+    const controls = [ctl('c_g', 'Ramp', fTarget('cs', 'colorScaleStops'))];
+    const m = facetModel(controls);
+    const round = M.parseModelJSON(M.serializeModel(m));
+    check('M35 a facet target survives the `.gcaproj` round trip verbatim',
+      eq(defOf(round, 'def_f').controls, controls));
+    const mf = M.parseMacroFile(JSON.stringify(M.buildMacroFile(m.macroDefs[0])));
+    check('M36 …and the `.gcamacro` round trip', eq(mf.macroDef.controls, controls));
+    const bad = JSON.parse(JSON.stringify(M.buildMacroFile(m.macroDefs[0])));
+    bad.macroDef.controls = 'nope';
+    check('M37 …while a malformed `controls` is still DROPPED, never thrown',
+      M.parseMacroFile(JSON.stringify(bad)).macroDef.controls === undefined);
+  }
+
+  // --- pick mode: the facet namespace --------------------------------------
+  {
+    const rows = [
+      { configKey: 'method', label: 'Curve', kind: 'select', klass: 'B' },
+      { configKey: '', facet: 'colorScaleStops', label: 'Gradient', kind: 'facet', klass: 'D' },
+    ];
+    const p = M.partitionPickTargets(rows, new Set(['method']), new Set(['colorScaleStops']));
+    check('M38 a measured FACET gets a hotspot, from its OWN namespace',
+      p.hotspots.length === 2 && p.hotspots[1].facet === 'colorScaleStops');
+    // ⚠ The two namespaces are kept apart on purpose: a config key that happened
+    // to share a facet's name must never claim its hotspot.
+    check('M39 a facet measured only as a KEY falls back — the namespaces do not mix',
+      M.partitionPickTargets(rows, new Set(['method', 'colorScaleStops']), new Set()).fallback.length === 1
+      && M.partitionPickTargets(rows, new Set(['method', 'colorScaleStops']), new Set()).fallback[0].facet === 'colorScaleStops');
+    check('M40 …and a measured facet that is not eligible is DROPPED, never invented',
+      M.partitionPickTargets([rows[0]], new Set(['method']), new Set(['colorScaleStops'])).hotspots.length === 1);
+  }
+
+  // --- emit identity (R8), the structural proof ----------------------------
+  {
+    const stripped = facetModel();
+    const withCtl = facetModel([ctl('c_g', 'Ramp', fTarget('cs', 'colorScaleStops'))]);
+    const flat = (m) => JSON.stringify(M.expandMacros(
+      [node('inst', 'macro', { macroDefId: 'def_f' })], [], m.macroDefs,
+    ));
+    check('M41 a facet control changes NOTHING that reaches a compiler',
+      flat(stripped) === flat(withCtl));
+  }
+
+  // --- the shared widget + the writers, pinned in SOURCE --------------------
+  {
+    const { readFileSync } = await import('fs');
+    const cn = readFileSync(join(ROOT, 'src', 'modeler', 'vpl', 'CaNode.tsx'), 'utf8');
+    const ec = readFileSync(join(ROOT, 'src', 'modeler', 'vpl', 'explicitControls.ts'), 'utf8');
+    // DUAL CONSUMPTION: the instance renders the SAME component the node does.
+    check('M42 the in-node palette editor renders the SHARED widget',
+      cn.includes('<CategoricalPaletteEditor') && cn.includes("from './widgets/CategoricalPaletteEditor'"));
+    check('M43 …and both editors write through the NODE\'S OWN writer, not a local copy',
+      cn.includes('writeCategoricalPalette(nodeData.config') && cn.includes('writeColorScaleStops(nodeData.config')
+      && cn.includes('writeColorConstant(nodeData.config')
+      // the hand-rolled entry loop the extraction replaced is gone
+      && !/\^entry_\\d\+_\(r\|g\|b\|a\)\$/.test(cn));
+    check('M44 …and the facet WRITE goes through the spec\'s writer, never key by key',
+      /spec\.write\(cfg, value\)/.test(ec) && /if \(!spec \|\| spec\.widget !== value\.widget\) return null;/.test(ec));
+    check('M45 the instance renders the same two widgets for its facet rows',
+      /case 'facet'/.test(cn) && /<GradientStopsEditor[\s\S]{0,200}onFacetChange\(\{ widget: 'gradient'/.test(cn)
+      && /<CategoricalPaletteEditor[\s\S]{0,300}onFacetChange\(\{ widget: 'palette'/.test(cn));
+    check('M46 …inside a `nodrag` wrapper, so dragging a stop never drags the NODE',
+      /case 'facet': \{[\s\S]{0,900}className="nodrag"/.test(cn));
   }
 }
 

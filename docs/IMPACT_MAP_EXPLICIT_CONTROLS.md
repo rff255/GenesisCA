@@ -279,13 +279,14 @@ Three classes:
 | **A — inline port widgets** | every `_port_<portId>` | The port set comes from `getEffectivePorts(nodeType, config, model)` ([effectivePorts.ts](../src/modeler/vpl/effectivePorts.ts)) — which already covers Switch cases, multi-attr slots, census, Form Bond, input-mapping channels, lookup axes and `hiddenPorts`. The widget kind comes from `port.inlineWidget` plus the two adaptive swaps, lifted out of CaNode into the resolver and consumed by BOTH. |
 | **B — scalar config keys** | ~30 enum selects, ~12 checkboxes, ~10 number fields, ~9 text/textarea (incl. the Expression `expression` key) | A declarative table `(nodeType, key) → { kind, options }`. These render from primitives; no model lookup. |
 | **C — model-element pickers** | `attributeId`, `neighborhoodId`, `mappingId`, `indicatorId`, `variableId`, `spriteId`, `tableId`, `tagAttributeId`, `facingAttributeId`, `partitionAttributeId`, `presetId` | `elementOptionsFor` — the ~20 list expressions **extracted from CaNode's per-nodeType JSX and called back by it**, so the offered list can never drift from the in-node picker's. |
+| **D — multi-key editors (FACETS, D11)** | a Color Scale's gradient, a Categorical Color's palette, a Color Constant's RGB(A) | `FACET_SPECS` — an allowlist of `(nodeType → facet → { read, write, widget })` whose `read`/`write` **ARE the node's own exported pair** (`readColorScaleStopsRaw`/`writeColorScaleStops`, `readCategoricalEntries`+`readCategoricalDefault`/`writeCategoricalPalette`, `readColorConstant`/`writeColorConstant`). The instance renders the SAME widget component the node does. |
 
 **OUT of v1, each with its reason:**
 
 | excluded | why |
 |---|---|
 | Count steppers (`extraCount`, `caseCount`, `visibleCount`, `payloadCount`, `axisCount`) | **STRUCTURAL** — they change which PORTS the internal node has, hence what `expandMacros` emits and which internal edges survive. A non-author must not be able to break the macro's wiring from the outside. |
-| Gradient stops (`stop_N_*`), categorical palettes (`entry_N_*`), the RGB triples | **MULTI-KEY** — one control ↔ one value does not hold. |
+| Gradient stops (`stop_N_*`), categorical palettes (`entry_N_*`), the RGB triples, **one key at a time** | **MULTI-KEY** — one control ↔ one value does not hold. ⚠ **This exclusion is about a control binding one MEMBER of a coupled write, and it STANDS**: `isExcludedControlKey` still refuses every one of those keys. The EDITORS themselves are bindable since **D11 / class D**, as whole FACETS written by the node's own writer — see the table row below. |
 | `_varName_*` (Expression variable names) | multi-key *and* structural (they relabel ports). |
 | `_exprW` / `_exprH` / `_namesExpanded` / `_exprExpanded` | display-only keys; never eligible. |
 | `_port_bondAttr_*`, `partTag_*` | D2b. |
@@ -590,7 +591,8 @@ reorder-on-group rule (F8), and the `elementOptionsFor` extraction with CaNode c
 |---|---|
 | **Per-instance overrides** | D1. Would need a compiler change and a conflict rule; the user asked for sync. |
 | **`_port_bondAttr_*` / `partTag_*` bindings** | D2b — four coupled edits across four files, each failing silently. Revisit with a fifth `applyImportPlan` pass + a fourth `collectMacroReferences` arm. |
-| **Count steppers / multi-key editors** | D3 — structural, or one-control-one-value does not hold. |
+| **Count steppers** | D3 — **structural**: they change the internal node's PORT set, hence what `expandMacros` emits and which internal edges survive. |
+| ~~**Multi-key editors**~~ | **SHIPPED as D11 / class D** (plan §17). The exclusion was about binding one MEMBER of a coupled write; a FACET binds the whole editor and writes through the node's own writer. `_varName_*` stays out — it is multi-key *and* structural. |
 | **Reordering exposed PORTS from the instance** | the interface is the author's; the instance is a consumer. |
 | **A per-control default + "reset"** | needs a stored default, i.e. a second value — exactly what D1 rejects. Could be derived from `port.defaultValue` later. |
 | **Preventing macro self-recursion** | pre-existing (three independent depth guards already anticipate it); R7 works around it. Worth its own small fix. |

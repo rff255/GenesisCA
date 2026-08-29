@@ -596,7 +596,8 @@ tiers A-J), `npx tsc -b`, `npm run build` (**both** builds — the viewer build 
 | **Per-instance overrides** (Blender's model) | **D1.** Needs an override map on the instance config, an application pass inside `expandMacros` (a **compiler** change on the shared front-end all six surfaces run), a dirty/reset UI and a conflict rule against in-macro edits — and it silently redefines "linked". The user asked for sync. | a compiler phase of its own |
 | **`_port_bondAttr_*` / `partTag_*` bindings** | **D2b.** They are the only key shapes any path renames, deletes or permutes (F3), and `_port_bondAttr_*` embeds a model-element id. | a fifth `applyImportPlan` pass in lockstep with 2 and 4, participation in three ModelContext cascades, and a fourth `collectMacroReferences` arm — four coupled edits in four files, each failing plausibly-but-wrong with no error |
 | **Count steppers** (`extraCount`, `caseCount`, `visibleCount`, `payloadCount`, `axisCount`) | **structural** — they change which PORTS the internal node has, hence what `expandMacros` emits and which internal edges survive. A non-author must not be able to break the macro's wiring from outside. | a port-set reconciliation contract |
-| **Multi-key editors** — gradient stops, categorical palettes, RGB triples, `_varName_*` | one-control-one-value does not hold | a composite control type |
+| ~~**Multi-key editors** — gradient stops, categorical palettes, RGB triples~~ | **SHIPPED as class D — see §17.** The exclusion's argument was about binding one MEMBER of a coupled write; a FACET binds the whole editor and writes through the node's own writer, so it never applied to it. | — |
+| **`_varName_*` (Expression variable names)** | multi-key **and structural** — they relabel PORTS, so a non-author could break the macro's wiring from outside. Class D does not reach them: a facet needs a node-exported read/write pair, and the expression node has none. | the count-stepper / port-set reconciliation contract first |
 | **`attr_N` multi-attr slot pickers** (P4.5) | an INDEXED key family, not one of the 11 `CLASS_C_KEYS`: the slot count is itself a count stepper (row 3), and a control bound to `attr_3` has no defined meaning once the slot is removed | the indexed keys in the key space + a slot-removal rule, i.e. the count-stepper contract first |
 | **Instance-side port reordering** | the interface belongs to the author; the instance is a consumer | — |
 | **A per-control default + "Reset"** | needs a stored default, i.e. a **second value** — exactly what D1 rejects | could be *derived* from `port.defaultValue` / the node def, without storage |
@@ -1122,3 +1123,171 @@ the pixel/click confirmation.
   Anything that wants to know "what does pick mode offer here" should call it.
 - The `attr_N` multi-attr slot pickers remain out of scope (§P4), so they carry
   no markers.
+
+---
+
+## 17. Follow-up round — MULTI-KEY EDITORS as FACETS (D11) — 2026-08-29
+
+### 17.1 The change request, and the argument it dissolves
+
+> *"We should allow for multi-key editors (gradients/palettes)."*
+
+v1 excluded them because *"one control ↔ one value does not hold"* (D3), which is
+P1.2's **coupled-write rule**: a control writes ONE key, so it must never bind
+one MEMBER of a write an in-node editor performs as a set — that would produce a
+state the in-node editor never produces, silently.
+
+**That argument is about the MEMBER, and it stands.** `isExcludedControlKey`
+still refuses `stop_N_*`, `entry_N_*`, `default_*`, `stopCount` and `count`,
+forever, and tier M asserts each of them one by one.
+
+**A FACET is the opposite shape.** It binds the WHOLE editor and writes through
+the **node's own writer**, so nothing is decomposed and the config an instance
+edit produces is byte-identical to the same edit made inside the macro **by
+construction rather than by care**. The write is not "several keys written
+carefully"; it is the very function the node already calls.
+
+### 17.2 What shipped
+
+| node | facet | widget | read / write |
+|---|---|---|---|
+| `colorScale` | `colorScaleStops` | `GradientStopsEditor` (preset dropdown included) | `readColorScaleStopsRaw` / `writeColorScaleStops` |
+| `categoricalColor` | `categoricalPalette` | `CategoricalPaletteEditor` (**new shared widget**) | `readCategoricalEntries` + `readCategoricalDefault` / **`writeCategoricalPalette`** (new) |
+| `getColorConstant` | `colorConstant` | `ColorField` | **`readColorConstant` / `writeColorConstant`** (new) |
+
+`getColorConstant`'s RGB(A) was included because it is the *same* facet pattern
+at its cheapest — one `ColorField`, one writer, one alpha gate — and leaving it
+out would have made "a colour is a facet" true of two nodes and not the third.
+
+**Still out, with the reason** (registers updated): `_varName_*` — multi-key
+**and structural** (they relabel PORTS); the count steppers — structural; the
+`attr_N` slot pickers — an indexed family gated behind the count-stepper
+contract; the lookup-table editor and the sprite-sheet dialog — they edit
+`Attribute` objects, not node config, so no node exports a read/write pair.
+
+### 17.3 The design, and the properties that make it safe
+
+- **Schema.** `ControlTarget` gains `{ kind: 'facet'; nodeId; facet }` — def-local,
+  clone-remapped, serialization ride-along. `ResolvedTarget` gains `facet?` and a
+  facet is a **LEAF of `resolveTarget` exactly like a config key**, so chaining
+  works with no new recursion: an outer control chained onto an inner one whose
+  ultimate target is a facet resolves, renders and writes into the nested def.
+- **ONE resolver.** `FACET_SPECS` is an **allowlist** (a facet exists only when
+  its node exports a read/write pair, so a hand-rolled editor can never be
+  promoted); `eligibleControlKeys` grows a class-D block; `applyControlFacet` is
+  the write, and it **refuses a value whose `widget` tag does not match** rather
+  than coercing it. `applyControlValue` refuses a facet and `applyControlFacet`
+  refuses a scalar, so the two mechanisms cannot overlap.
+- **The Option-A alpha gate comes free**, because it lives in those writers: an
+  instance edit that lands on opaque **deletes** the `a` keys, so it cannot
+  invent an alpha channel and turn a byte-identical model red.
+- **DUAL CONSUMPTION.** The instance renders the *same component* the node does.
+  That required extracting `CategoricalPaletteEditor` out of CaNode (and the
+  categorical + colour-constant WRITE logic into the two node files) — proven
+  behaviour-free two ways, see §17.5.
+- **Pick mode** gains a THIRD marker namespace, `data-ctl-facet`, and
+  `partitionPickTargets(rows, measuredKeys, measuredFacets)` keeps it apart from
+  `data-ctl-key`: folding them into one set would let a config key that happened
+  to share a facet's name claim its hotspot — impossible today, but exactly the
+  silent mis-binding the position/authority split exists to rule out.
+- **`controlTargetOf(nodeId, row)`** is the ONE place a row's shape decides the
+  target's shape, so nothing in CaNode branches on class.
+
+### 17.4 A pre-existing coverage gap this exposed
+
+Adding the three facet node types to tier L's coverage set put `colorScale` in
+it for the first time — and revealed that **`method` (the shared interpolation
+select, used by Color Scale and Proportion Map) had no `data-ctl-key` marker**.
+It was eligible and could never be offered in place. Neither node type was in
+`SCALAR_CONFIG_KEYS` (both reach `method` through the *shared* spec), so tier L's
+type set had never contained them. Marked, and the coverage set now derives from
+`FACET_SPECS` as well, so the same blind spot cannot recur.
+
+### 17.5 Verification
+
+- **Gates:** `tsc` · `npm run build` · **`check-compile-identity` 31 models, all
+  surfaces unchanged** · `test-explicit-controls` **383 → 435** checks (tier M,
+  46 new, plus L10c) · `test-macro-references` · `verify-handle-remeasure`.
+- **Tier M** asserts, in order: eligibility (the facet offered, its MEMBERS still
+  refused one by one, a hand-edited member reporting `orphan-key`, `method` still
+  a separate class-B row); the descriptor (the node's own parse, incl. the
+  *raw/unsorted* gradient read and an absent `a` reading as opaque); **the
+  EQUIVALENCE** — the instance write compared against the node's own writer, for
+  all three facets; the alpha round trip both ways; the refusals; the clone
+  remap; chaining onto a facet; the round trips; the pick namespaces; and emit
+  identity.
+- **5 SOURCE MUTATIONS, 5 caught, every restore byte-identical**:
+
+  | mutation | caught by |
+  |---|---|
+  | the facet write BYPASSES the node's writer | M16 / M16b / M18 / M18b (8 failures) |
+  | a facet MEMBER key stops being excluded | A34, M3 |
+  | the CLONE drops the facet target's `nodeId` remap | M27, M29 |
+  | the two measured NAMESPACES are mixed | M38, M39 |
+  | an editor block loses its `data-ctl-facet` marker | L10c |
+
+- **The extractions are behaviour-free, proven twice.** A pure-function A/B
+  against the pre-change inline logic transcribed verbatim: **79 configs
+  identical** (empty / one / many entries, opaque / mixed / explicit-255 alpha,
+  a base config carrying stale `entry_*` and `default_a` keys, out-of-range
+  channels) — non-vacuous, since deleting one `delete next.default_a` makes
+  10/79 differ. And a **rendered-DOM fingerprint A/B** across the `git stash`
+  boundary on a pristine fixture: all three in-node editors render an
+  **IDENTICAL** tag/class/style/title/text skeleton (49 rows, 5641 chars), with
+  the pick-mode marker `div` — the only structural addition — unwrapped.
+
+### 17.6 Real-UI evidence (dev server, real clicks, **0 app console errors**)
+
+A fixture macro carrying a Color Scale + a Categorical Color + a Color Constant,
+instanced **twice** (linked), driven through the actual UI:
+
+- **All three facet hotspots land on their editor block to 0px** on every edge
+  (102 / 106 / 26 px tall), later in DOM order, `z-index 6`, `opacity 0.72`;
+  6 hotspots in all (class A `Position`/`Index`, class B `Curve`, class D
+  `Gradient`/`Palette`/`Colour`), **0 fallback rows**.
+- **Binding works**: clicking the Gradient hotspot added a control whose editor
+  subtitle reads `Color Scale · Gradient`, and disarmed pick mode.
+- **The closed instance renders the real editors** — the gradient bar with its
+  preset dropdown and `+ Add Stop`, the palette with `#0 / #1 / else / + Add
+  Color`, and the colour swatch.
+- **Both directions, live**: applying *Viridis* on instance **m1** moved the
+  LINKED sibling **m2** to the identical CSS gradient and left the internal node
+  showing Viridis; applying *Magma* **in-node** then moved both instances.
+- **A stop DRAG on the instance** moved stop 1 from `pos 0.250` to `pos 0.000`
+  and **the node did not move** (`translate(320px, 0px)` before and after); the
+  widget sits inside a `.nodrag` wrapper.
+- **Add / delete from the instance**: palette 2 → 3 → 2 entries and stops 5 → 6 →
+  5, with the linked sibling tracking every step.
+- **The alpha round trip, end to end**: dragging the Colour facet's alpha to 128
+  gave the instance `#0a141e80` **and grew the internal node's `A` output port**
+  (plus the pre-existing declared-but-unwired-alpha badge); taking it back to 255
+  **removed the `A` port and cleared the badge** — the Option-A gate honoured
+  through the facet write, both ways.
+
+**⚠ Verification limit, unchanged from §16.7.** The Browser pane is
+`document.hidden`, so hotspot coverage is proven by exact rect containment / DOM
+order / z-index rather than by a composited screenshot. Every *binding* and
+*editing* result above is functional (real `.click()`, real `change` events, real
+mouse-drag) and read back from live state.
+
+### 17.7 Process note
+
+**Never `cp` a source file into `/tmp` for a byte-exact snapshot on this setup** —
+MSYS translates CRLF to LF there, so the restore silently differs from the
+original (it did, once, and the compare said MISMATCH when the restore was
+actually fine). Snapshot with `fs.readFileSync`/`writeFileSync` on a Buffer, as
+the mutation driver does. Related: this repo stores **LF** blobs with
+`core.autocrlf=true`, so the working tree is CRLF; a tool that rewrites a file
+LF-only commits identically but should be normalised anyway, or a future
+CRLF-anchored source pin will be surprised.
+
+### 17.8 What the next session should know
+
+- **Adding a facet is one `FACET_SPECS` row plus a `data-ctl-facet` marker** —
+  and tier L's coverage now derives from `FACET_SPECS`, so an unmarked one fails
+  the harness rather than shipping unofferable.
+- A facet REQUIRES its node to export a read/write pair. That is deliberate: the
+  pair is what makes the instance write equal the in-node write, and the
+  allowlist is what stops a hand-rolled editor being promoted without one.
+- `partitionPickTargets` now takes THREE arguments; `controlTargetOf` is the only
+  place a row becomes a target.
