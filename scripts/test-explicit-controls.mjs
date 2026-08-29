@@ -70,7 +70,7 @@ import { fileURLToPath, pathToFileURL } from 'url';
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const ENTRY = `
 export {
-  eligibleControlKeys, resolveTarget, resolveControlDescriptor, applyControlValue,
+  eligibleControlKeys, partitionPickTargets, resolveTarget, resolveControlDescriptor, applyControlValue,
   inlineWidgetFor, isExcludedControlKey, elementOptionsFor, describeControlTarget,
   SCALAR_CONFIG_KEYS, CLASS_C_KEYS, CONTROL_BLOCK_REASON, CONTROL_MAX_CHAIN_DEPTH,
   ownAttrListFor, tagAttrScopeFor,
@@ -1806,6 +1806,126 @@ console.log('\n--- Tier J: M1 / M2 / clipboard need NO new pass (P4) ---------')
     check('J13 …at the inner def\'s own remapped node', res.ok && cInner.nodes.some(n => n.id === res.at.nodeId));
     const d = M.resolveControlDescriptor(m4, cOuter.id, cOuter.controls[0]);
     check('J14 …and the outer instance renders it live', !d.block && d.value === '3');
+  }
+}
+
+// ===========================================================================
+console.log('\n--- Tier L: pick-mode HOTSPOTS — the eligibility intersection ---');
+// ===========================================================================
+// Pick mode offers every eligible parameter with a translucent hotspot measured
+// ON TOP of its own widget. The position comes from a `data-ctl-key` DOM marker
+// and the AUTHORITY comes from `eligibleControlKeys`; `partitionPickTargets` is
+// where the two meet, so it is the piece that must never let a marker invent a
+// target. The DOM half cannot run in Node, so it is pinned in SOURCE below.
+{
+  const row = (configKey, klass = 'B', extra = {}) => ({ configKey, label: configKey, kind: 'select', klass, ...extra });
+  const rows = [row('_port_a', 'A'), row('operation'), row('attributeId', 'C'), row('_port_b', 'A', { wired: true })];
+
+  {
+    const p = M.partitionPickTargets(rows, new Set(['operation', 'attributeId']));
+    check('L1 a measured eligible key gets a HOTSPOT',
+      eq(p.hotspots.map(r => r.configKey), ['operation', 'attributeId']));
+    check('L2 …and an unmeasured one falls back instead of vanishing',
+      eq(p.fallback.map(r => r.configKey), ['_port_a', '_port_b']));
+    check('L3 the two sides PARTITION the offer — every row exactly once',
+      p.hotspots.length + p.fallback.length === rows.length
+      && new Set([...p.hotspots, ...p.fallback].map(r => r.configKey)).size === rows.length);
+    check('L4 …preserving each side\'s own order', p.fallback[0].configKey === '_port_a');
+    check('L5 …and carrying the row through verbatim (the `wired` flag survives)',
+      p.fallback[1].wired === true);
+  }
+  {
+    // THE INVARIANT: a marker is a POSITION source, never an authority. A
+    // coupled class-C picker IS marked in the DOM (it shares its element list)
+    // but is never eligible, so it must not become bindable.
+    const p = M.partitionPickTargets(rows, new Set(['operation', 'tagAttributeId', 'constType']));
+    check('L6 a MEASURED key that is not eligible is DROPPED, never invented',
+      p.hotspots.length + p.fallback.length === rows.length
+      && ![...p.hotspots, ...p.fallback].some(r => r.configKey === 'tagAttributeId' || r.configKey === 'constType'));
+    check('L7 nothing measured ⇒ everything falls back',
+      M.partitionPickTargets(rows, new Set()).fallback.length === rows.length);
+    check('L8 everything measured ⇒ everything is a hotspot',
+      M.partitionPickTargets(rows, new Set(rows.map(r => r.configKey))).hotspots.length === rows.length);
+    check('L9 no eligible rows ⇒ no offer at all',
+      M.partitionPickTargets([], new Set(['operation'])).hotspots.length === 0);
+  }
+
+  // --- MARKER COVERAGE: every class-B/C parameter the resolver can offer has a
+  //     widget marked in CaNode, or its hotspot could never be measured. -----
+  {
+    const { readFileSync } = await import('fs');
+    const cn = readFileSync(join(ROOT, 'src', 'modeler', 'vpl', 'CaNode.tsx'), 'utf8');
+    const model = buildModel({
+      mappings: [{ id: 'm_out', name: 'Viz', isAttributeToColor: true }],
+      indicators: [{ id: 'i_std', name: 'Pop', kind: 'standalone', dataType: 'integer' }],
+      variables: [{ id: 'v_s', name: 'acc', kind: 'scalar', dataType: 'float', initialValue: '0' }],
+      sprites: [{ id: 'sp', name: 'Bird', dataUrl: 'data:,', mimeType: 'image/png' }],
+    });
+    const types = new Set([...M.SCALAR_CONFIG_KEYS.keys()]);
+    for (const t of ['getCellAttribute', 'setCellLooks', 'getVariable', 'setAgentSprite', 'lookupInteraction']) types.add(t);
+    const want = new Set();
+    for (const t of types) {
+      for (const r of M.eligibleControlKeys(t, {}, model)) {
+        // class A is marked ONCE, generically, in the input-port loop.
+        if (r.klass !== 'A') want.add(r.configKey);
+      }
+    }
+    // A handful of keys are marked through a SHARED render helper rather than a
+    // literal, so the attribute never appears as a string. Named here (with the
+    // helper pinned below) so the coverage check stays honest instead of being
+    // loosened to a substring match that would pass on nothing at all.
+    const DYNAMIC_MARKERS = new Map([
+      // `setAgentSprite`'s six facet checkboxes all render through one `cbx`.
+      ['setSprite', 'cbx'], ['setFrame', 'cbx'], ['setSpeed', 'cbx'],
+      ['setRotation', 'cbx'], ['setScale', 'cbx'], ['setAlpha', 'cbx'],
+    ]);
+    const missing = [...want].filter(k => !cn.includes(`data-ctl-key="${k}"`) && !DYNAMIC_MARKERS.has(k));
+    check(`L10 every class-B/C parameter has a marked widget (${want.size} keys)`,
+      missing.length === 0, missing.join(' '));
+    check('L10b …and the shared-helper markers really are marked, once, by that helper',
+      /const cbx = \(key: string,[\s\S]{0,400}?data-ctl-key=\{key\}/.test(cn)
+      && [...DYNAMIC_MARKERS.keys()].every(k => cn.includes(`cbx('${k}'`)));
+    check('L11 …and the coverage set is not vacuous', want.size > 40, String(want.size));
+    check('L12 class A is marked ONCE, from the port loop', cn.includes('data-ctl-key={configKey}'));
+    check('L13 …and the chaining rows carry their own marker',
+      cn.includes('data-ctl-chain={chainId}') && cn.includes('chainId={control.id}'));
+  }
+
+  // --- the mechanism, pinned in SOURCE (it lives in a React component) ------
+  {
+    const { readFileSync } = await import('fs');
+    const cn = readFileSync(join(ROOT, 'src', 'modeler', 'vpl', 'CaNode.tsx'), 'utf8');
+    const css = readFileSync(join(ROOT, 'src', 'modeler', 'vpl', 'CaNode.module.css'), 'utf8');
+    check('L14 the hotspots come from the SHARED intersection, not a local filter',
+      /partitionPickTargets\(pickRows, measuredPickKeys\)/.test(cn));
+    check('L15 the measure reads BOTH marker kinds off the node root',
+      cn.includes("root.querySelectorAll<HTMLElement>('[data-ctl-key],[data-ctl-chain]')"));
+    // React Flow scales the viewport; deriving the zoom from the node itself
+    // keeps every node off the store's pan/zoom re-render path.
+    check('L16 …and derives the zoom from the NODE, never from the store',
+      cn.includes('const zoom = rootRect.width / root.offsetWidth;')
+      && !/useStore\([^)]*transform/.test(cn));
+    check('L17 the measure→setState loop is broken by an identity-preserving compare',
+      /samePickRects\(prev\.keys, keys\) && samePickRects\(prev\.chains, chains\) \? prev :/.test(cn));
+    check('L18 the ResizeObserver is installed only while ARMED',
+      /if \(!pickArmed \|\| !root \|\| typeof ResizeObserver === 'undefined'\) return;/.test(cn));
+    // The class-A widget is inert because the hotspot takes the pointer — the
+    // old inert-capture handlers and the `.pickable` outline are both gone.
+    check('L19 the class-A widget needs no capture handlers of its own',
+      !cn.includes('onClickCapture') && !cn.includes('styles.pickable'));
+    check('L20 …and `.pickable` is gone from the stylesheet', !css.includes('.pickable'));
+    check('L21 the always-on B/C LIST is gone — the fallback shows only what is NOT on screen',
+      !cn.includes('pickOverlayRows')
+      && /\{pickFallbackRows\.map/.test(cn) && /\{pickChainFallback\.map/.test(cn));
+    // ⚠ CRLF: anchor on `\r?\n`, never a bare `\n` (this file is CRLF on disk).
+    check('L22 the hotspot layer is the LAST child of the node root (paints on top)',
+      /\{pickChainHotspots\.map[\s\S]*?\r?\n {4}<\/div>\r?\n {2}\);\r?\n\}/.test(cn));
+    check('L23 the hotspot is absolutely positioned from the measured box',
+      /style=\{\{ left: box\.l, top: box\.t, width: box\.w, height: box\.h \}\}/.test(cn));
+    check('L24 …and is translucent, so the widget reads THROUGH it',
+      /\.pickHotspot \{[\s\S]*?opacity: 0\.\d+;/.test(css));
+    check('L25 a chained row that would CYCLE is offered but refused',
+      cn.includes('styles.pickHotspotBlocked') && /disabled=\{r\.cycle\}/.test(cn));
   }
 }
 

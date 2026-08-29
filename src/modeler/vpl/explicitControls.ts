@@ -1179,6 +1179,51 @@ export function eligibleControlKeys(
   return out;
 }
 
+/** The two ways pick mode can OFFER one eligible parameter. */
+export interface PickTargetPartition {
+  /** Its widget is on screen — a translucent hotspot is drawn ON TOP of it. */
+  hotspots: ControlKeyDescriptor[];
+  /** Its widget is NOT rendered right now — offered in the compact secondary
+   *  fallback list instead. */
+  fallback: ControlKeyDescriptor[];
+}
+
+/**
+ * ═══ THE ELIGIBILITY-INTERSECTION INVARIANT ═══
+ *
+ * Split the parameters `eligibleControlKeys` offered into the ones pick mode can
+ * cover WITH AN ON-TOP HOTSPOT (their widget was measured in the DOM) and the
+ * ones it must offer as a fallback row instead.
+ *
+ * Three properties, and each is load-bearing:
+ *
+ *   1. **ELIGIBILITY COMES ONLY FROM `rows`.** A `data-ctl-key` marker in the
+ *      DOM can never ADD a target — a key that is measured but not eligible
+ *      (a COUPLED class-C picker shares its element list, and every marked
+ *      widget of a node type where that key is not in the tables) is DROPPED
+ *      here. The markers are a POSITION source, never an authority.
+ *   2. **EXACTLY ONCE.** `hotspots` and `fallback` partition `rows` — no
+ *      parameter is offered twice, and none is silently lost.
+ *   3. **ORDER IS PRESERVED** within each side, so the fallback list reads in
+ *      the same order the node's own inventory does.
+ *
+ * A key is in `fallback` exactly when its widget is not on screen: a WIRED
+ * class-A port (no widget is rendered for one), a widget hidden by a collapsed
+ * editor (the Expression formula) or by `hiddenPorts` / a mode. Hiding those
+ * would make a genuinely bindable parameter unreachable, which is the opposite
+ * of what the enabled-control doctrine asks for — so they are offered, visibly
+ * subordinate to the in-place hotspots.
+ */
+export function partitionPickTargets(
+  rows: readonly ControlKeyDescriptor[],
+  measuredKeys: ReadonlySet<string>,
+): PickTargetPartition {
+  const hotspots: ControlKeyDescriptor[] = [];
+  const fallback: ControlKeyDescriptor[] = [];
+  for (const r of rows) (measuredKeys.has(r.configKey) ? hotspots : fallback).push(r);
+  return { hotspots, fallback };
+}
+
 // ---------------------------------------------------------------------------
 // Resolution
 // ---------------------------------------------------------------------------

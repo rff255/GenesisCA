@@ -32,6 +32,15 @@ interface InlineNumberInputProps {
   step?: number | 'any';
   /** Inline style overrides for sizing in dense panel layouts. */
   style?: React.CSSProperties;
+  /**
+   * EXPLICIT CONTROLS pick-mode marker — the config key this widget edits.
+   *
+   * Forwarded verbatim onto the rendered `<input>` so CaNode's overlay pass can
+   * MEASURE it (see the `data-ctl-key` block there). It is inert everywhere
+   * else, exactly like the `data-min` / `data-max` advisories below; the widget
+   * itself knows nothing about controls.
+   */
+  'data-ctl-key'?: string;
 }
 
 const TRANSITIONAL = new Set(['', '-', '-.', '.', '+', '+.']);
@@ -108,6 +117,7 @@ export function InlineNumberInput(props: InlineNumberInputProps) {
       data-min={props.min}
       data-max={props.max}
       data-step={props.step}
+      data-ctl-key={props['data-ctl-key']}
     />
   );
 }

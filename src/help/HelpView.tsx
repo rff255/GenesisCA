@@ -1345,8 +1345,12 @@ export function HelpView() {
             <li>
               <strong>To promote one:</strong> enter the macro, and on the <strong>Macro
               Input</strong> boundary node use <strong>+ Parameter</strong>. The button arms
-              <em> pick mode</em>: every eligible setting on every node in the macro lights
-              up &mdash; click the one you want. Rename the row, or press
+              <em> pick mode</em>: a translucent dashed button appears <em>directly on top
+              of</em> every eligible setting, right where that node already draws it &mdash;
+              click the one you want. A setting that is not on screen just then (a port
+              driven by a wire, a collapsed formula editor, a widget hidden by the node&apos;s
+              current mode) is listed instead, under <em>not shown on the node</em>. Press
+              <kbd className={styles.kbd}>Esc</kbd> to cancel. Rename the row, or press
               <strong> &#9998;</strong> to re-bind it to a different setting, or
               <strong> x</strong> to remove it (nothing inside the macro is deleted; only
               the shortcut goes away).
