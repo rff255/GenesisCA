@@ -1218,9 +1218,22 @@ function CaNodeComponent({ id, data }: NodeProps) {
   // Get Agent Position's `mode`, Switch/Sequence dynamic ports, … — can keep the
   // node HEIGHT unchanged, so React Flow's ResizeObserver never fires and a
   // newly-shown handle keeps stale/absent bounds → it silently rejects
-  // connections until something else forces a remeasure. Keying on the port-id
+  // connections until something else forces a remeasure. Keying on the port
   // signature fixes that for every config-driven port change in one place.
-  const portIdSignature = inputPorts.map(p => p.id).join(',') + '|' + outputPorts.map(p => p.id).join(',');
+  //
+  // ⚠ THE SIGNATURE IS THE HANDLE IDs (`kind_category_portId`), NOT the bare
+  // port ids — React Flow keys `internals.handleBounds` by HANDLE id, so a port
+  // whose CATEGORY flips while its id stays the same (a macro boundary port
+  // switched value ⇄ flow, and the same edit on every closed instance of that
+  // macro) DESTROYS one handle and creates another under a signature that never
+  // changed. The store then holds bounds for a handle the DOM no longer has and
+  // none for the one it does, so the new port refuses every connection until
+  // something else forces a remeasure (adding ANOTHER port — the reported
+  // workaround). A category flip also LIFTS the first flow port into the header
+  // (`mainFlowIn`/`mainFlowOut`), re-indexing every body port below it, so the
+  // surviving ports' recorded positions go stale too.
+  const portIdSignature =
+    inputPorts.map(handleId).join(',') + '|' + outputPorts.map(handleId).join(',');
   useEffect(() => {
     updateNodeInternals(id);
   }, [updateNodeInternals, id, portIdSignature]);
