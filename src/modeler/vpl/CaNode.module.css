@@ -605,20 +605,53 @@
 
 /* --- EXPLICIT CONTROLS: pick mode ---------------------------------------- */
 
-/* Class A — the REAL inline widget, outlined IN PLACE and made inert. `outline`
-   (not `border`) so the ring costs no layout: the widget must not move under
-   the cursor when pick mode arms. */
-.pickable {
-  outline: 2px solid var(--color-accent);
-  outline-offset: 1px;
+/* ONE hotspot per eligible parameter (classes A, B and C alike), absolutely
+   positioned over that parameter's own widget from a measured box.
+
+   Semi-translucent so the widget's label and value read THROUGH it — the point
+   is to say "this control can be externalised", not to hide which one. The
+   dashed ring is the pick-mode vocabulary, shared with the fallback list below.
+
+   `position: absolute` against the node root, which is the offsetParent the
+   rects were measured against. A class-A inline widget sits OUTSIDE the node's
+   left edge (`.inlineWidgetWrapper { right: 100% }`), so a hotspot's `left` is
+   legitimately negative — the node does not clip.
+
+   It also makes the widget under it INERT for free: the hotspot takes the
+   pointer, so nothing has to disable the widget while pick mode is armed. */
+.pickHotspot {
+  position: absolute;
+  z-index: 6;
+  padding: 0;
+  border: 1px dashed var(--color-accent);
   border-radius: var(--radius-sm);
+  background: var(--color-accent-soft);
   box-shadow: 0 0 6px var(--color-accent-soft);
+  opacity: 0.72;
   cursor: pointer;
 }
 
-/* Classes B/C (and any class-A key whose widget is hidden because the port is
-   wired) — a compact list at the top of the body, one row per
-   `eligibleControlKeys` entry. */
+.pickHotspot:hover {
+  opacity: 0.9;
+  border-style: solid;
+  background: var(--color-overlay-hover-medium);
+}
+
+/* A chained row that would close a CYCLE — shown so the author can SEE the
+   offer and why it is refused (the enabled-control doctrine's *grey it in
+   place, reason on the tooltip* arm), never bindable. */
+.pickHotspotBlocked,
+.pickHotspotBlocked:hover {
+  cursor: not-allowed;
+  opacity: 0.35;
+  border-style: dotted;
+  background: transparent;
+  box-shadow: none;
+}
+
+/* The SECONDARY offer: eligible parameters whose widget is not on screen right
+   now (a wired port, a collapsed editor, a mode-hidden widget), so no hotspot
+   could be drawn over one. Deliberately subordinate to the in-place hotspots. */
 .pickOverlay {
   display: flex;
   flex-direction: column;
@@ -627,6 +660,17 @@
   border: 1px dashed var(--color-accent);
   border-radius: var(--radius-sm);
   background: var(--color-accent-soft);
+}
+
+/* Names the fallback list for what it is, so it never reads as the primary
+   offer the in-place hotspots are. */
+.pickOverlayHead {
+  padding: 0 var(--space-2);
+  font-size: 0.45rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--color-text-tertiary);
+  user-select: none;
 }
 
 .pickRow {

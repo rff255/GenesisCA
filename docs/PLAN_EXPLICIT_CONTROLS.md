@@ -974,3 +974,151 @@ the same trap the runbook already records for `git checkout <file>`, in a
 different spelling. **Snapshot the WORKING file immediately before each
 mutation, never restore from a pre-work backup**, and prove the restore (the
 harness passing again) before starting the next one.
+
+---
+
+## 16. Follow-up round — PICK-MODE IN-PLACE OVERLAYS (V6b) — 2026-08-29
+
+### 16.1 The change request, and what it invalidates
+
+> *"We should just add a semi-translucent overlay button directly on top of the
+> widgets themselves. Especially because some are not even in the same order
+> shown in the node."*
+
+That retires **deviation V6** (and P2.2, its extension): class A was outlined in
+place while classes B/C got a separate overlay **LIST** at the top of the node
+body. The list's defect is exactly the one named — it presents half the offer in
+an order the node does not have, so the author has to map a row back to a widget
+by name. Classes A, B and C differ only in *where the widget is authored*; they
+must not differ in *how it is offered*.
+
+**V6b: every eligible parameter is offered by a semi-translucent, dashed hotspot
+drawn ON TOP of its own widget.** One mechanism, three classes.
+
+### 16.2 The mechanism, and why this one
+
+A **`data-ctl-key` DOM attribute per widget** + a node-level **measured overlay
+pass**, chosen over a shared wrapper component:
+
+- the ~100 class-B/C widget sites are **bespoke JSX**, hand-tuned inside flex
+  rows with their own `flex` sizing. An attribute is **inert** — zero box-model
+  change, zero CSS risk — while a wrapper would alter the layout at every one of
+  them for no benefit;
+- it is **one token per site**, and greppable, which is what lets the harness pin
+  coverage;
+- it leaves every widget's existing props and handlers untouched.
+
+**The invariant that keeps it honest — a POSITION SOURCE and an AUTHORITY, kept
+apart.** `eligibleControlKeys` alone decides what may be bound; the markers only
+say *where*. **`partitionPickTargets(rows, measuredKeys)`** intersects them, and
+a measured-but-ineligible key is **DROPPED** — which matters, because a COUPLED
+class-C picker is genuinely marked (it shares its element list with the bindable
+ones) and must never become bindable. The function is pure and exported, so it
+is unit-tested and source-mutable (tier L).
+
+### 16.3 Sites touched
+
+| what | how | n |
+|---|---|---|
+| class-B/C widgets (`select` / `input` / `textarea` / `InlineNumberInput`) | conservative codemod: for each opening tag whose own text writes an eligible key through `updateConfig('key'`, insert `data-ctl-key` | **96** |
+| `setAgentSprite`'s six facet checkboxes | ONE edit — the shared `cbx` helper, marker on the **label ROW** (a 13px checkbox is not a target) | 1 (covers 6) |
+| `VisionColorRow` | marker on the row (swatch + reset), not the colour well | 1 |
+| **class A** | ONE edit — `.inlineWidgetWrapper` in the ports loop | 1 |
+| chaining (D4) | `MacroControlRow` gains a `chainId` prop then `data-ctl-chain` | 2 |
+| `InlineNumberInput` | forwards a `'data-ctl-key'` prop onto its input, beside the existing `data-min`/`data-max` advisories | 1 |
+
+`tagAttributeId` is deliberately **unmarked**: it is coupled on all three of its
+node types, so it is never eligible.
+
+**Removed**: `pickOverlayRows`, `pickInPlaceKeys`, the `.pickable` outline and
+class A's inert pointer/click CAPTURE handlers. The hotspot takes the pointer,
+so the widget under it is inert **by construction** — no site needs a handler.
+
+### 16.4 Two measurement traps, both real
+
+1. **Zoom.** `getBoundingClientRect` is post-transform and React Flow scales the
+   viewport. The live zoom is derived **from the node itself**
+   (`rootRect.width / root.offsetWidth`) — subscribing to the store's transform
+   would re-render every node on every pan and zoom, the very thing the
+   `connectedInputHandles` pub/sub exists to avoid.
+2. **The border.** `rootRect` is the BORDER box; an absolutely-positioned child's
+   `left`/`top` resolve against the **PADDING** box. Without subtracting
+   `root.clientLeft`/`clientTop` every hotspot lands **2px down and right** — the
+   node's 2px border. Measured in the UI, then fixed; `clientLeft`/`clientTop`
+   are those widths in layout px with no style computation.
+
+The measure runs on **every commit while armed** (a no-dep-array
+`useLayoutEffect`), which is what makes a hotspot track a widget that moved; a
+0.5px-tolerant compare returning the previous object breaks the
+measure→setState→measure loop, and a `ResizeObserver` on the node root covers
+layout changes no re-render announces.
+
+### 16.5 The policy for eligible-but-UNRENDERED keys
+
+A parameter with no widget on screen has nothing to draw a hotspot over: a
+**WIRED** port (which renders no widget at all), a collapsed formula editor, a
+widget hidden by `hiddenPorts` or a mode. Those are listed under a
+*"not shown on the node"* head — **deliberately subordinate**, never the primary
+offer. They are genuinely bindable, so hiding them would put a real parameter out
+of reach, which is the opposite of what the enabled-control doctrine asks for. A
+wired row keeps its `wired` flag, so the offered-but-flagged state survives.
+**A COLLAPSED NODE stays unpickable** (its branch returns before `.body` and
+never attaches the root ref) — P2's policy, unchanged and confirmed in the UI on
+a collapsed `getConstant`.
+
+### 16.6 The five source mutations, and what each broke
+
+| mutation | caught by |
+|---|---|
+| `partitionPickTargets` lets a measured-but-ineligible key through | L6, L9 |
+| the class-A port loop loses its marker | L12 |
+| a class-B widget loses its marker (`divideAgent.conserve`) | L10 |
+| the measure→setState loop guard is dropped | L17 |
+| the chaining rows lose their marker | L13 |
+
+5 mutations, 5 caught, every restore byte-identical.
+
+Two harness bugs surfaced while writing tier L and are worth keeping: a
+**CRLF-blind** `\n` anchor (this repo's sources are CRLF on disk — always
+`\r?\n`), and a literal-string coverage check that missed the six `cbx` facets,
+now handled by a named `DYNAMIC_MARKERS` table with the helper itself pinned
+rather than by loosening the match.
+
+### 16.7 Real-UI evidence (Game of Life's macro, dev server, **0 console errors**)
+
+- **10 of 10 hotspots land on their widget to 0px** (worst 0.23px sub-pixel),
+  across class A (`_port_y`, `_port_y2`), class B (`operation`, `lowOp`,
+  `highOp`) and class C (`attributeId`, `neighborhoodId`).
+- Each hotspot is LATER in DOM order than the widget it covers, in the same
+  stacking root, `z-index 6` over the widget's `1`/`auto`, rendering
+  `opacity 0.72` + `dashed` + `rgba(232,161,58,0.16)`.
+- **Binding works**: clicking the class-C hotspot added
+  `Get Neighbors Attribute · Neighborhood` to the def, disarmed pick mode and
+  left the underlying `moore` value untouched; the closed instance then rendered
+  that control, its row carrying `data-ctl-chain`.
+- **Tracking**: flipping a Compare to a between-family op *while armed* moved its
+  Operation select 429 → 381 px with the hotspot following exactly, and
+  `lowOp`/`highOp` migrated from the fallback list to hotspots on their
+  now-visible widgets.
+- A WIRED port stayed in the fallback flagged `wired`; a collapsed node offered
+  nothing; **Esc** cleared 12 hotspots to 0, leaving the markers inert.
+
+**⚠ Verification limit, stated honestly.** The Browser pane is `document.hidden`,
+where `elementFromPoint` will not hit-test React Flow's transformed viewport (it
+finds no node even at a node's own centre) and ResizeObserver callbacks are not
+delivered. Coverage and inertness are therefore proven **structurally** — exact
+rect containment, DOM order, z-index, `pointer-events` — rather than by a real
+click, and the RO arm is harness-pinned rather than exercised. The commit-path
+measure is unaffected and was driven throughout. A visible-pane pass would add
+the pixel/click confirmation.
+
+### 16.8 What the next session should know
+
+- **Adding a class-B/C parameter to the tables now REQUIRES a marked widget** —
+  tier L's coverage check derives its key set from `eligibleControlKeys` itself,
+  so an unmarked one fails the harness rather than shipping a parameter pick mode
+  cannot offer in place.
+- `partitionPickTargets` is the only place the markers and the resolver meet.
+  Anything that wants to know "what does pick mode offer here" should call it.
+- The `attr_N` multi-attr slot pickers remain out of scope (§P4), so they carry
+  no markers.

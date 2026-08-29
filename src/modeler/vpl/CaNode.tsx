@@ -1,4 +1,4 @@
-import { Fragment, memo, useCallback, useEffect, useRef, useState, useMemo, useSyncExternalStore } from 'react';
+import { Fragment, memo, useCallback, useEffect, useLayoutEffect, useRef, useState, useMemo, useSyncExternalStore } from 'react';
 import { Handle, Position, useReactFlow, useUpdateNodeInternals } from '@xyflow/react';
 import type { NodeProps } from '@xyflow/react';
 import { getNodeDef } from './nodes/registry';
@@ -21,6 +21,34 @@ import type { MacroPort, MacroControl } from '../../model/types';
 /** Stable empty list for the boundary-editor memos — a fresh `[]` literal in a
  *  dep array re-runs the memo on every render. */
 const EMPTY_MACRO_PORTS: readonly MacroPort[] = [];
+
+/** EXPLICIT CONTROLS pick mode — one measured widget box, in the node's own
+ *  LAYOUT pixels (zoom already divided out). */
+interface PickRect { l: number; t: number; w: number; h: number }
+interface PickRectMaps {
+  /** `data-ctl-key` → box: a class-A/B/C parameter widget. */
+  keys: Record<string, PickRect>;
+  /** `data-ctl-chain` → box: a nested macro instance's own control row (D4). */
+  chains: Record<string, PickRect>;
+}
+/** Stable identity so "nothing measured" compares `===` and the measure pass can
+ *  clear without allocating a fresh object every commit. */
+const EMPTY_PICK_RECTS: PickRectMaps = { keys: {}, chains: {} };
+const NOOP = () => {};
+
+/** Sub-pixel churn (a font landing, a zoom rounding) must not restart the
+ *  measure → setState → measure cycle, so boxes compare at 0.5px. */
+function samePickRects(a: Record<string, PickRect>, b: Record<string, PickRect>): boolean {
+  const ka = Object.keys(a);
+  if (ka.length !== Object.keys(b).length) return false;
+  for (const k of ka) {
+    const x = a[k], y = b[k];
+    if (!x || !y) return false;
+    if (Math.abs(x.l - y.l) > 0.5 || Math.abs(x.t - y.t) > 0.5
+      || Math.abs(x.w - y.w) > 0.5 || Math.abs(x.h - y.h) > 0.5) return false;
+  }
+  return true;
+}
 import { useModel } from '../../model/ModelContext';
 import { countMacroInstances } from '../../model/macroImport';
 import { cellAttrsOf, bondAttrsOf } from '../../model/attributeScope';
@@ -29,7 +57,7 @@ import { is3dModelLike } from './compiler/niCodec';
 import { MULTI_ATTR_TYPES, multiAttrExtraCount, buildExtraSlotPorts } from './compiler/multiAttrExpand';
 // Explicit Controls: the ONE inline-widget resolution + the two attribute
 // scopes, dually consumed here and by a control bound to the same key.
-import { inlineWidgetFor, ownAttrListFor, tagAttrScopeFor, eligibleControlKeys, describeControlTarget, applyInterfaceEdit, groupSections, interfaceRows, resolveControlDescriptor, applyControlValue, elementOptionsFor, resolveTarget, collapsedGroupIds, toggleCollapsedGroup, CTL_COLLAPSED_KEY, CONTROL_BLOCK_REASON, CONTROL_BLOCK_NEEDS_ATTENTION } from './explicitControls';
+import { inlineWidgetFor, ownAttrListFor, tagAttrScopeFor, eligibleControlKeys, partitionPickTargets, describeControlTarget, applyInterfaceEdit, groupSections, interfaceRows, resolveControlDescriptor, applyControlValue, elementOptionsFor, resolveTarget, collapsedGroupIds, toggleCollapsedGroup, CTL_COLLAPSED_KEY, CONTROL_BLOCK_REASON, CONTROL_BLOCK_NEEDS_ATTENTION } from './explicitControls';
 import type { ControlKeyDescriptor, InterfaceEdit, ControlDescriptor } from './explicitControls';
 import { useListReorder } from '../panels/useListReorder';
 import { buildCensusPorts, censusAttributes } from './compiler/censusExpand';
@@ -178,10 +206,14 @@ function ColorScaleEditor({ id, nodeData }: { id: string; nodeData: CaNodeData }
  * (D8 — report, never drop). Its `onChange` is never reached, and
  * `applyControlValue` refuses it anyway, so inertness is structural.
  */
-function MacroControlRow({ desc, onChange, needsAttention }: {
+function MacroControlRow({ desc, onChange, needsAttention, chainId }: {
   desc: ControlDescriptor;
   onChange: (next: string) => void;
   needsAttention: boolean;
+  /** EXPLICIT CONTROLS chaining (D4) — the id of the control this row renders,
+   *  marked on the row so pick mode can measure a hotspot over it. A nested
+   *  macro instance's rows ARE the chain targets, so the row IS the widget. */
+  chainId?: string;
 }) {
   const stopDrag = (e: React.MouseEvent) => { if (e.button === 0) e.stopPropagation(); };
   const stopAll = (e: React.MouseEvent) => e.stopPropagation();
@@ -293,7 +325,7 @@ function MacroControlRow({ desc, onChange, needsAttention }: {
 
   const stacked = !desc.block && desc.kind === 'textarea';
   return (
-    <div className={styles.ctlRowWrap}>
+    <div className={styles.ctlRowWrap} data-ctl-chain={chainId}>
       <div className={stacked ? styles.ctlRowStacked : styles.ctlRow}>
         <span className={styles.ctlLabel} title={desc.label}>{desc.label}</span>
         {widget}
@@ -390,7 +422,9 @@ function VisionColorRow({ value, onChange }: { value?: string; onChange: (v: str
   return (
     <>
       <label style={{ fontSize: '0.6rem', color: '#999' }}>Cone color (display)</label>
-      <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+      {/* Pick-mode marker on the ROW (swatch + reset), so the measured hotspot
+          covers the whole control rather than the colour well alone. */}
+      <div data-ctl-key="visionColor" style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
         <input
           type="color"
           className="nodrag"
@@ -864,6 +898,11 @@ function CaNodeComponent({ id, data }: NodeProps) {
     () => getConnectedHandlesForNode(id),
   );
 
+  /** The node's own root element. Declared here rather than beside the other
+   *  refs because pick mode's measure pass (below) reads it, and the Expression
+   *  width sampler further down reads the same one. */
+  const nodeRootRef = useRef<HTMLDivElement | null>(null);
+
   // EXPLICIT CONTROLS — pick mode. Same single-pub/sub pattern: a `memo`'d node
   // would otherwise never learn the mode was armed.
   const controlPick = useSyncExternalStore(subscribeControlPick, getControlPick);
@@ -877,30 +916,15 @@ function CaNodeComponent({ id, data }: NodeProps) {
   //
   // `connectedInputHandles` is the LIVE canvas set rather than `def.edges`: it
   // is what actually decides whether the in-place widget is rendered, so
-  // passing it makes the in-place / overlay partition below exact by
-  // construction (a wired port shows no widget, so it can only be offered as an
-  // overlay row).
+  // passing it makes the hotspot / fallback partition below exact by
+  // construction (a wired port shows no widget, so it can only be offered as a
+  // fallback row).
   const pickRows: ControlKeyDescriptor[] = useMemo(() => {
     if (!controlPick) return [];
     const pickDef = (model.macroDefs || []).find(d => d.id === controlPick.defId);
     if (!pickDef || !pickDef.nodes.some(n => n.id === id)) return [];
     return eligibleControlKeys(nodeData.nodeType, nodeData.config, model, connectedInputHandles);
   }, [controlPick, model, id, nodeData.nodeType, nodeData.config, connectedInputHandles]);
-
-  // The in-place / overlay PARTITION (deviation V6, extended): a class-A key is
-  // outlined on its REAL widget when that widget is on screen, and appears as an
-  // overlay row when it is not — which happens exactly when the port is WIRED
-  // (`showWidget` = kind && !isConnected). Both sides read the same `wired`
-  // flag, computed from the same live handle set, so the two are exact
-  // complements: every eligible key is offered EXACTLY once.
-  const pickInPlaceKeys = useMemo(
-    () => new Set(pickRows.filter(r => r.klass === 'A' && !r.wired).map(r => r.configKey)),
-    [pickRows],
-  );
-  const pickOverlayRows = useMemo(
-    () => pickRows.filter(r => r.klass !== 'A' || r.wired),
-    [pickRows],
-  );
 
   /**
    * CHAINING (D4) — the pick rows a NESTED MACRO INSTANCE offers: that def's own
@@ -930,6 +954,110 @@ function CaNodeComponent({ id, data }: NodeProps) {
       return { id: c.id, name: c.name, cycle: !res.ok && res.block === 'cycle' };
     });
   }, [controlPick, model, id, nodeData.nodeType, nodeData.config]);
+
+  /**
+   * ═══ PICK MODE IS ONE MECHANISM FOR CLASSES A, B AND C (deviation V6b) ═══
+   *
+   * Every eligible parameter is offered by a semi-translucent, dashed hotspot
+   * drawn ON TOP of its real widget. Classes A/B/C differ only in where the
+   * widget is authored, so they must not differ in how it is offered — the
+   * previous split (class A outlined in place, B/C in a separate LIST at the top
+   * of the body) put half the offer in an order the node does not have.
+   *
+   * The mechanism is a POSITION source plus an AUTHORITY, kept apart:
+   *
+   *   • every widget carries a `data-ctl-key` (or, for a nested macro
+   *     instance's own control rows, a `data-ctl-chain`) — an inert attribute,
+   *     so ~100 hand-tuned bespoke widget sites keep their exact box model;
+   *   • `eligibleControlKeys` alone decides what may be bound, and
+   *     `partitionPickTargets` INTERSECTS the two. A marker can never add a
+   *     target (a coupled class-C picker is marked but never eligible).
+   *
+   * Rects are measured relative to the node root and stored in LAYOUT pixels.
+   * `getBoundingClientRect` is post-transform, and React Flow scales the whole
+   * viewport — so the live zoom is derived FROM THE NODE ITSELF
+   * (`rect.width / offsetWidth`) rather than from the store, which would
+   * re-render every node on every pan and zoom.
+   */
+  const [pickRects, setPickRects] = useState<PickRectMaps>(EMPTY_PICK_RECTS);
+  const pickArmed = pickRows.length > 0 || pickControlRows.length > 0;
+  const measurePickRef = useRef<() => void>(NOOP);
+
+  // No dep array: while armed this re-measures after EVERY commit, which is what
+  // makes a hotspot track a widget that moved (a section toggled open, a mode
+  // changed). Only the armed def's nodes re-render at all, and the
+  // identity-preserving compare below stops the setState from looping.
+  useLayoutEffect(() => {
+    if (!pickArmed) {
+      measurePickRef.current = NOOP;
+      setPickRects(prev => (prev === EMPTY_PICK_RECTS ? prev : EMPTY_PICK_RECTS));
+      return;
+    }
+    const measure = () => {
+      const root = nodeRootRef.current;
+      if (!root || !root.offsetWidth) return;
+      const rootRect = root.getBoundingClientRect();
+      const zoom = rootRect.width / root.offsetWidth;
+      if (!(zoom > 0)) return;
+      // ⚠ `rootRect` is the BORDER box, but an absolutely-positioned child's
+      // `left`/`top` are resolved against the PADDING box — so without the
+      // node's own border widths every hotspot lands 2px down and right of the
+      // widget it is supposed to cover. `clientLeft`/`clientTop` ARE those
+      // widths, in layout px, with no style computation.
+      const bx = root.clientLeft;
+      const by = root.clientTop;
+      const keys: Record<string, PickRect> = {};
+      const chains: Record<string, PickRect> = {};
+      for (const el of Array.from(root.querySelectorAll<HTMLElement>('[data-ctl-key],[data-ctl-chain]'))) {
+        const b = el.getBoundingClientRect();
+        if (!b.width || !b.height) continue;
+        const rect: PickRect = {
+          l: (b.left - rootRect.left) / zoom - bx,
+          t: (b.top - rootRect.top) / zoom - by,
+          w: b.width / zoom,
+          h: b.height / zoom,
+        };
+        // FIRST wins: a key is authored at many sites across the file but only
+        // one of them renders for a given node type, so a second hit would be a
+        // duplicate rather than a different parameter.
+        const k = el.dataset.ctlKey;
+        const c = el.dataset.ctlChain;
+        if (k && !(k in keys)) keys[k] = rect;
+        if (c && !(c in chains)) chains[c] = rect;
+      }
+      setPickRects(prev => (
+        samePickRects(prev.keys, keys) && samePickRects(prev.chains, chains) ? prev : { keys, chains }
+      ));
+    };
+    measurePickRef.current = measure;
+    measure();
+  });
+
+  // Catches the layout changes no re-render announces (a font landing, a native
+  // select sizing itself). Installed only while armed.
+  useEffect(() => {
+    const root = nodeRootRef.current;
+    if (!pickArmed || !root || typeof ResizeObserver === 'undefined') return;
+    const ro = new ResizeObserver(() => measurePickRef.current());
+    ro.observe(root);
+    return () => ro.disconnect();
+  }, [pickArmed]);
+
+  const measuredPickKeys = useMemo(() => new Set(Object.keys(pickRects.keys)), [pickRects]);
+  const { hotspots: pickHotspots, fallback: pickFallbackRows } = useMemo(
+    () => partitionPickTargets(pickRows, measuredPickKeys),
+    [pickRows, measuredPickKeys],
+  );
+  // The chaining rows split the same way — a nested instance's control row IS
+  // the widget, so a rendered one gets a hotspot and a collapsed one a fallback.
+  const pickChainHotspots = useMemo(
+    () => pickControlRows.filter(r => pickRects.chains[r.id]),
+    [pickControlRows, pickRects],
+  );
+  const pickChainFallback = useMemo(
+    () => pickControlRows.filter(r => !pickRects.chains[r.id]),
+    [pickControlRows, pickRects],
+  );
 
   /**
    * Bind the armed pick to ONE target — ONE `updateMacro`.
@@ -1225,7 +1353,6 @@ function CaNodeComponent({ id, data }: NodeProps) {
    *  CSS `.node { min-width }` floor anyway, and a double-click on the grip
    *  restores auto-sizing. */
   const exprNaturalWRef = useRef<number | null>(null);
-  const nodeRootRef = useRef<HTMLDivElement | null>(null);
   /** Expression node: the rendered formula is the node's FACE and the text
    *  editor collapses below it. This latch keeps the editor open while the
    *  user is TYPING — without it, the moment a fresh node's text first parses
@@ -1810,19 +1937,21 @@ function CaNodeComponent({ id, data }: NodeProps) {
         <div className={styles.warningBadge} title={configIssues.join('\n')}>!</div>
       )}
       <div className={`${styles.body} nodrag`} onDoubleClick={stopAll}>
-        {/* EXPLICIT CONTROLS — pick mode, classes B/C (and any class-A key whose
-            widget is HIDDEN because the port is wired). Rendered from
-            `eligibleControlKeys`' output, so it structurally cannot offer a
-            parameter the resolver does not know about; a node with nothing
-            eligible renders NO overlay (the enabled-control doctrine). Class-A
-            keys whose widget IS on screen are outlined in place instead — see
-            the input-port block below, which is the exact complement of this
-            list. At the TOP of the body so the offer is where the eye lands. */}
-        {pickOverlayRows.length > 0 && (
-          <div className={styles.pickOverlay}>
-            {pickOverlayRows.map(r => (
+        {/* EXPLICIT CONTROLS — pick mode's SECONDARY offer: the eligible
+            parameters whose widget is NOT on screen right now, so no hotspot
+            could be measured over one. That is a WIRED port (which renders no
+            widget at all), a widget behind a collapsed editor, and one hidden by
+            `hiddenPorts` or a mode. They are bindable, so hiding them would put
+            a real parameter out of reach — but they are deliberately
+            subordinate: everything visible is offered ON its own widget
+            instead. A node with nothing here renders nothing. */}
+        {(pickFallbackRows.length > 0 || pickChainFallback.length > 0) && (
+          <div className={styles.pickOverlay} title="Eligible parameters that are not shown on this node right now">
+            <div className={styles.pickOverlayHead}>not shown on the node</div>
+            {pickFallbackRows.map(r => (
               <button
                 key={r.configKey}
+                type="button"
                 className={`${styles.pickRow} nodrag`}
                 onMouseDown={e => e.stopPropagation()}
                 onClick={e => { e.stopPropagation(); bindPick(r.configKey, r.label); }}
@@ -1832,17 +1961,9 @@ function CaNodeComponent({ id, data }: NodeProps) {
                 {r.wired && <span className={styles.pickRowNote}>wired</span>}
               </button>
             ))}
-          </div>
-        )}
-
-        {/* EXPLICIT CONTROLS — pick mode, CHAINING (D4). A nested macro INSTANCE
-            offers its own def's controls, so an outer macro can re-expose one
-            knob of an inner one. A row that would close a cycle is greyed with
-            the reason rather than hidden — and the verdict is the resolver's own
-            `resolveTarget`, so the offer and the resolution cannot disagree. */}
-        {pickControlRows.length > 0 && (
-          <div className={styles.pickOverlay}>
-            {pickControlRows.map(r => (
+            {/* CHAINING (D4) rows whose control row is likewise not rendered —
+                a collapsed group box on the nested instance. */}
+            {pickChainFallback.map(r => (
               <button
                 key={r.id}
                 type="button"
@@ -1866,7 +1987,7 @@ function CaNodeComponent({ id, data }: NodeProps) {
 
         {/* Node-specific config UI */}
         {nodeData.nodeType === 'getCellAttribute' && (
-          <select
+          <select data-ctl-key="attributeId"
             className={styles.select}
             value={(nodeData.config.attributeId as string) || ''}
             onChange={e => updateConfig('attributeId', e.target.value)}
@@ -1882,7 +2003,7 @@ function CaNodeComponent({ id, data }: NodeProps) {
           || nodeData.nodeType === 'filterAgents'
           || nodeData.nodeType === 'getAgentAttribute') && (
           <>
-            <select
+            <select data-ctl-key="attributeId"
               className={styles.select}
               value={(nodeData.config.attributeId as string) || ''}
               onChange={e => updateConfig('attributeId', e.target.value)}
@@ -1890,7 +2011,7 @@ function CaNodeComponent({ id, data }: NodeProps) {
               {elementOptions('attributeId')}
             </select>
             {nodeData.nodeType === 'filterAgents' && (
-              <select
+              <select data-ctl-key="operation"
                 className={styles.select}
                 value={(nodeData.config.operation as string) || 'equals'}
                 onChange={e => updateConfig('operation', e.target.value)}
@@ -1908,7 +2029,7 @@ function CaNodeComponent({ id, data }: NodeProps) {
 
         {/* Generic Agent Platform — Join Agents op. */}
         {nodeData.nodeType === 'joinAgents' && (
-          <select
+          <select data-ctl-key="operation"
             className={styles.select}
             value={(nodeData.config.operation as string) || 'union'}
             onChange={e => updateConfig('operation', e.target.value)}
@@ -1922,7 +2043,7 @@ function CaNodeComponent({ id, data }: NodeProps) {
             (torus-shortest vector from a Reference agent, default self). Relative
             reveals the `Reference` input via hiddenPorts. */}
         {nodeData.nodeType === 'getAgentPosition' && (
-          <select
+          <select data-ctl-key="mode"
             className={styles.select}
             value={(nodeData.config.mode as string) || 'absolute'}
             onChange={e => updateConfig('mode', e.target.value)}
@@ -1937,7 +2058,7 @@ function CaNodeComponent({ id, data }: NodeProps) {
             the attribute is picked HERE rather than in the Attributes panel's
             active-graph list. */}
         {(nodeData.nodeType === 'getBondAttribute' || nodeData.nodeType === 'setBondAttribute') && (
-          <select
+          <select data-ctl-key="attributeId"
             className={styles.select}
             value={(nodeData.config.attributeId as string) || ''}
             onChange={e => updateConfig('attributeId', e.target.value)}
@@ -1957,7 +2078,7 @@ function CaNodeComponent({ id, data }: NodeProps) {
           const partAttr = bondAttrsOf(model).find(a => a.id === nodeData.config.partitionAttributeId);
           return (
             <>
-              <select
+              <select data-ctl-key="partition"
                 className={styles.select}
                 value={mode}
                 onChange={e => updateConfig('partition', e.target.value)}
@@ -1968,7 +2089,7 @@ function CaNodeComponent({ id, data }: NodeProps) {
                 <option value="byBondAttribute">Bonds: by bond attribute</option>
               </select>
               {mode === 'byBondAttribute' && (
-                <select
+                <select data-ctl-key="partitionAttributeId"
                   className={styles.select}
                   value={(nodeData.config.partitionAttributeId as string) || ''}
                   onChange={e => updateConfig('partitionAttributeId', e.target.value)}
@@ -1992,7 +2113,7 @@ function CaNodeComponent({ id, data }: NodeProps) {
                 </div>
               )}
               {mode === 'byBondAttribute' && partAttr && (partAttr.type === 'integer' || partAttr.type === 'float') && (
-                <InlineNumberInput
+                <InlineNumberInput data-ctl-key="partitionThreshold"
                   className={styles.numberInput}
                   value={String(nodeData.config.partitionThreshold ?? '0.5')}
                   onChange={(v: string) => updateConfig('partitionThreshold', v)}
@@ -2000,7 +2121,7 @@ function CaNodeComponent({ id, data }: NodeProps) {
                   title="Threshold: value < t goes to daughter A, >= t to daughter B"
                 />
               )}
-              <select
+              <select data-ctl-key="daughterBond"
                 className={styles.select}
                 value={(nodeData.config.daughterBond as string) || 'auto'}
                 onChange={e => updateConfig('daughterBond', e.target.value)}
@@ -2015,7 +2136,7 @@ function CaNodeComponent({ id, data }: NodeProps) {
                   engine coerce a stale `volume` back to `area` there, so the row
                   could not do anything (the enabled-control rule). */}
               {is3dModelLike(model) && (
-                <select
+                <select data-ctl-key="conserve"
                   className={styles.select}
                   value={(nodeData.config.conserve as string) || 'area'}
                   onChange={e => updateConfig('conserve', e.target.value)}
@@ -2035,14 +2156,14 @@ function CaNodeComponent({ id, data }: NodeProps) {
             re-derives the ports via buildCensusPorts. */}
         {nodeData.nodeType === 'neighbourCensus' && (
           <>
-            <select
+            <select data-ctl-key="attributeId"
               className={styles.select}
               value={(nodeData.config.attributeId as string) || ''}
               onChange={e => updateConfig('attributeId', e.target.value)}
             >
               {elementOptions('attributeId')}
             </select>
-            <select
+            <select data-ctl-key="source"
               className={styles.select}
               value={(nodeData.config.source as string) || 'bonded'}
               onChange={e => updateConfig('source', e.target.value)}
@@ -2065,7 +2186,7 @@ function CaNodeComponent({ id, data }: NodeProps) {
           || nodeData.nodeType === 'affectCellsUnder'
           || nodeData.nodeType === 'secreteToField') && (
           <>
-            <select
+            <select data-ctl-key="attributeId"
               className={styles.select}
               value={(nodeData.config.attributeId as string) || ''}
               onChange={e => updateConfig('attributeId', e.target.value)}
@@ -2073,7 +2194,7 @@ function CaNodeComponent({ id, data }: NodeProps) {
               {elementOptions('attributeId')}
             </select>
             {nodeData.nodeType === 'readCellsUnder' && (
-              <select
+              <select data-ctl-key="reduce"
                 className={styles.select}
                 value={(nodeData.config.reduce as string) || 'mean'}
                 onChange={e => updateConfig('reduce', e.target.value)}
@@ -2085,7 +2206,7 @@ function CaNodeComponent({ id, data }: NodeProps) {
               </select>
             )}
             {nodeData.nodeType === 'affectCellsUnder' && (
-              <select
+              <select data-ctl-key="op"
                 className={styles.select}
                 value={(nodeData.config.op as string) || 'add'}
                 onChange={e => updateConfig('op', e.target.value)}
@@ -2105,14 +2226,14 @@ function CaNodeComponent({ id, data }: NodeProps) {
         {(nodeData.nodeType === 'getNeighborsAttribute'
           || nodeData.nodeType === 'setNeighborhoodAttribute') && (
           <>
-            <select
+            <select data-ctl-key="neighborhoodId"
               className={styles.select}
               value={(nodeData.config.neighborhoodId as string) || ''}
               onChange={e => updateConfig('neighborhoodId', e.target.value)}
             >
               {elementOptions('neighborhoodId')}
             </select>
-            <select
+            <select data-ctl-key="attributeId"
               className={styles.select}
               value={(nodeData.config.attributeId as string) || ''}
               onChange={e => updateConfig('attributeId', e.target.value)}
@@ -2128,7 +2249,7 @@ function CaNodeComponent({ id, data }: NodeProps) {
           || nodeData.nodeType === 'getNeighborsAttrByIndexes'
           || nodeData.nodeType === 'setNeighborAttributeByIndex'
           || nodeData.nodeType === 'filterNeighbors') && (
-          <select
+          <select data-ctl-key="attributeId"
             className={styles.select}
             value={(nodeData.config.attributeId as string) || ''}
             onChange={e => updateConfig('attributeId', e.target.value)}
@@ -2138,7 +2259,7 @@ function CaNodeComponent({ id, data }: NodeProps) {
         )}
 
         {nodeData.nodeType === 'filterNeighbors' && (
-          <select
+          <select data-ctl-key="operation"
             className={styles.select}
             value={(nodeData.config.operation as string) || 'equals'}
             onChange={e => updateConfig('operation', e.target.value)}
@@ -2153,7 +2274,7 @@ function CaNodeComponent({ id, data }: NodeProps) {
         )}
 
         {nodeData.nodeType === 'joinNeighbors' && (
-          <select
+          <select data-ctl-key="operation"
             className={styles.select}
             value={(nodeData.config.operation as string) || 'intersection'}
             onChange={e => updateConfig('operation', e.target.value)}
@@ -2192,7 +2313,7 @@ function CaNodeComponent({ id, data }: NodeProps) {
                 {variegated && <option value="faceLabel">Face Label</option>}
               </select>
               {nodeData.config.constType === 'bool' ? (
-                <select
+                <select data-ctl-key="constValue"
                   className={styles.select}
                   value={String(nodeData.config.constValue) === 'true' ? 'true' : 'false'}
                   onChange={e => updateConfig('constValue', e.target.value)}
@@ -2201,7 +2322,7 @@ function CaNodeComponent({ id, data }: NodeProps) {
                   <option value="false">false</option>
                 </select>
               ) : nodeData.config.constType === 'orientation' ? (
-                <select
+                <select data-ctl-key="constValue"
                   className={styles.select}
                   value={(nodeData.config.constValue as string) || '0'}
                   onChange={e => updateConfig('constValue', e.target.value)}
@@ -2228,7 +2349,7 @@ function CaNodeComponent({ id, data }: NodeProps) {
                     const tagAttr = tagAttrScope.find(a => a.id === nodeData.config.tagAttributeId);
                     const opts = tagAttr?.tagOptions || [];
                     return opts.length > 0 ? (
-                      <select
+                      <select data-ctl-key="constValue"
                         className={styles.select}
                         value={(nodeData.config.constValue as string) || '0'}
                         onChange={e => updateConfig('constValue', e.target.value)}
@@ -2253,7 +2374,7 @@ function CaNodeComponent({ id, data }: NodeProps) {
                       {palettes.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
                     </select>
                   )}
-                  <select
+                  <select data-ctl-key="constValue"
                     className={styles.select}
                     value={(nodeData.config.constValue as string) || 'none'}
                     onChange={e => updateConfig('constValue', e.target.value)}
@@ -2266,7 +2387,7 @@ function CaNodeComponent({ id, data }: NodeProps) {
                   </select>
                 </>
               ) : (
-                <InlineNumberInput
+                <InlineNumberInput data-ctl-key="constValue"
                   className={styles.input}
                   value={(nodeData.config.constValue as string) || '0'}
                   onChange={v => updateConfig('constValue', v)}
@@ -2279,13 +2400,13 @@ function CaNodeComponent({ id, data }: NodeProps) {
         {nodeData.nodeType === 'periodicStep' && (
           <>
             <label style={{ fontSize: '0.6rem', color: '#999' }}>Period (generations)</label>
-            <InlineNumberInput
+            <InlineNumberInput data-ctl-key="period"
               className={styles.input}
               value={(nodeData.config.period as string) ?? '10'}
               onChange={v => updateConfig('period', v)}
             />
             <label style={{ fontSize: '0.6rem', color: '#999' }}>Phase (0…Period−1)</label>
-            <InlineNumberInput
+            <InlineNumberInput data-ctl-key="phase"
               className={styles.input}
               value={(nodeData.config.phase as string) ?? '0'}
               onChange={v => updateConfig('phase', v)}
@@ -2296,13 +2417,13 @@ function CaNodeComponent({ id, data }: NodeProps) {
         {nodeData.nodeType === 'getAgentsInView' && (
           <>
             <label style={{ fontSize: '0.6rem', color: '#999' }}>Half-angle°</label>
-            <InlineNumberInput
+            <InlineNumberInput data-ctl-key="halfAngle"
               className={styles.input}
               value={(nodeData.config.halfAngle as string) ?? '60'}
               onChange={v => updateConfig('halfAngle', v)}
             />
             <label style={{ fontSize: '0.6rem', color: '#999' }}>Heading</label>
-            <select
+            <select data-ctl-key="headingSource"
               className={styles.select}
               value={(nodeData.config.headingSource as string) ?? 'velocity'}
               onChange={e => updateConfig('headingSource', e.target.value)}
@@ -2314,7 +2435,7 @@ function CaNodeComponent({ id, data }: NodeProps) {
             {nodeData.config.headingSource === 'facing' && (
               <>
                 <label style={{ fontSize: '0.6rem', color: '#999' }}>Facing attr</label>
-                <select
+                <select data-ctl-key="facingAttributeId"
                   className={styles.select}
                   value={(nodeData.config.facingAttributeId as string) ?? ''}
                   onChange={e => updateConfig('facingAttributeId', e.target.value)}
@@ -2333,13 +2454,13 @@ function CaNodeComponent({ id, data }: NodeProps) {
         {nodeData.nodeType === 'senseHemifield' && (
           <>
             <label style={{ fontSize: '0.6rem', color: '#999' }}>Half-angle°</label>
-            <InlineNumberInput
+            <InlineNumberInput data-ctl-key="halfAngle"
               className={styles.input}
               value={(nodeData.config.halfAngle as string) ?? '90'}
               onChange={v => updateConfig('halfAngle', v)}
             />
             <label style={{ fontSize: '0.6rem', color: '#999' }}>Heading</label>
-            <select
+            <select data-ctl-key="headingSource"
               className={styles.select}
               value={(nodeData.config.headingSource as string) ?? 'velocity'}
               onChange={e => updateConfig('headingSource', e.target.value)}
@@ -2351,7 +2472,7 @@ function CaNodeComponent({ id, data }: NodeProps) {
             {nodeData.config.headingSource === 'facing' && (
               <>
                 <label style={{ fontSize: '0.6rem', color: '#999' }}>Facing attr</label>
-                <select
+                <select data-ctl-key="facingAttributeId"
                   className={styles.select}
                   value={(nodeData.config.facingAttributeId as string) ?? ''}
                   onChange={e => updateConfig('facingAttributeId', e.target.value)}
@@ -2372,7 +2493,7 @@ function CaNodeComponent({ id, data }: NodeProps) {
           const isBetween = op === 'between' || op === 'notBetween';
           return (
             <>
-              <select
+              <select data-ctl-key="operation"
                 className={styles.select}
                 value={op}
                 onChange={e => updateConfig('operation', e.target.value)}
@@ -2386,7 +2507,7 @@ function CaNodeComponent({ id, data }: NodeProps) {
               </select>
               {isBetween && (
                 <div style={{ display: 'flex', gap: 4 }}>
-                  <select
+                  <select data-ctl-key="lowOp"
                     className={styles.select}
                     style={{ flex: 1 }}
                     value={(nodeData.config.lowOp as string) || '>='}
@@ -2395,7 +2516,7 @@ function CaNodeComponent({ id, data }: NodeProps) {
                     <option value=">=">&gt;=</option>
                     <option value=">">&gt;</option>
                   </select>
-                  <select
+                  <select data-ctl-key="highOp"
                     className={styles.select}
                     style={{ flex: 1 }}
                     value={(nodeData.config.highOp as string) || '<='}
@@ -2460,7 +2581,7 @@ function CaNodeComponent({ id, data }: NodeProps) {
                   {elementOptions('tagAttributeId')}
                 </select>
               )}
-              <select
+              <select data-ctl-key="operation"
                 className={styles.select}
                 value={op}
                 onChange={e => updateConfig('operation', e.target.value)}
@@ -2480,7 +2601,7 @@ function CaNodeComponent({ id, data }: NodeProps) {
               </select>
               {isBetween && (
                 <div style={{ display: 'flex', gap: 4 }}>
-                  <select
+                  <select data-ctl-key="lowOp"
                     className={styles.select}
                     style={{ flex: 1 }}
                     value={(nodeData.config.lowOp as string) || '>='}
@@ -2489,7 +2610,7 @@ function CaNodeComponent({ id, data }: NodeProps) {
                     <option value=">=">&gt;=</option>
                     <option value=">">&gt;</option>
                   </select>
-                  <select
+                  <select data-ctl-key="highOp"
                     className={styles.select}
                     style={{ flex: 1 }}
                     value={(nodeData.config.highOp as string) || '<='}
@@ -2505,7 +2626,7 @@ function CaNodeComponent({ id, data }: NodeProps) {
         })()}
 
         {nodeData.nodeType === 'logicOperator' && (
-          <select
+          <select data-ctl-key="operation"
             className={styles.select}
             value={(nodeData.config.operation as string) || 'OR'}
             onChange={e => updateConfig('operation', e.target.value)}
@@ -2518,7 +2639,7 @@ function CaNodeComponent({ id, data }: NodeProps) {
         )}
 
         {(nodeData.nodeType === 'setAttribute' || nodeData.nodeType === 'setCellAtPosition') && (
-          <select
+          <select data-ctl-key="attributeId"
             className={styles.select}
             value={(nodeData.config.attributeId as string) || ''}
             onChange={e => updateConfig('attributeId', e.target.value)}
@@ -2557,7 +2678,7 @@ function CaNodeComponent({ id, data }: NodeProps) {
                     bindable as a control — but the LIST is still the shared one. */}
                 {elementOptions('attributeId')}
               </select>
-              <select
+              <select data-ctl-key="operation"
                 className={styles.select}
                 value={(nodeData.config.operation as string) || ops![0]!.value}
                 onChange={e => updateConfig('operation', e.target.value)}
@@ -2571,7 +2692,7 @@ function CaNodeComponent({ id, data }: NodeProps) {
         })()}
 
         {nodeData.nodeType === 'setIndicator' && (
-          <select
+          <select data-ctl-key="indicatorId"
             className={styles.select}
             value={(nodeData.config.indicatorId as string) || ''}
             onChange={e => updateConfig('indicatorId', e.target.value)}
@@ -2587,7 +2708,7 @@ function CaNodeComponent({ id, data }: NodeProps) {
             omitting them is what made this node look broken on agent/GRA models,
             whose indicators are all graph/linked. See model/indicatorValue.ts. */}
         {nodeData.nodeType === 'getIndicator' && (
-          <select
+          <select data-ctl-key="indicatorId"
             className={styles.select}
             value={(nodeData.config.indicatorId as string) || ''}
             onChange={e => updateConfig('indicatorId', e.target.value)}
@@ -2602,7 +2723,7 @@ function CaNodeComponent({ id, data }: NodeProps) {
           // The kind filter (Set Variable wants scalars, Set Array Element wants
           // arrays, Get Variable takes either) and the Agents-graph variable set
           // both live in the shared list — see `varOpts` in explicitControls.
-          <select
+          <select data-ctl-key="variableId"
             className={styles.select}
             value={(nodeData.config.variableId as string) || ''}
             onChange={e => updateConfig('variableId', e.target.value)}
@@ -2642,7 +2763,7 @@ function CaNodeComponent({ id, data }: NodeProps) {
                     bindable as a control. */}
                 {elementOptions('indicatorId')}
               </select>
-              <select
+              <select data-ctl-key="operation"
                 className={styles.select}
                 value={(nodeData.config.operation as string) || ops![0]!.value}
                 onChange={e => updateConfig('operation', e.target.value)}
@@ -2710,7 +2831,7 @@ function CaNodeComponent({ id, data }: NodeProps) {
                   the shared list carries the agent mappings there and the cell
                   mappings on Cells; the "Current Simulator Selected" sentinel is
                   part of that list and works on both. */}
-              <select
+              <select data-ctl-key="mappingId"
                 className={styles.select}
                 value={(nodeData.config.mappingId as string) || ''}
                 onChange={e => updateConfig('mappingId', e.target.value)}
@@ -2770,7 +2891,7 @@ function CaNodeComponent({ id, data }: NodeProps) {
         })()}
 
         {nodeData.nodeType === 'inputColor' && (
-          <select
+          <select data-ctl-key="mappingId"
             className={styles.select}
             value={(nodeData.config.mappingId as string) || ''}
             onChange={e => updateConfig('mappingId', e.target.value)}
@@ -2780,7 +2901,7 @@ function CaNodeComponent({ id, data }: NodeProps) {
         )}
 
         {nodeData.nodeType === 'outputMapping' && (
-          <select
+          <select data-ctl-key="mappingId"
             className={styles.select}
             value={(nodeData.config.mappingId as string) || ''}
             onChange={e => updateConfig('mappingId', e.target.value)}
@@ -2790,7 +2911,7 @@ function CaNodeComponent({ id, data }: NodeProps) {
         )}
 
         {nodeData.nodeType === 'assertActiveViewer' && (
-          <select
+          <select data-ctl-key="mappingId"
             className={styles.select}
             title="The IF ACTIVE branch runs only while this Attribute→Color mapping is the viewer selected in the simulator. DONE always runs."
             value={(nodeData.config.mappingId as string) || ''}
@@ -2801,7 +2922,7 @@ function CaNodeComponent({ id, data }: NodeProps) {
         )}
 
         {nodeData.nodeType === 'agentOutputMapping' && (
-          <select
+          <select data-ctl-key="mappingId"
             className={styles.select}
             value={(nodeData.config.mappingId as string) || ''}
             onChange={e => updateConfig('mappingId', e.target.value)}
@@ -2814,7 +2935,7 @@ function CaNodeComponent({ id, data }: NodeProps) {
             agent Paint brush's tabs. Direction-filtered so an input root can
             never be pointed at a view (and vice versa). */}
         {nodeData.nodeType === 'agentInputMapping' && (
-          <select
+          <select data-ctl-key="mappingId"
             className={styles.select}
             value={(nodeData.config.mappingId as string) || ''}
             onChange={e => updateConfig('mappingId', e.target.value)}
@@ -2827,6 +2948,10 @@ function CaNodeComponent({ id, data }: NodeProps) {
           const setSprite = nodeData.config.setSprite !== false;
           const cbx = (key: string, label: string, checked: boolean, title: string) => (
             <label
+              // The pick-mode marker goes on the whole ROW, not the 13px
+              // checkbox: the overlay is measured from the marked element, and
+              // a hotspot the size of a checkbox is not a target.
+              data-ctl-key={key}
               className="nodrag"
               style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, cursor: 'pointer', marginTop: 4 }}
               onMouseDown={e => e.stopPropagation()}
@@ -2841,7 +2966,7 @@ function CaNodeComponent({ id, data }: NodeProps) {
             <>
               {cbx('setSprite', 'Change sprite', setSprite, 'Switch which sprite this agent is drawn as')}
               {setSprite && (
-                <select
+                <select data-ctl-key="spriteId"
                   className={styles.select}
                   value={(nodeData.config.spriteId as string) || ''}
                   onChange={e => updateConfig('spriteId', e.target.value)}
@@ -2854,7 +2979,7 @@ function CaNodeComponent({ id, data }: NodeProps) {
               {cbx('setSpeed', 'Set speed', !!nodeData.config.setSpeed, 'Set playback speed in frames per step — negative = reverse, 0 = hold (the Speed input)')}
               {cbx('setRotation', 'Set rotation', !!nodeData.config.setRotation, 'Set the sprite facing — an angle, or a direction vector the art aligns to')}
               {nodeData.config.setRotation && (
-                <select
+                <select data-ctl-key="rotationMode"
                   className={styles.select}
                   value={(nodeData.config.rotationMode as string) || 'angle'}
                   onChange={e => updateConfig('rotationMode', e.target.value)}
@@ -2887,7 +3012,7 @@ function CaNodeComponent({ id, data }: NodeProps) {
         )}
 
         {nodeData.nodeType === 'stopEvent' && (
-          <input
+          <input data-ctl-key="message"
             className={styles.input}
             placeholder="Stop message..."
             value={(nodeData.config.message as string) ?? ''}
@@ -2900,7 +3025,7 @@ function CaNodeComponent({ id, data }: NodeProps) {
 
         {/* ---------- Overseer node configs (experiment orchestration) ---------- */}
         {nodeData.nodeType === 'ovRandomizeTable' && (
-          <select
+          <select data-ctl-key="tableId"
             className={styles.select}
             value={(nodeData.config.tableId as string) || ''}
             onChange={e => updateConfig('tableId', e.target.value)}
@@ -2909,7 +3034,7 @@ function CaNodeComponent({ id, data }: NodeProps) {
           </select>
         )}
         {nodeData.nodeType === 'ovSetModelAttribute' && (
-          <select
+          <select data-ctl-key="attributeId"
             className={styles.select}
             value={(nodeData.config.attributeId as string) || ''}
             onChange={e => updateConfig('attributeId', e.target.value)}
@@ -2941,7 +3066,7 @@ function CaNodeComponent({ id, data }: NodeProps) {
             : null);
           return (
             <>
-              <select
+              <select data-ctl-key="indicatorId"
                 className={styles.select}
                 value={(nodeData.config.indicatorId as string) || ''}
                 onChange={e => updateConfig('indicatorId', e.target.value)}
@@ -2990,7 +3115,7 @@ function CaNodeComponent({ id, data }: NodeProps) {
               : null;
           return (
             <>
-              <select
+              <select data-ctl-key="indicatorId"
                 className={styles.select}
                 value={(nodeData.config.indicatorId as string) || ''}
                 onChange={e => updateConfig('indicatorId', e.target.value)}
@@ -3020,7 +3145,7 @@ function CaNodeComponent({ id, data }: NodeProps) {
                   onDoubleClick={stopAll}
                 />
               ))}
-              <input
+              <input data-ctl-key="series"
                 className={styles.input}
                 placeholder="Series name..."
                 value={(nodeData.config.series as string) ?? ''}
@@ -3029,7 +3154,7 @@ function CaNodeComponent({ id, data }: NodeProps) {
                 onDoubleClick={stopAll}
                 title="The spatial series this node appends one run-curve to."
               />
-              <input
+              <input data-ctl-key="chart"
                 className={styles.input}
                 placeholder="Chart (group)..."
                 value={(nodeData.config.chart as string) ?? ''}
@@ -3043,7 +3168,7 @@ function CaNodeComponent({ id, data }: NodeProps) {
         })()}
 
         {nodeData.nodeType === 'ovLoadPreset' && (
-          <select
+          <select data-ctl-key="presetId"
             className={styles.select}
             value={(nodeData.config.presetId as string) || ''}
             onChange={e => updateConfig('presetId', e.target.value)}
@@ -3056,7 +3181,7 @@ function CaNodeComponent({ id, data }: NodeProps) {
           || nodeData.nodeType === 'ovClearSeries'
           || nodeData.nodeType === 'ovSeriesStat') && (
           <>
-            <input
+            <input data-ctl-key="series"
               className={styles.input}
               placeholder="Series name..."
               value={(nodeData.config.series as string) ?? ''}
@@ -3066,7 +3191,7 @@ function CaNodeComponent({ id, data }: NodeProps) {
               title="The sample series this node targets (created on first sample)."
             />
             {nodeData.nodeType === 'ovCollectSample' && (
-              <select
+              <select data-ctl-key="scope"
                 className={styles.select}
                 value={(nodeData.config.scope as string) || 'experiment'}
                 onChange={e => updateConfig('scope', e.target.value)}
@@ -3077,7 +3202,7 @@ function CaNodeComponent({ id, data }: NodeProps) {
               </select>
             )}
             {nodeData.nodeType === 'ovSeriesStat' && (
-              <select
+              <select data-ctl-key="op"
                 className={styles.select}
                 value={(nodeData.config.op as string) || 'mean'}
                 onChange={e => updateConfig('op', e.target.value)}
@@ -3097,7 +3222,7 @@ function CaNodeComponent({ id, data }: NodeProps) {
 
         {nodeData.nodeType === 'ovSweepValues' && (
           <>
-            <select
+            <select data-ctl-key="mode"
               className={styles.select}
               value={(nodeData.config.mode as string) || 'list'}
               onChange={e => updateConfig('mode', e.target.value)}
@@ -3106,7 +3231,7 @@ function CaNodeComponent({ id, data }: NodeProps) {
               <option value="linspace">Evenly spaced (linspace)</option>
             </select>
             {(nodeData.config.mode || 'list') === 'list' ? (
-              <input
+              <input data-ctl-key="list"
                 className={styles.input}
                 placeholder="1, 2, 5, 10"
                 value={(nodeData.config.list as string) ?? ''}
@@ -3117,19 +3242,19 @@ function CaNodeComponent({ id, data }: NodeProps) {
               />
             ) : (
               <>
-                <InlineNumberInput
+                <InlineNumberInput data-ctl-key="from"
                   className={styles.input}
                   placeholder="from"
                   value={(nodeData.config.from as string) || '0'}
                   onChange={v => updateConfig('from', v)}
                 />
-                <InlineNumberInput
+                <InlineNumberInput data-ctl-key="to"
                   className={styles.input}
                   placeholder="to"
                   value={(nodeData.config.to as string) || '1'}
                   onChange={v => updateConfig('to', v)}
                 />
-                <InlineNumberInput
+                <InlineNumberInput data-ctl-key="steps"
                   className={styles.input}
                   placeholder="steps"
                   value={(nodeData.config.steps as string) || '5'}
@@ -3141,7 +3266,7 @@ function CaNodeComponent({ id, data }: NodeProps) {
         )}
 
         {nodeData.nodeType === 'ovLog' && (
-          <input
+          <input data-ctl-key="text"
             className={styles.input}
             placeholder="value = {value} (gen {gen})"
             value={(nodeData.config.text as string) ?? ''}
@@ -3153,7 +3278,7 @@ function CaNodeComponent({ id, data }: NodeProps) {
         )}
 
         {nodeData.nodeType === 'ovStopExperiment' && (
-          <input
+          <input data-ctl-key="message"
             className={styles.input}
             placeholder="Stop message..."
             value={(nodeData.config.message as string) ?? ''}
@@ -3165,7 +3290,7 @@ function CaNodeComponent({ id, data }: NodeProps) {
         )}
 
         {nodeData.nodeType === 'ovScreenshot' && (
-          <input
+          <input data-ctl-key="label"
             className={styles.input}
             placeholder="Label..."
             value={(nodeData.config.label as string) ?? ''}
@@ -3183,7 +3308,7 @@ function CaNodeComponent({ id, data }: NodeProps) {
           const rType = (nodeData.config.randomType as string) || 'float';
           return (
             <>
-              <select
+              <select data-ctl-key="randomType"
                 className={styles.select}
                 value={rType}
                 onChange={e => updateConfig('randomType', e.target.value)}
@@ -3197,7 +3322,7 @@ function CaNodeComponent({ id, data }: NodeProps) {
                 <option value="color">Color</option>
               </select>
               {rType === 'float' && (
-                <select
+                <select data-ctl-key="distribution"
                   className={styles.select}
                   title="Uniform: every value in [Min, Max) equally likely. Normal: a Gaussian bell around Mean (2 RNG draws). Exponential: waiting times with the given Mean (long tail)."
                   value={(nodeData.config.distribution as string) || 'uniform'}
@@ -3209,7 +3334,7 @@ function CaNodeComponent({ id, data }: NodeProps) {
                 </select>
               )}
               {rType === 'vector' && (
-                <select
+                <select data-ctl-key="refSource"
                   className={styles.select}
                   title="Where the random direction is centred: a compass Angle° (0° = north / up, 90° = east) or a wired reference direction."
                   value={(nodeData.config.refSource as string) || 'angle'}
@@ -3268,7 +3393,7 @@ function CaNodeComponent({ id, data }: NodeProps) {
         )}
 
         {nodeData.nodeType === 'arithmeticOperator' && (
-          <select
+          <select data-ctl-key="operation"
             className={styles.select}
             value={(nodeData.config.operation as string) || '+'}
             onChange={e => updateConfig('operation', e.target.value)}
@@ -3298,7 +3423,7 @@ function CaNodeComponent({ id, data }: NodeProps) {
         )}
 
         {nodeData.nodeType === 'vectorOp' && (
-          <select
+          <select data-ctl-key="op"
             className={styles.select}
             value={(nodeData.config.op as string) || 'add'}
             onChange={e => updateConfig('op', e.target.value)}
@@ -3332,7 +3457,7 @@ function CaNodeComponent({ id, data }: NodeProps) {
             onClick={e => e.stopPropagation()}
             title="Feed a single force vector (from Vector Op / Make Vector) instead of the X / Y / Z components."
           >
-            <input
+            <input data-ctl-key="vectorInput"
               type="checkbox"
               checked={!!nodeData.config.vectorInput}
               onChange={e => updateConfig('vectorInput', e.target.checked)}
@@ -3579,7 +3704,7 @@ function CaNodeComponent({ id, data }: NodeProps) {
         })()}
 
         {nodeData.nodeType === 'groupStatement' && (
-          <select
+          <select data-ctl-key="operation"
             className={styles.select}
             value={(nodeData.config.operation as string) || 'allIs'}
             onChange={e => updateConfig('operation', e.target.value)}
@@ -3595,7 +3720,7 @@ function CaNodeComponent({ id, data }: NodeProps) {
         )}
 
         {nodeData.nodeType === 'groupOperator' && (
-          <select
+          <select data-ctl-key="operation"
             className={styles.select}
             value={(nodeData.config.operation as string) || 'sum'}
             onChange={e => updateConfig('operation', e.target.value)}
@@ -3613,7 +3738,7 @@ function CaNodeComponent({ id, data }: NodeProps) {
         )}
 
         {nodeData.nodeType === 'aggregate' && (
-          <select
+          <select data-ctl-key="operation"
             className={styles.select}
             value={(nodeData.config.operation as string) || 'sum'}
             onChange={e => updateConfig('operation', e.target.value)}
@@ -3688,7 +3813,7 @@ function CaNodeComponent({ id, data }: NodeProps) {
 
               {/* First match only toggle */}
               <label style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: '0.68rem', color: '#a0b0c0', cursor: 'pointer' }}>
-                <input
+                <input data-ctl-key="firstMatchOnly"
                   type="checkbox"
                   checked={firstMatch}
                   onChange={e => updateConfig('firstMatchOnly', e.target.checked)}
@@ -3839,7 +3964,7 @@ function CaNodeComponent({ id, data }: NodeProps) {
 
         {nodeData.nodeType === 'loop' && (
           // Count vs Range mode — swaps the Count port for From/To (hiddenPorts).
-          <select
+          <select data-ctl-key="mode"
             className={styles.select}
             value={(nodeData.config.mode as string) || 'count'}
             onChange={e => updateConfig('mode', e.target.value)}
@@ -3856,14 +3981,14 @@ function CaNodeComponent({ id, data }: NodeProps) {
           const tagNames = Object.values(tags);
           return (
             <>
-              <select
+              <select data-ctl-key="neighborhoodId"
                 className={styles.select}
                 value={(nodeData.config.neighborhoodId as string) || ''}
                 onChange={e => updateConfig('neighborhoodId', e.target.value)}
               >
                 {elementOptions('neighborhoodId')}
               </select>
-              <select
+              <select data-ctl-key="attributeId"
                 className={styles.select}
                 value={(nodeData.config.attributeId as string) || ''}
                 onChange={e => updateConfig('attributeId', e.target.value)}
@@ -3918,7 +4043,7 @@ function CaNodeComponent({ id, data }: NodeProps) {
           // labels (Get Facing Labels) or tag reads — depends on the table's
           // row/col key sources.
           return (
-            <select
+            <select data-ctl-key="tableId"
               className={styles.select}
               value={(nodeData.config.tableId as string) || ''}
               onChange={e => updateConfig('tableId', e.target.value)}
@@ -3930,7 +4055,7 @@ function CaNodeComponent({ id, data }: NodeProps) {
 
         {nodeData.nodeType === 'getGridDimensions' && (
           <label style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: '0.68rem', color: '#a0b0c0', cursor: 'pointer' }}>
-            <input
+            <input data-ctl-key="withCenter"
               type="checkbox"
               checked={!!nodeData.config.withCenter}
               onChange={e => updateConfig('withCenter', e.target.checked)}
@@ -3942,7 +4067,7 @@ function CaNodeComponent({ id, data }: NodeProps) {
 
         {nodeData.nodeType === 'getAllFacingLabels' && (
           <label style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: '0.68rem', color: '#a0b0c0', cursor: 'pointer' }}>
-            <input
+            <input data-ctl-key="cardinalsOnly"
               type="checkbox"
               checked={!!nodeData.config.cardinalsOnly}
               onChange={e => updateConfig('cardinalsOnly', e.target.checked)}
@@ -3975,7 +4100,7 @@ function CaNodeComponent({ id, data }: NodeProps) {
           };
           return (
             <>
-              <select
+              <select data-ctl-key="operation"
                 className={styles.select}
                 value={operation}
                 onChange={e => updateConfig('operation', e.target.value)}
@@ -3986,7 +4111,7 @@ function CaNodeComponent({ id, data }: NodeProps) {
                 <option value="swap">Swap with neighbor</option>
               </select>
               {operation !== 'swap' && (
-                <select
+                <select data-ctl-key="nonReceiving"
                   className={styles.select}
                   value={nonReceiving}
                   onChange={e => updateConfig('nonReceiving', e.target.value)}
@@ -4030,7 +4155,7 @@ function CaNodeComponent({ id, data }: NodeProps) {
                   option otherwise (the compiler also ignores a stale `true`). */}
               {model.variegatedCells?.enabled && (
                 <label style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: '0.68rem', color: '#a0b0c0', cursor: 'pointer' }}>
-                  <input
+                  <input data-ctl-key="includeOrientation"
                     type="checkbox"
                     checked={includeOri}
                     onChange={e => updateConfig('includeOrientation', e.target.checked)}
@@ -4111,7 +4236,7 @@ function CaNodeComponent({ id, data }: NodeProps) {
         })()}
 
         {nodeData.nodeType === 'getAllNeighborIndexes' && (
-          <select
+          <select data-ctl-key="neighborhoodId"
             className={styles.select}
             value={(nodeData.config.neighborhoodId as string) || ''}
             onChange={e => updateConfig('neighborhoodId', e.target.value)}
@@ -4128,7 +4253,7 @@ function CaNodeComponent({ id, data }: NodeProps) {
           const tagNames = selNbr?.tags ? Object.values(selNbr.tags) : [];
           return (
             <>
-              <select
+              <select data-ctl-key="neighborhoodId"
                 className={styles.select}
                 value={(nodeData.config.neighborhoodId as string) || ''}
                 onChange={e => updateConfig('neighborhoodId', e.target.value)}
@@ -4157,7 +4282,7 @@ function CaNodeComponent({ id, data }: NodeProps) {
         {/* Wave A.6: flipNeighborIndex is pure bit math — only the mode (which
             axis to mirror across) is configurable; no neighborhood needed. */}
         {nodeData.nodeType === 'flipNeighborIndex' && (
-          <select
+          <select data-ctl-key="mode"
             className={styles.select}
             value={(nodeData.config.mode as string) || 'horizontal'}
             onChange={e => updateConfig('mode', e.target.value)}
@@ -4199,6 +4324,7 @@ function CaNodeComponent({ id, data }: NodeProps) {
                 <MacroControlRow
                   key={control.id}
                   desc={desc}
+                  chainId={control.id}
                   needsAttention={!!desc.block && CONTROL_BLOCK_NEEDS_ATTENTION.has(desc.block)}
                   onChange={next => setControlValue(control, next)}
                 />
@@ -4582,28 +4708,24 @@ function CaNodeComponent({ id, data }: NodeProps) {
               style={{ top: `${topPx}px` }}
               title={port.label}
             />
-            {showWidget && (() => {
-              // EXPLICIT CONTROLS — pick mode outlines the REAL widget in place
-              // (deviation V6) and makes it INERT: the pointer-down capture kills
-              // focus / the native select popup, and the click capture BINDS.
-              // Binding on the completed CLICK (not the press) keeps a stray
-              // press-and-drag from committing a binding.
-              const pickable = pickInPlaceKeys.has(configKey);
-              return (
+            {showWidget && (
+              // EXPLICIT CONTROLS — the class-A pick-mode marker. Classes A/B/C
+              // now share ONE mechanism: the widget is MARKED here and pick mode
+              // draws a translucent hotspot measured ON TOP of it (see the
+              // `pickHotspots` block on the node root). The hotspot's own
+              // `pointer-events` is what makes the widget inert while armed, so
+              // this site needs no capture handlers of its own.
+              //
               // `title` names the port: with the global port-label toggle OFF
               // (the default) an inline widget is otherwise an unlabelled box, so
               // hovering is the only way to learn what it sets (the reported
               // "where is the Radius input?" on the FOV sensing nodes).
               <div
-                className={`${styles.inlineWidgetWrapper} nodrag${pickable ? ` ${styles.pickable}` : ''}`}
-                title={pickable ? `Bind “${port.label}” as an explicit parameter` : port.label}
+                data-ctl-key={configKey}
+                className={`${styles.inlineWidgetWrapper} nodrag`}
+                title={port.label}
                 style={{ top: `${topPx}px` }}
                 onDoubleClick={stopAll}
-                {...(pickable ? {
-                  onPointerDownCapture: (e: React.PointerEvent) => { e.preventDefault(); e.stopPropagation(); },
-                  onMouseDownCapture: (e: React.MouseEvent) => { e.preventDefault(); e.stopPropagation(); },
-                  onClickCapture: (e: React.MouseEvent) => { e.preventDefault(); e.stopPropagation(); bindPick(configKey, port.label); },
-                } : {})}
               >
                 {effectiveWidget === 'bool' ? (
                   <InlineBoolSelect
@@ -4640,8 +4762,7 @@ function CaNodeComponent({ id, data }: NodeProps) {
                   />
                 )}
               </div>
-              );
-            })()}
+            )}
             {showPortLabels && !showWidget && (
               <div className={styles.portLabelLeft} style={{ top: `${topPx}px` }}>
                 {port.label}
@@ -4719,6 +4840,52 @@ function CaNodeComponent({ id, data }: NodeProps) {
           </svg>
         </div>
       )}
+
+      {/* ═══ EXPLICIT CONTROLS — the pick-mode HOTSPOTS ═══
+          One semi-translucent, dashed button per eligible parameter, measured ON
+          TOP of that parameter's own widget, so classes A, B and C are all
+          offered exactly where the node already draws them (and never in an
+          order the node does not have). The widget's label and value show
+          through the fill; the hotspot's own `pointer-events` is what makes it
+          inert while armed, so no widget site needs a capture handler.
+
+          LAST child of the node root on purpose: the root is the offsetParent
+          (`.node { position: relative }`) the rects were measured against, and
+          painting last puts these over every widget without a z-index race. */}
+      {pickHotspots.map(r => {
+        const box = pickRects.keys[r.configKey];
+        return box && (
+          <button
+            key={`k:${r.configKey}`}
+            type="button"
+            className={`${styles.pickHotspot} nodrag`}
+            style={{ left: box.l, top: box.t, width: box.w, height: box.h }}
+            title={`Bind “${r.label}” as an explicit parameter`}
+            onMouseDown={e => e.stopPropagation()}
+            onClick={e => { e.stopPropagation(); bindPick(r.configKey, r.label); }}
+          />
+        );
+      })}
+      {pickChainHotspots.map(r => {
+        const box = pickRects.chains[r.id];
+        return box && (
+          <button
+            key={`c:${r.id}`}
+            type="button"
+            disabled={r.cycle}
+            className={`${styles.pickHotspot} ${r.cycle ? styles.pickHotspotBlocked : ''} nodrag`}
+            style={{ left: box.l, top: box.t, width: box.w, height: box.h }}
+            title={r.cycle
+              ? `${r.name} — ${CONTROL_BLOCK_REASON.cycle}`
+              : `${r.name} — re-expose this nested macro's control on the outer one`}
+            onMouseDown={e => e.stopPropagation()}
+            onClick={e => {
+              e.stopPropagation();
+              if (!r.cycle) bindPickTarget({ kind: 'control', nodeId: id, controlId: r.id }, r.name);
+            }}
+          />
+        );
+      })}
     </div>
   );
 }
