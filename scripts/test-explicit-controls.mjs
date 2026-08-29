@@ -76,6 +76,8 @@ export {
   ownAttrListFor, tagAttrScopeFor,
   orderByGroup, withGroup, applyInterfaceEdit,
   groupSections, CONTROL_BLOCK_NEEDS_ATTENTION,
+  interfaceRows, reorderInterface, ifaceGroupRowId, ifaceItemRowId,
+  collapsedGroupIds, toggleCollapsedGroup, CTL_COLLAPSED_KEY,
 } from '../src/modeler/vpl/explicitControls.ts';
 export { getControlPick, setControlPick, subscribeControlPick } from '../src/modeler/vpl/graphState.ts';
 export { getOpenMacroScope, setOpenMacroScope, subscribeOpenMacroScope } from '../src/modeler/vpl/graphState.ts';
@@ -383,7 +385,12 @@ console.log('\n--- Tier B: the clone (F1 / R1 / R2) ------------------------');
       ctl('ctl_3', 'Nested', { kind: 'control', nodeId: 'inner', controlId: 'inner_ctl' }),
     ],
     groups: [{ id: 'g_tuning', name: 'Tuning' }, { id: 'g_adv', name: 'Advanced' }],
-    exposedInputs: base.exposedInputs.map(p => ({ ...p, groupId: 'g_tuning' })),
+    // A SECOND port, so the clone's port ORDER — which is the handle order on
+    // every instance — is legible rather than vacuous.
+    exposedInputs: [
+      ...base.exposedInputs,
+      { portId: 'in2', label: 'In2', dataType: 'any', category: 'value', internalNodeId: 'rnd', internalPortId: 'min' },
+    ],
     nodes: [...base.nodes, node('inner', 'macro', { macroDefId: 'def_b' })],
   };
   const cloned = M.cloneMacroWithFreshIds(withCtls);
@@ -394,7 +401,10 @@ console.log('\n--- Tier B: the clone (F1 / R1 / R2) ------------------------');
   // negative control) — a crash here would hide the rest of the tier.
   if (!Array.isArray(cloned.controls)) cloned.controls = [{ id: '?', name: '?', target: cfgTarget('?', '?') }, { id: '?', name: '?', target: cfgTarget('?', '?') }, { id: '?', name: '?', target: { kind: 'control', nodeId: '?', controlId: '?' } }];
   if (!Array.isArray(cloned.groups)) cloned.groups = [];
-  check('B3 the PORT groupId survives', cloned.exposedInputs[0].groupId === 'g_tuning');
+  check('B3 the PORT ORDER survives the clone (it IS the handle order)',
+    eq(cloned.exposedInputs.map(p => p.portId), ['in', 'in2']));
+  check('B3b …and no port carries a `groupId` (ports are group-free, D5b)',
+    cloned.exposedInputs.every(p => !('groupId' in p)));
 
   // Build old→new node maps by structural identity (the config values are unique).
   const newById = new Map(cloned.nodes.map(n => [n.id, n]));
@@ -449,7 +459,10 @@ console.log('\n--- Tier C: round trips -------------------------------------');
     ...buildDefA(),
     controls: [ctl('ctl_1', 'Seed min', cfgTarget('rnd', '_port_min'), { groupId: 'g1', description: 'lo' })],
     groups: [{ id: 'g1', name: 'Tuning' }],
-    exposedInputs: buildDefA().exposedInputs.map(p => ({ ...p, groupId: 'g1' })),
+    exposedInputs: [
+      ...buildDefA().exposedInputs,
+      { portId: 'in2', label: 'In2', dataType: 'any', category: 'value', internalNodeId: 'rnd', internalPortId: 'min' },
+    ],
   };
   const model = buildModel({ macroDefs: [def] });
 
@@ -458,7 +471,8 @@ console.log('\n--- Tier C: round trips -------------------------------------');
   const back = M.parseModelJSON(json);
   check('C1 .gcaproj preserves controls VERBATIM', eq(back.macroDefs[0].controls, def.controls), JSON.stringify(back.macroDefs[0].controls));
   check('C2 .gcaproj preserves groups VERBATIM', eq(back.macroDefs[0].groups, def.groups));
-  check('C3 .gcaproj preserves MacroPort.groupId', back.macroDefs[0].exposedInputs[0].groupId === 'g1');
+  check('C3 .gcaproj preserves the exposed-port ORDER (the handle order)',
+    eq(back.macroDefs[0].exposedInputs.map(p => p.portId), ['in', 'in2']));
 
   // R9 — `stringifyCompact` inlines an array by its parent KEY NAME
   // (`nodes`/`edges`/`coords`). `controls`/`groups` must PRETTY-PRINT.
@@ -701,12 +715,41 @@ console.log('\n--- Tier F: EMIT identity (the structural proof, R8) ---------');
       controls: [ctl('k1', 'Value', cfgTarget('sa', '_port_value'), { groupId: 'g1' }), ctl('k2', 'Other', cfgTarget('sa', 'attributeId'))],
       groups: [{ id: 'g1', name: 'Tuning' }, { id: 'g2', name: 'Advanced' }],
     },
-    'ports GROUPED': { ...emitDef, groups: [{ id: 'g1', name: 'Tuning' }], exposedInputs: emitDef.exposedInputs.map(p => ({ ...p, groupId: 'g1' })) },
+    'controls REORDERED across a separator': {
+      ...emitDef,
+      controls: [ctl('k2', 'Other', cfgTarget('sa', 'attributeId')), ctl('k1', 'Value', cfgTarget('sa', '_port_value'), { groupId: 'g2' })],
+      groups: [{ id: 'g2', name: 'Advanced' }, { id: 'g1', name: 'Tuning' }],
+    },
     'every control DELETED again': { ...emitDef, controls: [], groups: [] },
   };
   for (const [name, def] of Object.entries(variants)) {
     const m = M.migrateForHarness({ ...baseModel, macroDefs: [def] });
     check(`F3 emit is BYTE-IDENTICAL — ${name}`, surfaces(m) === baseline);
+  }
+
+  // F8, directly: reordering the exposed PORTS reorders the handles and changes
+  // NO emitted byte, because every bridge matches by `portId`. Compared against
+  // its own two-port twin rather than the one-port baseline.
+  {
+    const p2 = { portId: 'in2', label: 'In2', dataType: 'any', category: 'value', internalNodeId: 'sa', internalPortId: 'value' };
+    const twoPorts = { ...emitDef, exposedInputs: [...emitDef.exposedInputs, p2] };
+    const swapped = { ...emitDef, exposedInputs: [p2, ...emitDef.exposedInputs] };
+    const mk = d => M.migrateForHarness({ ...baseModel, macroDefs: [d] });
+    check('F3b a PORT REORDER is emit-identical (F8: the bridge matches by portId)',
+      surfaces(mk(twoPorts)) === surfaces(mk(swapped)));
+  }
+
+  // The per-INSTANCE collapse state lives on the macro node's own config, which
+  // IS hashed by accessor-CSE's purity key — so it has to be provably inert.
+  {
+    const collapsed = M.migrateForHarness({
+      ...baseModel,
+      macroDefs: [variants['a second control + groups']],
+      graphNodes: baseModel.graphNodes.map(n => (n.data.nodeType === 'macro'
+        ? { ...n, data: { ...n.data, config: { ...n.data.config, [M.CTL_COLLAPSED_KEY]: 'g1,g2' } } }
+        : n)),
+    });
+    check('F3c the instance COLLAPSE STATE is emit-invisible', surfaces(collapsed) === baseline);
   }
 
   // A control record must never leak into a node config — the accessorCSE
@@ -796,6 +839,43 @@ console.log('\n--- Tier G: cascades + the closed instance (P3) --------------');
       dead.length === 1 && dead[0].group === undefined);
     check('G5 an EMPTY interface produces NO section (no header, no gap)',
       M.groupSections([], d.groups).length === 0);
+    // An EMPTY group is a real, draggable separator in the EDITOR but must draw
+    // no box on the instance — a chevron that reveals nothing is exactly the
+    // enabled control the doctrine forbids.
+    check('G5b an EMPTY group draws NO box on the instance',
+      eq(M.groupSections(d.controls, [...d.groups, { id: 'gEmpty', name: 'Empty' }])
+        .map(s => s.group?.id ?? null), [null, 'gT']));
+    check('G5c …while the EDITOR still lists its separator row',
+      M.interfaceRows(d.controls, [...d.groups, { id: 'gEmpty', name: 'Empty' }], c => c.id)
+        .some(r => r.kind === 'group' && r.group.id === 'gEmpty'));
+    // Both boxes and the head come from the ONE partition, so a group whose
+    // members are NOT contiguous in the array still renders as one box.
+    check('G5d sections come from `interfaceRows`, so a non-canonical array still renders one box per group',
+      eq(M.groupSections(
+        [ctl('a', 'A', cfgTarget('ps', 'period'), { groupId: 'gT' }), ctl('b', 'B', cfgTarget('ps', 'phase')),
+          ctl('c', 'C', cfgTarget('rnd', '_port_max'), { groupId: 'gT' })], d.groups)
+        .map(s => [s.group?.id ?? null, s.items.map(i => i.id)]),
+      [[null, ['b']], ['gT', ['a', 'c']]]));
+  }
+
+  // --- the per-INSTANCE collapse state (D5b) -------------------------------
+  {
+    check('G5e absent ⇒ every group expanded', M.collapsedGroupIds({}).size === 0);
+    check('G5f …and an EMPTY string too (the pristine all-expanded value)',
+      M.collapsedGroupIds({ [M.CTL_COLLAPSED_KEY]: '' }).size === 0);
+    check('G5g a comma list reads back as its ids',
+      eq([...M.collapsedGroupIds({ [M.CTL_COLLAPSED_KEY]: 'g1,g2' })].sort(), ['g1', 'g2']));
+    const on = M.toggleCollapsedGroup({}, 'g1');
+    check('G5h toggling collapses', on === 'g1');
+    check('G5i …toggling again expands, back to the pristine value',
+      M.toggleCollapsedGroup({ [M.CTL_COLLAPSED_KEY]: on }, 'g1') === '');
+    check('G5j …and a second group joins the list without disturbing the first',
+      eq([...M.collapsedGroupIds({ [M.CTL_COLLAPSED_KEY]: M.toggleCollapsedGroup({ [M.CTL_COLLAPSED_KEY]: 'g1' }, 'g2') })].sort(), ['g1', 'g2']));
+    // It is a DISPLAY key: no control may ever bind it (it is in the
+    // display-only exclusion set), which is what keeps it off every emit path.
+    check('G5k the collapse key is NOT a bindable parameter', M.isExcludedControlKey(M.CTL_COLLAPSED_KEY));
+    check('G5l …and it follows the compiler-invisible naming convention',
+      M.CTL_COLLAPSED_KEY.startsWith('_') && !M.CTL_COLLAPSED_KEY.startsWith('_port_') && !M.CTL_COLLAPSED_KEY.startsWith('_varName_'));
   }
 
   // --- LIVE values, both directions (D1) -----------------------------------
@@ -1134,18 +1214,15 @@ console.log('\n--- Tier H: authoring semantics (P2) -------------------------');
     check('H13 …while the sibling control is === untouched', r.def.controls[0] === defOf(m0, 'def_i').controls[0]);
   }
 
-  // --- grouping a PORT reorders; NO edge is touched (D5 / F8) --------------
+  // --- PORTS: a plain reorder; NO edge is touched (D5b / F8) ---------------
   {
-    let m = buildModel({ macroDefs: [ifaceDef()] });
+    const m = buildModel({ macroDefs: [ifaceDef()] });
     const base = defOf(m, 'def_i');
     const edgesJson = JSON.stringify(base.edges);
-    m = editDef(m, 'def_i', { kind: 'group-add', group: { id: 'gB', name: 'Advanced' } }).model;
-    // p1 → gB, p3 → gA  ⇒  [ungrouped p2, gA: p3, gB: p1]
-    m = editDef(m, 'def_i', { kind: 'port-group', side: 'in', portId: 'p1', groupId: 'gB' }).model;
-    const r = editDef(m, 'def_i', { kind: 'port-group', side: 'in', portId: 'p3', groupId: 'gA' });
+    const r = editDef(m, 'def_i', { kind: 'port-reorder', side: 'in', order: ['p3', 'p1', 'p2'] });
     const ins = r.def.exposedInputs;
-    check('H14 the port array is REORDERED [ungrouped…, gA…, gB…]',
-      eq(ins.map(p => p.portId), ['p2', 'p3', 'p1']), ins.map(p => p.portId).join(','));
+    check('H14 the port array takes exactly the order it was given',
+      eq(ins.map(p => p.portId), ['p3', 'p1', 'p2']), ins.map(p => p.portId).join(','));
     check('H15 …the portId SET is IDENTICAL', portIdSet(ins) === portIdSet(base.exposedInputs));
     check('H16 …every port object still carries its own label + internal mapping',
       ins.every(p => base.exposedInputs.some(b => b.portId === p.portId && b.label === p.label && b.internalPortId === p.internalPortId)));
@@ -1153,46 +1230,126 @@ console.log('\n--- Tier H: authoring semantics (P2) -------------------------');
       r.def.edges === base.edges && JSON.stringify(r.def.edges) === edgesJson);
     check('H18 …and the OUTPUT port array is === untouched', r.def.exposedOutputs === base.exposedOutputs);
     check('H19 …the dispatch carried ONLY `exposedInputs`', eq(Object.keys(r.changes), ['exposedInputs']));
+    check('H19b …no port ever gains a `groupId` (ports are group-free)',
+      ins.every(p => !('groupId' in p)));
 
-    // Un-grouping DELETES the key — "ungrouped" is the ABSENT state.
-    const un = editDef(r.model, 'def_i', { kind: 'port-group', side: 'in', portId: 'p3', groupId: '' });
-    check('H20 un-grouping removes the groupId KEY (absent ⇒ today\'s files)',
-      !('groupId' in (un.def.exposedInputs.find(p => p.portId === 'p3') ?? { groupId: 1 })));
-    check('H21 …and it moves back to the ungrouped head', eq(un.def.exposedInputs.map(p => p.portId), ['p2', 'p3', 'p1']));
+    // Misplace, never DROP: an `order` computed against a stale render still
+    // has to bring every port back.
+    const partial = editDef(m, 'def_i', { kind: 'port-reorder', side: 'in', order: ['p3', 'ghost'] });
+    check('H20 an `order` naming an unknown port ignores it and keeps every real one',
+      eq(partial.def.exposedInputs.map(p => p.portId), ['p3', 'p1', 'p2']));
+    const dup = editDef(m, 'def_i', { kind: 'port-reorder', side: 'in', order: ['p2', 'p2', 'p1'] });
+    check('H21 …and a DUPLICATED id is taken once', eq(dup.def.exposedInputs.map(p => p.portId), ['p2', 'p1', 'p3']));
 
     // The OUTPUT side reorders through the same edit, independently.
-    const outR = editDef(r.model, 'def_i', { kind: 'port-group', side: 'out', portId: 'q1', groupId: 'gA' });
-    check('H22 the OUTPUT array groups independently', outR.def.exposedOutputs[0]?.groupId === 'gA'
-      && outR.def.exposedInputs === r.def.exposedInputs);
+    const outR = editDef(r.model, 'def_i', { kind: 'port-reorder', side: 'out', order: ['q1'] });
+    check('H22 the OUTPUT side reorders independently',
+      eq(Object.keys(outR.changes), ['exposedOutputs']) && outR.def.exposedInputs === r.def.exposedInputs);
   }
 
-  // --- grouping a CONTROL --------------------------------------------------
+  // --- CONTROLS: positional membership (D5b) -------------------------------
   {
+    const G = M.ifaceGroupRowId, I = M.ifaceItemRowId;
     let m = buildModel({ macroDefs: [ifaceDef()] });
     m = editDef(m, 'def_i', { kind: 'group-add', group: { id: 'gB', name: 'Advanced' } }).model;
-    const r = editDef(m, 'def_i', { kind: 'control-group', controlId: 'k1', groupId: 'gB' });
-    check('H23 controls reorder the same way [ungrouped…, gA…, gB…]',
-      eq(r.def.controls.map(c => c.id), ['k2', 'k1']), r.def.controls.map(c => c.id).join(','));
-    check('H24 …the control SET is identical and nothing lost its target',
-      r.def.controls.length === 2 && r.def.controls.every(c => c.target.kind === 'config'));
+    const rows = M.interfaceRows(defOf(m, 'def_i').controls, defOf(m, 'def_i').groups, c => c.id);
+    check('H23 the flat list is [ungrouped…, sep gA, gA…, sep gB] — an EMPTY group still gets a separator',
+      eq(rows.map(r => (r.kind === 'group' ? `#${r.group.id}` : r.item.id)), ['k1', '#gA', 'k2', '#gB']),
+      JSON.stringify(rows.map(r => (r.kind === 'group' ? `#${r.group.id}` : r.item.id))));
+
+    // Drag k1 UNDER the gB separator ⇒ it JOINS gB, purely by position.
+    const joined = editDef(m, 'def_i', { kind: 'control-reorder', order: [G('gA'), I('k2'), G('gB'), I('k1')] });
+    check('H24 a control dropped under a separator JOINS that group',
+      joined.def.controls.find(c => c.id === 'k1')?.groupId === 'gB');
+    check('H24b …and the array comes back CANONICAL (position ⇔ membership)',
+      eq(joined.def.controls.map(c => [c.id, c.groupId ?? '-']), [['k2', 'gA'], ['k1', 'gB']]),
+      JSON.stringify(joined.def.controls.map(c => [c.id, c.groupId ?? '-'])));
+    check('H24c …the control SET is identical and nothing lost its target',
+      joined.def.controls.length === 2 && joined.def.controls.every(c => c.target.kind === 'config'));
+
+    // Drag k2 ABOVE the first separator ⇒ it is UN-grouped, and the key is
+    // DELETED rather than blanked ("ungrouped" is the ABSENT state).
+    const freed = editDef(joined.model, 'def_i', { kind: 'control-reorder', order: [I('k2'), G('gA'), G('gB'), I('k1')] });
+    check('H25 a control dropped above every separator is UN-grouped',
+      !('groupId' in (freed.def.controls.find(c => c.id === 'k2') ?? { groupId: 1 })));
+
+    // Drag the gB SEPARATOR up over k1 ⇒ the separator moves ALONE and CAPTURES
+    // what now falls under it. This is the whole positional model in one edit.
+    const captured = editDef(m, 'def_i', { kind: 'control-reorder', order: [G('gB'), I('k1'), G('gA'), I('k2')] });
+    check('H26 dragging a SEPARATOR up captures what now sits under it',
+      captured.def.controls.find(c => c.id === 'k1')?.groupId === 'gB');
+    check('H26b …and the SECTION order followed the separator',
+      eq(captured.def.groups.map(g => g.id), ['gB', 'gA']));
+    check('H26c …so the dispatch carried `groups` as well as `controls`',
+      eq(Object.keys(captured.changes).sort(), ['controls', 'groups']));
+    check('H26d …and NOTHING was dropped', eq(captured.def.controls.map(c => c.id).sort(), ['k1', 'k2']));
+
+    // A pure reorder INSIDE one bucket must not touch the group order at all.
+    let m3 = buildModel({ macroDefs: [ifaceDef()] });
+    m3 = editDef(m3, 'def_i', {
+      kind: 'control-add',
+      control: ctl('k3', 'Phase', cfgTarget('ps', 'phase'), { groupId: 'gA' }),
+    }).model;
+    const swapped = editDef(m3, 'def_i', { kind: 'control-reorder', order: [I('k1'), G('gA'), I('k3'), I('k2')] });
+    check('H27 a swap WITHIN one group reorders only that bucket',
+      eq(swapped.def.controls.map(c => c.id), ['k1', 'k3', 'k2']));
+    check('H27b …and leaves `groups` out of the dispatch entirely',
+      eq(Object.keys(swapped.changes), ['controls']));
+
+    // Round trip: what the editor renders IS what the array stores.
+    const rt = M.reorderInterface(swapped.def.controls, swapped.def.groups, c => c.id,
+      M.interfaceRows(swapped.def.controls, swapped.def.groups, c => c.id).map(r => r.rowId));
+    check('H27c interfaceRows → reorderInterface is the IDENTITY on a canonical array',
+      eq(rt.items, swapped.def.controls) && eq(rt.groups, swapped.def.groups));
+
+    // Misplace, never drop — same rule as the ports.
+    const stale = editDef(m3, 'def_i', { kind: 'control-reorder', order: [I('k3'), I('nope')] });
+    check('H27d a stale `order` keeps every control and every group',
+      eq(stale.def.controls.map(c => c.id).sort(), ['k1', 'k2', 'k3'])
+      && eq(stale.def.groups.map(g => g.id), ['gA']));
   }
 
-  // --- deleting a group CLEARS membership and DELETES NOTHING -------------
+  // --- deleting a separator MERGES upward and DELETES NOTHING -------------
+  {
+    const G = M.ifaceGroupRowId, I = M.ifaceItemRowId;
+    let m = buildModel({ macroDefs: [ifaceDef()] });
+    m = editDef(m, 'def_i', { kind: 'group-add', group: { id: 'gB', name: 'Advanced' } }).model;
+    // [k1 (ungrouped)] [gA: k2] [gB: k3]
+    m = editDef(m, 'def_i', {
+      kind: 'control-add', control: ctl('k3', 'Phase', cfgTarget('ps', 'phase'), { groupId: 'gB' }),
+    }).model;
+    const before = defOf(m, 'def_i');
+    const flat = d => M.interfaceRows(d.controls ?? [], d.groups ?? [], c => c.id)
+      .filter(r => r.kind === 'item').map(r => r.item.id);
+
+    const r = editDef(m, 'def_i', { kind: 'group-remove', groupId: 'gB' });
+    const survivors = r.def.controls ?? [];   // `?? []` so a MUTATION FAILs legibly
+    check('H28 every control survives a separator delete', eq(survivors.map(c => c.id).sort(), ['k1', 'k2', 'k3']));
+    check('H28b …the deleted group\'s members MERGE into the section ABOVE',
+      survivors.find(c => c.id === 'k3')?.groupId === 'gA');
+    check('H28c …so not one control changes row', eq(flat(r.def), flat(before)));
+    check('H28d …and the ports are untouched', portIdSet(r.def.exposedInputs) === portIdSet(before.exposedInputs));
+
+    // Removing the FIRST separator un-groups its members (there is nothing above).
+    const first = editDef(m, 'def_i', { kind: 'group-remove', groupId: 'gA' });
+    check('H29 removing the FIRST separator un-groups its members, key DELETED',
+      !('groupId' in ((first.def.controls ?? []).find(c => c.id === 'k2') ?? { groupId: 1 })));
+    check('H29b …and they still resolve',
+      !M.resolveControlDescriptor(first.model, 'def_i', (first.def.controls ?? []).find(c => c.id === 'k2')).block);
+    check('H29c …and it is a NO-OP for a group that does not exist',
+      eq(M.applyInterfaceEdit(before, { kind: 'group-remove', groupId: 'ghost' }), {}));
+  }
+
+  // --- removing the last group -------------------------------------------
   {
     let m = buildModel({ macroDefs: [ifaceDef()] });
-    m = editDef(m, 'def_i', { kind: 'port-group', side: 'in', portId: 'p2', groupId: 'gA' }).model;
     const before = defOf(m, 'def_i');
     const r = editDef(m, 'def_i', { kind: 'group-remove', groupId: 'gA' });
-    check('H25 the group is gone — and it was the LAST, so no `groups` key', r.def.groups === undefined);
-    // `?? []` throughout: a MUTATION must produce a legible FAIL, never a crash
-    // that hides every later check.
-    const survivors = r.def.controls ?? [];
-    check('H26 …every PORT survives', portIdSet(r.def.exposedInputs) === portIdSet(before.exposedInputs));
-    check('H27 …every CONTROL survives', eq(survivors.map(c => c.id).sort(), ['k1', 'k2']));
-    check('H28 …their groupId KEYS are cleared, not blanked',
-      r.def.exposedInputs.every(p => !('groupId' in p)) && survivors.every(c => !('groupId' in c)));
-    check('H29 …and the controls still resolve',
-      !!survivors[0] && !M.resolveControlDescriptor(r.model, 'def_i', survivors[0]).block);
+    check('H25b the LAST group removed leaves NO `groups` key', r.def.groups === undefined);
+    check('H25c …and every control survives, un-grouped',
+      eq((r.def.controls ?? []).map(c => c.id).sort(), ['k1', 'k2'])
+      && (r.def.controls ?? []).every(c => !('groupId' in c)));
+    check('H25d …with the ports untouched', r.def.exposedInputs === before.exposedInputs);
   }
 
   // --- groups: add to a def with NONE / remove the last --------------------
@@ -1274,6 +1431,37 @@ console.log('\n--- Tier H: authoring semantics (P2) -------------------------');
       cn.includes('return eligibleControlKeys(nodeData.nodeType, nodeData.config, model, connectedInputHandles);'));
     check('H53 …and only for a node that really belongs to the picked def',
       cn.includes("if (!pickDef || !pickDef.nodes.some(n => n.id === id)) return [];"));
+
+    // --- the D5b wiring, pinned in SOURCE (it lives in a React component) ---
+    check('H54 the boundary editor renders the FLAT list from `interfaceRows`',
+      /const ifaceRows = useMemo\(\s*\n?\s*\(\) => interfaceRows\(macroDefForBoundary\?\.controls/.test(cn));
+    check('H55 …the PORT list dispatches `port-reorder` through the ONE builder',
+      /editInterface\(\{ kind: 'port-reorder', side: isMacroInput \? 'in' : 'out', order \}\)/.test(cn));
+    check('H56 …and the CONTROL list dispatches `control-reorder` with the flat ROW ids',
+      /editInterface\(\{ kind: 'control-reorder', order \}\)/.test(cn)
+      && cn.includes('ifaceReorder.startDrag(row.rowId)'));
+    check('H57 …both lists reorder through the SHARED `useListReorder` hook',
+      cn.includes("import { useListReorder } from '../panels/useListReorder';")
+      && /const portReorder = useListReorder\(/.test(cn) && /const ifaceReorder = useListReorder\(/.test(cn));
+    // "Groups become separators, NOT memberships": the dropdown is gone, so a
+    // group can only ever be joined by DROPPING a row under its separator.
+    check('H58 there is no group-membership dropdown left anywhere',
+      !cn.includes("kind: 'control-group'") && !cn.includes("kind: 'port-group'")
+      && !/value=\{(c|p)\.groupId \?\? ''\}/.test(cn));
+    check('H59 the closed instance toggles collapse through the ONE helper, on the INSTANCE config',
+      /updateConfig\(CTL_COLLAPSED_KEY, toggleCollapsedGroup\(nodeData\.config, groupId\)\)/.test(cn));
+
+    // A group box may wrap CONTROL rows only: a handle inside a collapsible
+    // region would VANISH with its box, taking its edges' anchor with it.
+    const secStart = cn.indexOf('{nodeData.nodeType === \'macro\' && controlSections.length > 0 && (');
+    const secEnd = cn.indexOf('{nodeData.nodeType === \'macro\' && (', secStart + 1);
+    const section = cn.slice(secStart, secEnd);
+    check('H60 the instance\'s interface section renders NO handle',
+      secStart > 0 && secEnd > secStart && !section.includes('<Handle'), `${secStart}..${secEnd}`);
+    check('H61 …and only the group BODY is conditional on the collapse state',
+      /\{!collapsed && <div className=\{styles\.ctlGroupBody\}>\{rows\}<\/div>\}/.test(section));
+    check('H62 …while the UNGROUPED head is never collapsible',
+      section.includes('if (!sec.group) return <Fragment key={`__ungrouped_${si}`}>{rows}</Fragment>;'));
   }
 }
 
