@@ -3565,13 +3565,54 @@ export function GraphEditorInner() {
       return node.position.y * 1000 + portIdx;
     };
 
-    const externalInputEdges = [...externalInputEdgesRaw].sort((a, b) =>
-      portSortKey(a.target, a.targetHandle ?? '', 'input') -
-      portSortKey(b.target, b.targetHandle ?? '', 'input'),
+    // --- ONE exposed port per distinct SOURCE port, not one per external edge.
+    // Both directions group by the edge's SOURCE side:
+    //   inputs  — the OUTER source port. One outer port feeding N selected nodes
+    //             becomes ONE macro input whose MacroInput output fans out to all
+    //             N internal targets.
+    //   outputs — the INTERNAL source port. One selected node feeding N outer
+    //             consumers becomes ONE macro output that fans out outside.
+    // Safe in both directions precisely because it is the SOURCE side: a value
+    // OUTPUT may fan out to many inputs, while a value INPUT is single-occupancy
+    // (see `isValidConnection`), so a group can never need to merge two wires
+    // into one input. Category is uniform within a group — flow<->value wiring is
+    // rejected by validation — so it is read once, from the first member, exactly
+    // as the pre-grouping code read it per edge.
+    type PortGroup = { category: 'value' | 'flow'; sortKey: number; edges: Edge[] };
+    const groupBySourcePort = (
+      list: Edge[],
+      categoryOf: (e: Edge) => 'value' | 'flow',
+      sortKeyOf: (e: Edge) => number,
+    ): PortGroup[] => {
+      const byKey = new Map<string, PortGroup>();
+      for (const e of list) {
+        const key = `${e.source} ${e.sourceHandle ?? ''}`;
+        const sk = sortKeyOf(e);
+        const g = byKey.get(key);
+        if (g) {
+          g.edges.push(e);
+          // A group's order key is the MINIMUM of its members', so the resulting
+          // port order still follows the visual top-to-bottom order of the
+          // internal ports involved (and is identical for one-member groups).
+          g.sortKey = Math.min(g.sortKey, sk);
+        } else {
+          byKey.set(key, { category: categoryOf(e), sortKey: sk, edges: [e] });
+        }
+      }
+      // Stable sort keeps insertion (= raw edge) order for equal keys, matching
+      // the previous `[...raw].sort(...)`.
+      return [...byKey.values()].sort((a, b) => a.sortKey - b.sortKey);
+    };
+
+    const inputPortGroups = groupBySourcePort(
+      externalInputEdgesRaw,
+      e => (parseHandleId(e.targetHandle ?? '')?.category || 'value') as 'value' | 'flow',
+      e => portSortKey(e.target, e.targetHandle ?? '', 'input'),
     );
-    const externalOutputEdges = [...externalOutputEdgesRaw].sort((a, b) =>
-      portSortKey(a.source, a.sourceHandle ?? '', 'output') -
-      portSortKey(b.source, b.sourceHandle ?? '', 'output'),
+    const outputPortGroups = groupBySourcePort(
+      externalOutputEdgesRaw,
+      e => (parseHandleId(e.sourceHandle ?? '')?.category || 'value') as 'value' | 'flow',
+      e => portSortKey(e.source, e.sourceHandle ?? '', 'output'),
     );
 
     const macroId = `macro_${Date.now().toString(36)}`;
@@ -3608,45 +3649,45 @@ export function GraphEditorInner() {
     const macroOutputNodeId = `mo_${macroId}`;
 
     // Build exposed ports — internalNodeId/PortId point to the boundary nodes
-    const exposedInputs: MacroPort[] = externalInputEdges.map((e, i) => {
-      const parsed = parseHandleId(e.targetHandle ?? '');
-      return {
-        portId: `in_${i}`,
-        label: `Input ${i + 1}`,
-        dataType: 'any',
-        category: (parsed?.category || 'value') as 'value' | 'flow',
-        internalNodeId: macroInputNodeId,
-        internalPortId: `in_${i}`,
-      };
-    });
-    const exposedOutputs: MacroPort[] = externalOutputEdges.map((e, i) => {
-      const parsed = parseHandleId(e.sourceHandle ?? '');
-      return {
-        portId: `out_${i}`,
-        label: `Output ${i + 1}`,
-        dataType: 'any',
-        category: (parsed?.category || 'value') as 'value' | 'flow',
-        internalNodeId: macroOutputNodeId,
-        internalPortId: `out_${i}`,
-      };
-    });
-
-    // Build bridging edges: MacroInput outputs -> original internal targets
-    const bridgingInputEdges: GraphEdge[] = externalInputEdges.map((e, i) => ({
-      id: `bridge_in_${macroId}_${i}`,
-      source: macroInputNodeId,
-      sourceHandle: handleId({ id: `in_${i}`, kind: 'output', category: exposedInputs[i]!.category }),
-      target: e.target,
-      targetHandle: e.targetHandle ?? '',
+    const exposedInputs: MacroPort[] = inputPortGroups.map((g, i) => ({
+      portId: `in_${i}`,
+      label: `Input ${i + 1}`,
+      dataType: 'any',
+      category: g.category,
+      internalNodeId: macroInputNodeId,
+      internalPortId: `in_${i}`,
+    }));
+    const exposedOutputs: MacroPort[] = outputPortGroups.map((g, i) => ({
+      portId: `out_${i}`,
+      label: `Output ${i + 1}`,
+      dataType: 'any',
+      category: g.category,
+      internalNodeId: macroOutputNodeId,
+      internalPortId: `out_${i}`,
     }));
 
-    // Build bridging edges: original internal sources -> MacroOutput inputs
-    const bridgingOutputEdges: GraphEdge[] = externalOutputEdges.map((e, i) => ({
+    // Build bridging edges: MacroInput outputs -> original internal targets.
+    // ONE port, but one edge per internal consumer — the fan-out lives INSIDE
+    // the macro. (Ids: a single-member group keeps the historical id exactly.)
+    const bridgingInputEdges: GraphEdge[] = inputPortGroups.flatMap((g, i) =>
+      g.edges.map((e, j) => ({
+        id: j === 0 ? `bridge_in_${macroId}_${i}` : `bridge_in_${macroId}_${i}_${j}`,
+        source: macroInputNodeId,
+        sourceHandle: handleId({ id: `in_${i}`, kind: 'output', category: g.category }),
+        target: e.target,
+        targetHandle: e.targetHandle ?? '',
+      })),
+    );
+
+    // Build bridging edges: original internal sources -> MacroOutput inputs.
+    // Exactly one per group — every member shares the same internal source port,
+    // and the fan-out to the outer consumers happens OUTSIDE the macro.
+    const bridgingOutputEdges: GraphEdge[] = outputPortGroups.map((g, i) => ({
       id: `bridge_out_${macroId}_${i}`,
-      source: e.source,
-      sourceHandle: e.sourceHandle ?? '',
+      source: g.edges[0]!.source,
+      sourceHandle: g.edges[0]!.sourceHandle ?? '',
       target: macroOutputNodeId,
-      targetHandle: handleId({ id: `out_${i}`, kind: 'input', category: exposedOutputs[i]!.category }),
+      targetHandle: handleId({ id: `out_${i}`, kind: 'input', category: g.category }),
     }));
 
     // MacroInput/MacroOutput boundary nodes — positions also stored relative
@@ -3700,22 +3741,27 @@ export function GraphEditorInner() {
 
     // Reconnect external edges to the new MacroNode's exposed ports
     const reconnectedEdges: Edge[] = [
-      ...externalInputEdges.map((e, i) => ({
+      // ONE outer edge per input group — every member shared the same outer
+      // source port, so a single wire now feeds the macro's single input.
+      ...inputPortGroups.map((g, i) => ({
         id: `${macroNodeId}_ein_${i}`,
-        source: e.source,
-        sourceHandle: e.sourceHandle,
+        source: g.edges[0]!.source,
+        sourceHandle: g.edges[0]!.sourceHandle,
         target: macroNodeId,
-        targetHandle: handleId({ id: `in_${i}`, kind: 'input', category: exposedInputs[i]!.category }),
-        style: { stroke: exposedInputs[i]!.category === 'flow' ? '#66bb6a' : '#4cc9f0', strokeWidth: 2 },
+        targetHandle: handleId({ id: `in_${i}`, kind: 'input', category: g.category }),
+        style: { stroke: g.category === 'flow' ? '#66bb6a' : '#4cc9f0', strokeWidth: 2 },
       })),
-      ...externalOutputEdges.map((e, i) => ({
-        id: `${macroNodeId}_eout_${i}`,
-        source: macroNodeId,
-        sourceHandle: handleId({ id: `out_${i}`, kind: 'output', category: exposedOutputs[i]!.category }),
-        target: e.target,
-        targetHandle: e.targetHandle,
-        style: { stroke: exposedOutputs[i]!.category === 'flow' ? '#66bb6a' : '#4cc9f0', strokeWidth: 2 },
-      })),
+      // One outer edge per consumer — the macro's single output port fans out.
+      ...outputPortGroups.flatMap((g, i) =>
+        g.edges.map((e, j) => ({
+          id: j === 0 ? `${macroNodeId}_eout_${i}` : `${macroNodeId}_eout_${i}_${j}`,
+          source: macroNodeId,
+          sourceHandle: handleId({ id: `out_${i}`, kind: 'output', category: g.category }),
+          target: e.target,
+          targetHandle: e.targetHandle,
+          style: { stroke: g.category === 'flow' ? '#66bb6a' : '#4cc9f0', strokeWidth: 2 },
+        })),
+      ),
     ];
 
     setNodes(nds => {
@@ -4078,33 +4124,38 @@ export function GraphEditorInner() {
     const edgesToMacro = edges.filter(e => e.target === macroNodeId);
     const edgesFromMacro = edges.filter(e => e.source === macroNodeId);
 
-    const reconnectedInputEdges: Edge[] = edgesToMacro.map(e => {
+    const reconnectedInputEdges: Edge[] = edgesToMacro.flatMap(e => {
       const parsed = parseHandleId(e.targetHandle ?? '');
       const portId = parsed?.portId || '';
       const exposedPort = macroDef.exposedInputs.find(p => p.portId === portId);
-      if (!exposedPort) return null;
-      // Trace: find the bridging edge from the MacroInput port to the actual internal node
+      if (!exposedPort) return [];
+      // Trace: find EVERY bridging edge from the MacroInput port to an internal
+      // node. A single boundary port legitimately fans out to several internal
+      // consumers (Create Macro emits exactly that when one outer source feeds
+      // several selected nodes), so `.find` would silently drop all but the
+      // first and undoing the macro would lose those wires.
       const bridgeHandle = handleId({ id: exposedPort.portId, kind: 'output', category: exposedPort.category });
-      const bridgingEdge = macroDef.edges.find(
+      const bridgingEdges = macroDef.edges.filter(
         be => be.source === exposedPort.internalNodeId && be.sourceHandle === bridgeHandle,
       );
-      if (bridgingEdge) {
-        return {
-          ...e,
-          id: `restored_${e.id}`,
-          target: bridgingEdge.target,
-          targetHandle: bridgingEdge.targetHandle,
-        };
-      }
-      return null;
-    }).filter(Boolean) as Edge[];
+      return bridgingEdges.map((be, j) => ({
+        ...e,
+        id: j === 0 ? `restored_${e.id}` : `restored_${e.id}_${j}`,
+        target: be.target,
+        targetHandle: be.targetHandle,
+      }));
+    });
 
     const reconnectedOutputEdges: Edge[] = edgesFromMacro.map(e => {
       const parsed = parseHandleId(e.sourceHandle ?? '');
       const portId = parsed?.portId || '';
       const exposedPort = macroDef.exposedOutputs.find(p => p.portId === portId);
       if (!exposedPort) return null;
-      // Trace: find the bridging edge from actual internal node to the MacroOutput port
+      // Trace: find the bridging edge from actual internal node to the MacroOutput port.
+      // `.find` is right here (unlike the input direction above): a MacroOutput
+      // INPUT port takes exactly one internal source, and an output port's
+      // fan-out lives OUTSIDE the macro — i.e. in `edgesFromMacro`, which this
+      // map already walks one entry per outer consumer.
       const bridgeHandle = handleId({ id: exposedPort.portId, kind: 'input', category: exposedPort.category });
       const bridgingEdge = macroDef.edges.find(
         be => be.target === exposedPort.internalNodeId && be.targetHandle === bridgeHandle,
