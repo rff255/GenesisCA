@@ -7,6 +7,121 @@ https://github.com/rff255/GenesisCA/releases
 The version at the top of `package.json` is the single source of truth; each
 entry below is cut when that version is tagged (see `.github/workflows/release.yml`).
 
+## [1.32.0] - 2026-08-29
+
+Headlined by **Explicit Controls** — a macro author promotes chosen internal
+parameters onto the closed instance, so a macro reads as a component with knobs
+— and by a **geospatial I/O** milestone that lets a model load real map data
+(Esri ASCII grids, GeoTIFF, GeoJSON vectors) with in-app cropping and
+resampling. Also: macro import/export that carries its model-element
+references, sprite-sheet gridding, CSV export, a capture review dialog, and a
+Logical Expression node. Additive throughout — all 31 shipped models stay
+byte-identical on every compile surface.
+
+### Explicit Controls — a macro's interface
+- Promote an in-node parameter to a named row on the **closed macro instance**:
+  the interface is one flat ordered list of parameters and group **separators**
+  (membership is positional), and each group renders as a collapsible box **per
+  instance**.
+- A control is a **remote control**, not a per-instance copy — it reads and
+  writes the internal node's config live, so editing either side shows on the
+  other with no propagation machinery, and no compiler learns the feature exists.
+- **Pick mode** is one mechanism for every parameter class: a semi-translucent
+  dashed hotspot measured on top of each eligible widget, so the offer appears
+  where the node already draws it. Multi-key editors (gradient, palette, colour)
+  bind as whole-editor **facets** that write through the node's own writer, so an
+  instance edit is byte-identical to the in-node one by construction.
+- Model-element pickers (attributes, neighbourhoods, mappings…) are bindable, and
+  a nested macro's own controls can be **chained** up to the outer interface.
+- Fixed: a macro boundary port switched to Flow refused connections — the handle
+  remeasure signature must be the handle ids, not the bare port ids.
+
+### Macros — imports carry their references
+- `.gcamacro` export now bundles the **model elements** a macro's subgraph names
+  (attributes, neighbourhoods, mappings, variables, indicators, sprites, palettes)
+  plus any nested macro definitions, with per-element opt-out.
+- Importing one opens a **resolution dialog** — Import as new / Remap to an
+  existing element / Discard — rewriting every id, embedded key and edge handle,
+  and re-deriving tag indices by name. Discard is exactly the old behaviour, so a
+  pre-existing `.gcamacro` imports unchanged and opens no dialog.
+- A `.gcamacro` **dropped anywhere on the app** now imports it (it previously fell
+  through to the unsupported-file path).
+
+### Geographic data
+- **Esri ASCII grid (`.asc`)** import/export with a `georef` model record —
+  multi-layer co-registered import, NODATA handling, exact round-trip.
+- **GeoTIFF import** (band → attribute mapping with categorical code tables,
+  nearest/average resampling, georef and CRS read), lazily loaded and excluded
+  from the standalone viewer bundle.
+- **GeoJSON vector import** — rasterize polygons / lines / points onto a cell
+  attribute, or spawn agents from points, with a per-feature property value source.
+- **In-app crop + resample**: a draggable crop box over a windowed GeoTIFF read
+  (so a raster larger than the caps now opens) and resample-to-grid for both
+  formats. QGIS is now needed only for reprojection.
+- **Backdrop map** underlay drawn under the cells, georeference editing in
+  Properties, and a world-coordinate hover readout.
+- A **Geographic tools (GIS)** model setting gates all of the above out of sight
+  for non-map models; any geographic import turns it on.
+- Two **real-data sample models** — *Wildfire · Sierra Nevada* and *Urban Growth ·
+  Recife* (Copernicus DEM, ESA WorldCover, OpenStreetMap roads), with Rule
+  Descriptions documenting how to replicate or retarget them.
+- **Reset can restore the model's saved board** (`resetRestoresBoard`): the ■
+  button's menu always offers both actions, GIS imports capture their board as the
+  initial state, and the Overseer follows the model's default.
+
+### Simulator
+- **CSV export** for the board and the agent population — the round-trip mirror of
+  CSV import; both moved onto the transport bar's Save/Load State hover menus.
+- **Capture review dialog** — a finished screenshot or recording is shown
+  (preview, format, dimensions, size, frame count) before anything is written,
+  with Save / Copy / Cancel; opening it pauses the simulation and closing it
+  resumes only if the review paused it.
+- **Brush icons** — one glyph vocabulary shared by the mode/shape buttons and the
+  cursor, with the active brush's icon riding the footprint.
+- **Presets** gain title-bar save / import / export icons plus export-current
+  straight to a `.gcapreset`.
+- **Double right-click** fits the view (2D) or resets the camera (3D).
+- Glow's **Core** slider extends to -1, dissolving the solid body into pure halo.
+- Fixes: Pull brush stops at a dead-zone ring instead of locking agents at the
+  exact centre; cell inspect is gated off on grid-disabled models; 2D captures
+  composite over an opaque backdrop, so glow halos no longer record
+  over-saturated; `patchWebGPUCells` uploads only the written attributes,
+  removing the stale-mirror revert on paint and cross-model paste.
+
+### Sprites
+- **Sprite-sheet gridding dialog** with ordered frame selection — pick which
+  cells, in which order, form the animation, with a draggable first-cell
+  rectangle and an optionally explicit cell size; sprite previews show the first
+  animation frame rather than the whole sheet.
+- **2D agent sprites render on the GPU worker paths** (direct render, render-only
+  and the grid+agent composite), so sprite models are no longer confined to the
+  CPU overlay.
+
+### Nodes & agents
+- **Logical Expression** — a free-text boolean formula over named inputs
+  (`AND / OR / XOR / NOT`, parentheses) on all six compile surfaces, with a
+  **comparison tier** (`< <= > >= == !=`) so `n > 2 AND NOT crowded` is one node.
+- **Get Random** gains a `color` mode (multi-output R/G/B plus a composite Color
+  port), and a new **Assert Active Output Mapping** flow node runs its branch only
+  while the chosen viewer is showing — so visualization-only work costs nothing
+  off screen.
+- **Neighbour Density** takes an optional Radius (a fresh absolute-radius count,
+  lowered to existing nodes), and models whose density nodes all carry one no
+  longer pay the engine's dead neighbour scan.
+- **Division**: a `conserve: area | volume` mode on Divide Agent (3D), and the
+  Division Event now configures **both** daughters — each is told the other's id,
+  and it can issue bond requests applied in the same generation.
+- `myArea` is the agent's extent in the model's own dimension (πr² in 2D, the
+  sphere surface 4πr² in 3D).
+
+### Modeler
+- **Dissolve Reroutes** on a multi-selection — remove several reroute dots at once
+  while keeping the wiring.
+- NodeExplorer no longer re-renders on every node-drag pointermove (measured
+  15.0 → 7.1 ms median per drag tick at 400 nodes).
+- The shipped **Gray-Scott** model was rewritten with Expression nodes — 45 nodes
+  / 53 edges → 26 / 31 — bit-identically.
+
 ## [1.31.0] - 2026-08-12
 
 Headlined by **Parameterized Input Mappings** — a Colour→Attribute mapping now
