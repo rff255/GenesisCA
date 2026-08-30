@@ -1321,6 +1321,14 @@ export function HelpView() {
             <li>Right-click the selection and choose &quot;Create Macro.&quot;</li>
             <li>The selected nodes are replaced by a single Macro node with automatically detected input/output ports.</li>
           </ol>
+          <p className={styles.p}>
+            Ports are detected <strong>one per distinct source port</strong>, not one per
+            crossing wire. If one outside node feeds several of the selected nodes you get
+            <em> one</em> input, which fans out to all of them inside the macro; if one
+            selected node feeds several outside nodes you get <em>one</em> output, which
+            fans out outside. So a macro shows only as many ports as there are distinct
+            values crossing its boundary.
+          </p>
 
           <h3 className={styles.h3}>Editing a Macro</h3>
           <p className={styles.p}>
