@@ -120,12 +120,12 @@ function patchAllNodes(
 function pruneEdges(
   nodes: GraphNode[],
   edges: GraphEdge[],
-  drop: (edge: GraphEdge, source: GraphNode | undefined) => boolean,
+  drop: (edge: GraphEdge, source: GraphNode | undefined, target: GraphNode | undefined) => boolean,
 ): GraphEdge[] {
   const byId = new Map(nodes.map(n => [n.id, n]));
   let changed = false;
   const result = edges.filter(e => {
-    if (drop(e, byId.get(e.source))) { changed = true; return false; }
+    if (drop(e, byId.get(e.source), byId.get(e.target))) { changed = true; return false; }
     return true;
   });
   return changed ? result : edges;
@@ -145,7 +145,7 @@ function pruneEdges(
  *  deliberately (or call only one) — no current site needs both. */
 function patchAllEdges(
   model: CAModel,
-  drop: (edge: GraphEdge, source: GraphNode | undefined) => boolean,
+  drop: (edge: GraphEdge, source: GraphNode | undefined, target: GraphNode | undefined) => boolean,
 ): { graphEdges: GraphEdge[]; agentGraphEdges: GraphEdge[]; overseerGraphEdges: GraphEdge[]; macroDefs: MacroDef[] } {
   const graphEdges = pruneEdges(model.graphNodes, model.graphEdges, drop);
   const agentGraphEdges = pruneEdges(model.agentGraphNodes ?? [], model.agentGraphEdges ?? [], drop);
@@ -347,6 +347,7 @@ type ModelAction =
    *  element adds and the macro add, and no half-imported model on a throw. */
   | { type: 'IMPORT_MACRO_BUNDLE'; macros: MacroDef[]; elements: MacroReferenceBundle }
   | { type: 'UPDATE_MACRO'; id: string; changes: Partial<MacroDef> }
+  | { type: 'PRUNE_MACRO_INSTANCE_EDGES'; macroDefId: string; handles: string[] }
   | { type: 'REMOVE_MACRO'; id: string }
   | { type: 'ADD_INDICATOR'; kind: IndicatorKind }
   | { type: 'DUPLICATE_INDICATOR'; sourceId: string }
@@ -1607,6 +1608,42 @@ export function modelReducer(state: ModelState, action: ModelAction): ModelState
         },
       };
 
+    /**
+     * MOVE ACROSS A MACRO BOUNDARY — the LINKED-INSTANCE cascade.
+     *
+     * Moving a node INTO a macro can REMOVE an exposed port (the port's only
+     * reason to exist just walked inside). Adding a port is safe for the other
+     * instances — they grow an unconnected port — but removing one leaves every
+     * OTHER instance, in every graph and every nested def, wired to a port that
+     * no longer exists. Those wires are dropped here, the same "the editor
+     * matches what the compiler would otherwise only report after the fact" rule
+     * `pruneRemovedChannelEdges` follows.
+     *
+     * BOTH directions are tested: an edge INTO an instance names the port on its
+     * TARGET handle, one OUT of it on its SOURCE handle — which is why
+     * `pruneEdges` hands the drop predicate the target node as well.
+     *
+     * The instance the gesture itself rewired is already correct in the arrays
+     * the caller wrote just before dispatching this, so it has no matching wire
+     * left and the pass is a no-op for it.
+     */
+    case 'PRUNE_MACRO_INSTANCE_EDGES': {
+      if (action.handles.length === 0) return state;
+      const handles = new Set(action.handles);
+      const isInstance = (n: GraphNode | undefined) =>
+        !!n && n.data?.nodeType === 'macro'
+        && (n.data.config as Record<string, unknown> | undefined)?.macroDefId === action.macroDefId;
+      const patched = patchAllEdges(state.model, (edge, source, target) =>
+        (isInstance(source) && handles.has(edge.sourceHandle))
+        || (isInstance(target) && handles.has(edge.targetHandle)));
+      const unchanged = patched.graphEdges === state.model.graphEdges
+        && patched.agentGraphEdges === (state.model.agentGraphEdges ?? [])
+        && patched.overseerGraphEdges === (state.model.overseerGraphEdges ?? [])
+        && patched.macroDefs === (state.model.macroDefs ?? []);
+      if (unchanged) return state;
+      return { ...state, isDirty: true, model: { ...state.model, ...patched } };
+    }
+
     case 'REMOVE_MACRO':
       return {
         ...state,
@@ -2251,6 +2288,10 @@ export interface ModelContextValue {
    *  nothing has to be read back out of state. */
   importMacroBundle: (macros: MacroDef[], elements: MacroReferenceBundle) => void;
   updateMacro: (id: string, changes: Partial<MacroDef>) => void;
+  /** Drop every wire, in EVERY graph and every nested def, that touches an
+   *  instance of `macroDefId` through one of these handle ids. Used after a
+   *  cross-scope move REMOVES an exposed port. */
+  pruneMacroInstanceEdges: (macroDefId: string, handles: string[]) => void;
   removeMacro: (id: string) => void;
   addIndicator: (kind: IndicatorKind) => void;
   duplicateIndicator: (sourceId: string) => void;
@@ -2469,6 +2510,11 @@ export function ModelProvider({ children }: { children: ReactNode }) {
       dispatch({ type: 'UPDATE_MACRO', id, changes }),
     [],
   );
+  const pruneMacroInstanceEdges = useCallback(
+    (macroDefId: string, handles: string[]) =>
+      dispatch({ type: 'PRUNE_MACRO_INSTANCE_EDGES', macroDefId, handles }),
+    [],
+  );
   const removeMacro = useCallback(
     (id: string) => dispatch({ type: 'REMOVE_MACRO', id }),
     [],
@@ -2654,6 +2700,7 @@ export function ModelProvider({ children }: { children: ReactNode }) {
       importMacro,
       importMacroBundle,
       updateMacro,
+      pruneMacroInstanceEdges,
       removeMacro,
       addIndicator,
       duplicateIndicator,
@@ -2733,6 +2780,7 @@ export function ModelProvider({ children }: { children: ReactNode }) {
       importMacro,
       importMacroBundle,
       updateMacro,
+      pruneMacroInstanceEdges,
       removeMacro,
       addIndicator,
       duplicateIndicator,

@@ -90,6 +90,9 @@ import {
   setControlPick,
   getOpenMacroScope,
   subscribeOpenMacroScope,
+  getScopeDrag,
+  subscribeScopeDrag,
+  scopeMoveApi,
 } from './graphState';
 
 /** Snapshot getter for useSyncExternalStore — must return a stable reference
@@ -460,7 +463,7 @@ function VisionColorRow({ value, onChange }: { value?: string; onChange: (v: str
   );
 }
 
-function CaNodeComponent({ id, data }: NodeProps) {
+function CaNodeComponent({ id, data, selected }: NodeProps) {
   const nodeData = data as CaNodeData;
   const def = getNodeDef(nodeData.nodeType);
   const { model, updateMacro, importMacro } = useModel();
@@ -1362,6 +1365,28 @@ function CaNodeComponent({ id, data }: NodeProps) {
   }, []);
   /** Stop all propagation (for double-click, click handlers) */
   const stopAll = useCallback((e: React.MouseEvent) => e.stopPropagation(), []);
+
+  // --- MOVE ACROSS A MACRO BOUNDARY -----------------------------------------
+  // The grip in the header starts a "move this selection to another scope"
+  // gesture instead of a canvas drag. Subscribed rather than prop-drilled so a
+  // drag re-renders only the nodes whose highlight actually changed.
+  const scopeDrag = useSyncExternalStore(subscribeScopeDrag, getScopeDrag, getScopeDrag);
+  const isScopeMoving = !!scopeDrag?.movingIds.has(id);
+  const isScopeTarget = !!scopeDrag?.targetIds.has(id);
+  const isScopeHover = scopeDrag?.hoverId === id;
+  /** MANDATORY `nodrag`: React Flow attaches its node drag NATIVELY on the node
+   *  element, so `stopPropagation` on a React handler does NOT prevent it — the
+   *  class is the only thing that stops the grip being swallowed by a canvas
+   *  drag (the Expression width-grip / macro link-badge precedent). */
+  const onScopeGripDown = useCallback((e: React.PointerEvent) => {
+    if (e.button !== 0) return;
+    e.stopPropagation();
+    e.preventDefault();
+    scopeMoveApi?.beginScopeDrag(id, e);
+  }, [id]);
+  const scopeStateClass =
+    (isScopeHover ? ` ${styles.scopeDropHover}` : isScopeTarget ? ` ${styles.scopeDropTarget}` : '')
+    + (isScopeMoving ? ` ${styles.scopeMoving}` : '');
   /** Height of the expression textarea at the start of a resize drag (mousedown),
    *  so mouseup can detect a deliberate resize and persist it to config. Width is
    *  the NODE's (see `_exprW` below), so the textarea only resizes vertically. */
@@ -1815,7 +1840,7 @@ function CaNodeComponent({ id, data }: NodeProps) {
 
     return (
       <div
-        className={`${styles.node} ${isConstant || isColorConstant ? styles.collapsedConstant : styles.collapsed}`}
+        className={`${styles.node} ${isConstant || isColorConstant ? styles.collapsedConstant : styles.collapsed}${scopeStateClass}`}
         style={{ borderColor: borderColorFor(def.color) }}
         onMouseEnter={onMouseEnter}
         onMouseLeave={onMouseLeave}
@@ -1926,7 +1951,7 @@ function CaNodeComponent({ id, data }: NodeProps) {
   return (
     <div
       ref={nodeRootRef}
-      className={`${styles.node} ${isCompact ? styles.compactNode : ''}`}
+      className={`${styles.node} ${isCompact ? styles.compactNode : ''}${scopeStateClass}`}
       style={{
         borderColor: borderColorFor(def.color),
         minHeight: nodeMinHeight,
@@ -1952,6 +1977,19 @@ function CaNodeComponent({ id, data }: NodeProps) {
           </span>
         )}
         {displayNodeLabel(def)}
+        {selected && !scopeDrag && (
+          <span
+            className={`${styles.scopeGrip} nodrag`}
+            title="Drag onto a macro instance to move this selection INSIDE it — or, while editing a macro, onto a Macro Input/Output node to move it OUT. Every connection is preserved."
+            onPointerDown={onScopeGripDown}
+            onClick={stopAll}
+            onDoubleClick={stopAll}
+          >
+            <svg width="9" height="9" viewBox="0 0 9 9" aria-hidden="true">
+              <path d="M1.5 3h6M1.5 6h6" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" fill="none" />
+            </svg>
+          </span>
+        )}
         {linkCount >= 2 && showLinkMenu && (
           <div className={`${styles.linkMenu} nodrag`} onMouseDown={stopDrag} onDoubleClick={stopAll}>
             <button

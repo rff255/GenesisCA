@@ -719,3 +719,53 @@
   letter-spacing: 0.05em;
   color: var(--color-text-tertiary);
 }
+
+/* --- MOVE ACROSS A MACRO BOUNDARY ---------------------------------------- */
+/* The grip appears in a SELECTED node's header and starts a scope move, not a
+   canvas drag. `nodrag` on the element is what actually stops React Flow (its
+   node drag is a NATIVE listener); this only styles it. Pushed to the header's
+   right edge so it never crowds the label or the link badge. */
+.scopeGrip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 15px;
+  height: 15px;
+  margin-left: auto;
+  color: inherit;
+  opacity: 0.55;
+  background: rgba(0, 0, 0, 0.28);
+  border-radius: var(--radius-sm);
+  cursor: grab;
+  pointer-events: auto;
+  user-select: none;
+  flex: 0 0 auto;
+}
+
+.scopeGrip:hover {
+  opacity: 1;
+  background: rgba(0, 0, 0, 0.5);
+}
+
+.scopeGrip:active {
+  cursor: grabbing;
+}
+
+/* A node that WOULD accept the drop (a macro instance in the parent scope, or a
+   boundary node while editing a macro). */
+.scopeDropTarget {
+  outline: 2px dashed var(--color-accent);
+  outline-offset: 2px;
+}
+
+/* …and the one actually under the cursor. */
+.scopeDropHover {
+  outline: 3px solid var(--color-accent);
+  outline-offset: 2px;
+  box-shadow: 0 0 0 6px var(--color-accent-soft);
+}
+
+/* The nodes being carried. */
+.scopeMoving {
+  opacity: 0.55;
+}
