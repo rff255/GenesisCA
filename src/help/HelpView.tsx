@@ -1322,12 +1322,21 @@ export function HelpView() {
             <li>The selected nodes are replaced by a single Macro node with automatically detected input/output ports.</li>
           </ol>
           <p className={styles.p}>
-            Ports are detected <strong>one per distinct source port</strong>, not one per
-            crossing wire. If one outside node feeds several of the selected nodes you get
-            <em> one</em> input, which fans out to all of them inside the macro; if one
+            Ports are detected <strong>one per connected group of crossing wires</strong>,
+            not one per wire. If one outside node feeds several of the selected nodes you
+            get <em>one</em> input, which fans out to all of them inside the macro; if one
             selected node feeds several outside nodes you get <em>one</em> output, which
-            fans out outside. So a macro shows only as many ports as there are distinct
-            values crossing its boundary.
+            fans out outside. And because a <strong>flow</strong> input accepts several
+            incoming wires, several outside flow wires arriving at the same selected node
+            likewise become <em>one</em> input — both of them simply converge on it. So a
+            macro shows only as many ports as there are distinct things crossing its
+            boundary.
+          </p>
+          <p className={styles.p}>
+            The one case that is deliberately <em>not</em> merged is a group where merging
+            would create a wire you never drew — for example two outside flow nodes where
+            only one of them reaches both selected nodes. There the ports stay separate, so
+            the macro always computes exactly what the original graph did.
           </p>
 
           <h3 className={styles.h3}>Editing a Macro</h3>
@@ -1459,9 +1468,11 @@ export function HelpView() {
             <strong>Every connection is preserved.</strong> A wire that now has to cross the
             boundary grows the macro a port and is re-wired through it; a port whose only
             reason to exist just moved across is removed and its wire re-made directly. Ports
-            follow the same rule the rest of the editor does &mdash; <em>one port per distinct
-            source</em>, so a single value feeding several moved nodes creates one port that
-            fans out, not several identical ones. Valid drop targets outline themselves while
+            follow the same rule Create Macro does &mdash; <em>one port per connected group of
+            crossing wires</em>, so a single value feeding several moved nodes creates one port
+            that fans out, and several flow wires arriving at the same node converge on one
+            port rather than making several identical ones. A crossing wire that a port the
+            macro already has can carry simply joins that port. Valid drop targets outline themselves while
             you drag, the one under the cursor lights up, and <strong>Esc</strong> cancels.
           </p>
           <p className={styles.p}>
