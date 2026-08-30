@@ -49,6 +49,14 @@ import {
   setMemoryClipboardNodes,
   writeGraphClipboard,
 } from './graphClipboard';
+import {
+  moveIntoMacro,
+  moveOutOfMacro,
+  filterMovableIds,
+  stripControlsForNodes,
+  countInstancesEverywhere,
+  locateMacroInstance,
+} from './macroMoveScope';
 import { computeAlignmentSnap, sameGuides } from './alignmentSnap';
 import type { AlignGuides, AlignTarget } from './alignmentSnap';
 import { useThemeTokens } from '../../styles/useThemeTokens';
@@ -132,7 +140,7 @@ function graphKindLabel(kind: ActiveGraphKind): string {
   return kind === 'cells' ? 'Cells' : kind === 'agents' ? 'Agents' : 'Overseer';
 }
 
-import { setIsConnecting, setConnectingFrom, setShowPortLabels, showPortLabelsGlobal, showGridGlobal, setShowGrid as setShowGridGlobal, snapEnabledGlobal, setSnapEnabled as setSnapEnabledGlobal, setConnectedHandlesFromEdges, setConnectionHazards, getSavedGraphViewport, setSavedGraphViewport, savedCurrentScope, setSavedCurrentScope, subscribeCurrentModelElementDrag, setCompatibleHandlesForDrag, clearCompatibleHandlesForDrag, setCurrentModelElementDrag, compatibleHandlesForDrag, currentModelElementDrag, setQuickAddApi, setActiveGraphKind, hasPendingMacroImport, takePendingMacroImport, displayNodeLabel, displayNodeDescription, setControlPick, getControlPick, setOpenMacroScope, getOpenMacroScope, type ActiveGraphKind } from './graphState';
+import { setIsConnecting, setConnectingFrom, setShowPortLabels, showPortLabelsGlobal, showGridGlobal, setShowGrid as setShowGridGlobal, snapEnabledGlobal, setSnapEnabled as setSnapEnabledGlobal, setConnectedHandlesFromEdges, setConnectionHazards, getSavedGraphViewport, setSavedGraphViewport, savedCurrentScope, setSavedCurrentScope, subscribeCurrentModelElementDrag, setCompatibleHandlesForDrag, clearCompatibleHandlesForDrag, setCurrentModelElementDrag, compatibleHandlesForDrag, currentModelElementDrag, setQuickAddApi, setActiveGraphKind, hasPendingMacroImport, takePendingMacroImport, displayNodeLabel, displayNodeDescription, setControlPick, getControlPick, setOpenMacroScope, getOpenMacroScope, setScopeMoveApi, setScopeDrag, getScopeDrag, type ScopeDragPointer, type ActiveGraphKind } from './graphState';
 import { modelerUiState } from '../modelerUiState';
 import type { QuickAddPayload } from './graphState';
 import { detectEdgeHazard, isNodeAvailable } from './nodes/nodeValidation';
@@ -629,7 +637,7 @@ interface ContextMenuState {
 // ---------------------------------------------------------------------------
 
 export function GraphEditorInner() {
-  const { model, modelVersion, setGraph, setAgentGraph, setOverseerGraph, addMacro, importMacro, importMacroBundle, updateMacro, removeMacro } = useModel();
+  const { model, modelVersion, setGraph, setAgentGraph, setOverseerGraph, addMacro, importMacro, importMacroBundle, updateMacro, removeMacro, pruneMacroInstanceEdges } = useModel();
   // Bond-Graph Agents: which rule graph is shown (Cells vs Agents). Seeded from
   // the persisted snapshot (GraphEditor unmounts on a Simulator round-trip), and
   // clamped to 'cells' if the Agents topology is off. The graph-swap effect +
@@ -4209,6 +4217,281 @@ export function GraphEditorInner() {
     setContextMenu(null);
   }, [contextMenu, getNodes, edges, model.macroDefs, removeMacro, setNodes, setEdges, scheduleSync]);
 
+
+  // =========================================================================
+  // MOVE A SELECTION ACROSS A MACRO BOUNDARY
+  //
+  // Drag a selected node by the grip in its HEADER onto a macro INSTANCE to
+  // move the whole selection INSIDE that macro — or, while editing a macro,
+  // onto either BOUNDARY node to move it OUT. Every crossing connection is
+  // preserved; the rewiring itself lives in the pure `macroMoveScope` module,
+  // which the DEV hook drives through this SAME function.
+  //
+  // ⚠ UNDO IS SCOPE-LOCAL. `graphHistory` holds one stack for the graph on
+  // screen and `clearHistory()` runs on every scope change, so Ctrl+Z cannot
+  // reverse a cross-scope move: it restores the canvas half only. Same shape as
+  // the documented "Make Independent Copy" undo asymmetry.
+  // =========================================================================
+
+  const [scopeNotice, setScopeNotice] = useState<{ text: string; warn: boolean } | null>(null);
+  const scopeNoticeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /** An in-app notice, never `window.alert` — a modal dialog blocks the render
+   *  loop (and every browser-eval verification harness with it). */
+  const showScopeNotice = useCallback((text: string, warn = true) => {
+    if (scopeNoticeTimer.current) clearTimeout(scopeNoticeTimer.current);
+    setScopeNotice({ text, warn });
+    scopeNoticeTimer.current = setTimeout(() => setScopeNotice(null), 6000);
+  }, []);
+  useEffect(() => () => { if (scopeNoticeTimer.current) clearTimeout(scopeNoticeTimer.current); }, []);
+
+  /** Write the CURRENT scope's graph to the model NOW (the routing
+   *  `scheduleSync` uses, minus the 100 ms debounce). A cross-scope move
+   *  dispatches several actions that must see a consistent model, so the open
+   *  canvas cannot be left 100 ms behind. */
+  const writeScopeNow = useCallback((gn: GraphNode[], ge: GraphEdge[]) => {
+    if (syncTimer.current) { clearTimeout(syncTimer.current); syncTimer.current = null; }
+    const scopeId = currentScopeRef.current[currentScopeRef.current.length - 1];
+    if (!scopeId || scopeId === 'root') {
+      if (activeGraphRef.current === 'agents') setAgentGraph(gn, ge);
+      else if (activeGraphRef.current === 'overseer') setOverseerGraph(gn, ge);
+      else setGraph(gn, ge);
+    } else {
+      updateMacro(scopeId, { nodes: gn, edges: ge });
+    }
+  }, [setGraph, setAgentGraph, setOverseerGraph, updateMacro]);
+
+  /** A port that VANISHED invalidates that handle at every OTHER instance, in
+   *  every graph and every nested def. Dispatched AFTER the writes above so the
+   *  reducer prunes over fresh arrays. */
+  const pruneRemovedPorts = useCallback((defId: string, removedIn: string[], removedOut: string[], def: MacroDef) => {
+    // Guard against a re-issued id: a port removed here whose id the SAME move
+    // then handed to a NEW port must not be pruned.
+    const live = new Set([...def.exposedInputs, ...def.exposedOutputs].map(p => p.portId));
+    const handles: string[] = [];
+    for (const p of removedIn) if (!live.has(p)) handles.push(`input_value_${p}`, `input_flow_${p}`);
+    for (const p of removedOut) if (!live.has(p)) handles.push(`output_value_${p}`, `output_flow_${p}`);
+    if (handles.length > 0) pruneMacroInstanceEdges(defId, handles);
+  }, [pruneMacroInstanceEdges]);
+
+  /**
+   * THE ONE CODE PATH the drop and the DEV hook both run.
+   * `targetNodeId` decides the direction: a `macro` node means move IN, a
+   * `macroInput`/`macroOutput` boundary node means move OUT.
+   */
+  const performScopeMove = useCallback((movingIdsIn: string[], targetNodeId: string): boolean => {
+    const graphNodes = toGraphNodes(getNodes());
+    const graphEdges = toGraphEdges(edgesRef.current);
+    const target = graphNodes.find(n => n.id === targetNodeId);
+    if (!target) { showScopeNotice('That drop target is no longer on the canvas.'); return false; }
+
+    const movingIds = filterMovableIds(graphNodes, movingIdsIn).filter(id => id !== targetNodeId);
+    if (movingIds.length === 0) {
+      showScopeNotice('Nothing in that selection can cross a macro boundary (boundary nodes and event roots stay put).');
+      return false;
+    }
+    const scopeId = currentScopeRef.current[currentScopeRef.current.length - 1];
+    const insideDefId = scopeId && scopeId !== 'root' ? scopeId : null;
+    const targetType = target.data?.nodeType;
+
+    // ---------------- MOVE IN -------------------------------------------
+    if (targetType === 'macro') {
+      const childDefId = (target.data.config as Record<string, unknown> | undefined)?.macroDefId as string | undefined;
+      const childDef = (model.macroDefs || []).find(m => m.id === childDefId);
+      if (!childDef) { showScopeNotice('That macro instance has no definition to move into.'); return false; }
+      const r = moveIntoMacro({ def: childDef, parentNodes: graphNodes, parentEdges: graphEdges, instanceNodeId: targetNodeId, movingIds });
+      if (!r.ok) { showScopeNotice(r.error); return false; }
+      pushCurrentSnapshot();
+
+      // A control in the PARENT def targeting a node that just moved into the
+      // child would resolve to a node that def no longer owns.
+      if (insideDefId) {
+        const parentDef = (model.macroDefs || []).find(m => m.id === insideDefId);
+        if (parentDef) {
+          const stripped = stripControlsForNodes(parentDef, new Set(movingIds));
+          if (stripped !== parentDef) updateMacro(insideDefId, { controls: stripped.controls });
+        }
+      }
+      writeScopeNow(r.parentNodes, r.parentEdges);
+      setNodes(toRFNodes(r.parentNodes));
+      setEdges(toRFEdges(r.parentEdges));
+      updateMacro(childDef.id, {
+        nodes: r.def.nodes, edges: r.def.edges,
+        exposedInputs: r.def.exposedInputs, exposedOutputs: r.def.exposedOutputs,
+      });
+      pruneRemovedPorts(childDef.id, r.removedInputPortIds, r.removedOutputPortIds, r.def);
+      // Adding a port is safe for the other instances (they grow an unconnected
+      // port); REMOVING one drops their wires into it, so say so.
+      const siblings = countInstancesEverywhere(model, childDef.id) - 1;
+      const cascade = siblings > 0 && (r.removedInputPortIds.length + r.removedOutputPortIds.length) > 0
+        ? ` Wires into the removed port(s) at ${siblings} other linked instance${siblings === 1 ? '' : 's'} were dropped.`
+        : '';
+      showScopeNotice(
+        `Moved ${r.movedIds.length} node${r.movedIds.length === 1 ? '' : 's'} into "${childDef.name}". ${r.notes.join(' ')}${cascade}`.trim(),
+        false,
+      );
+      return true;
+    }
+
+    // ---------------- MOVE OUT ------------------------------------------
+    if (targetType === 'macroInput' || targetType === 'macroOutput') {
+      if (!insideDefId) { showScopeNotice('A boundary node only accepts a drop while you are editing its macro.'); return false; }
+      const modelDef = (model.macroDefs || []).find(m => m.id === insideDefId);
+      if (!modelDef) { showScopeNotice('This macro definition is missing.'); return false; }
+
+      // ⚠ LINKED INSTANCES: pulling a node out would silently strip that
+      // computation from every OTHER instance too. Refuse, and name the way out
+      // (the link badge's "Make Independent Copy").
+      const instances = countInstancesEverywhere(model, insideDefId);
+      if (instances > 1) {
+        showScopeNotice(`"${modelDef.name}" has ${instances} linked instances — moving a node out would change all of them. Open the instance's link badge and pick "Make Independent Copy" first.`);
+        return false;
+      }
+      const loc = locateMacroInstance(model, insideDefId);
+      if (!loc) { showScopeNotice(`"${modelDef.name}" has no instance in any graph, so there is nowhere to move the nodes to.`); return false; }
+
+      // The def on screen is authoritative (its edits may not have synced yet);
+      // its ports and controls come from the model.
+      const liveDef: MacroDef = { ...modelDef, nodes: graphNodes, edges: graphEdges };
+      const r = moveOutOfMacro({ def: liveDef, parentNodes: loc.nodes, parentEdges: loc.edges, instanceNodeId: loc.instanceId, movingIds });
+      if (!r.ok) { showScopeNotice(r.error); return false; }
+      pushCurrentSnapshot();
+
+      if (loc.store === 'macro') updateMacro(loc.defId, { nodes: r.parentNodes, edges: r.parentEdges });
+      else if (loc.store === 'agents') setAgentGraph(r.parentNodes, r.parentEdges);
+      else if (loc.store === 'overseer') setOverseerGraph(r.parentNodes, r.parentEdges);
+      else setGraph(r.parentNodes, r.parentEdges);
+
+      if (syncTimer.current) { clearTimeout(syncTimer.current); syncTimer.current = null; }
+      updateMacro(insideDefId, {
+        nodes: r.def.nodes, edges: r.def.edges,
+        exposedInputs: r.def.exposedInputs, exposedOutputs: r.def.exposedOutputs,
+        controls: r.def.controls,
+      });
+      setNodes(toRFNodes(r.def.nodes));
+      setEdges(toRFEdges(r.def.edges));
+      pruneRemovedPorts(insideDefId, r.removedInputPortIds, r.removedOutputPortIds, r.def);
+      showScopeNotice(
+        `Moved ${r.movedIds.length} node${r.movedIds.length === 1 ? '' : 's'} out to the parent graph. ${r.notes.join(' ')}`.trim(),
+        false,
+      );
+      return true;
+    }
+
+    showScopeNotice('Drop a selection onto a MACRO instance to move it in, or onto a Macro Input / Macro Output node to move it out.');
+    return false;
+  }, [getNodes, model, showScopeNotice, pushCurrentSnapshot, updateMacro, writeScopeNow, setNodes, setEdges, setGraph, setAgentGraph, setOverseerGraph, pruneRemovedPorts]);
+
+  // --- the gesture ---------------------------------------------------------
+  const scopeDragRef = useRef<{ movingIds: string[]; targetIds: Set<string>; hoverId: string | null } | null>(null);
+
+  const endScopeDrag = useCallback((commit: boolean) => {
+    const st = scopeDragRef.current;
+    scopeDragRef.current = null;
+    setScopeDrag(null);
+    if (commit && st && st.hoverId) performScopeMove(st.movingIds, st.hoverId);
+  }, [performScopeMove]);
+
+  const beginScopeDrag = useCallback((nodeId: string, e: ScopeDragPointer): boolean => {
+    if (scopeDragRef.current) return false;
+    const rfNodes = getNodes();
+    const graphNodes = toGraphNodes(rfNodes);
+    const selected = rfNodes.filter(n => n.selected).map(n => n.id);
+    const wanted = selected.includes(nodeId) ? selected : [nodeId];
+    const movingIds = filterMovableIds(graphNodes, wanted);
+    if (movingIds.length === 0) {
+      showScopeNotice('Boundary nodes and event roots cannot cross a macro boundary.');
+      return false;
+    }
+    const moving = new Set(movingIds);
+    const scopeId = currentScopeRef.current[currentScopeRef.current.length - 1];
+    const insideMacro = !!scopeId && scopeId !== 'root';
+    const targetIds = new Set<string>();
+    for (const n of graphNodes) {
+      if (moving.has(n.id)) continue;
+      const t = n.data?.nodeType;
+      if (t === 'macro') targetIds.add(n.id);
+      else if (insideMacro && (t === 'macroInput' || t === 'macroOutput')) targetIds.add(n.id);
+    }
+    if (targetIds.size === 0) {
+      showScopeNotice(insideMacro
+        ? 'Nothing to drop onto — this macro has no boundary node and no nested macro instance.'
+        : 'Nothing to drop onto — add a macro instance to this graph first.');
+      return false;
+    }
+
+    scopeDragRef.current = { movingIds, targetIds, hoverId: null };
+    setScopeDrag({ movingIds: moving, targetIds, hoverId: null });
+
+    // FLOW coordinates, never `document.elementFromPoint` — that does not
+    // hit-test React Flow's transformed viewport in a hidden/occluded pane,
+    // which would make the whole gesture unverifiable.
+    const hitTest = (clientX: number, clientY: number): string | null => {
+      const rf = rfInstance.current;
+      if (!rf) return null;
+      const p = rf.screenToFlowPosition({ x: clientX, y: clientY });
+      let hit: string | null = null;
+      for (const n of getNodes()) {
+        if (!targetIds.has(n.id)) continue;
+        const { w, h } = nodeSize(n);
+        if (p.x >= n.position.x && p.x <= n.position.x + w && p.y >= n.position.y && p.y <= n.position.y + h) {
+          hit = n.id;   // last match wins — later in the array paints on top
+        }
+      }
+      return hit;
+    };
+
+    const setHover = (clientX: number, clientY: number) => {
+      const st = scopeDragRef.current;
+      if (!st) return;
+      const hover = hitTest(clientX, clientY);
+      if (hover === st.hoverId) return;
+      st.hoverId = hover;
+      setScopeDrag({ movingIds: moving, targetIds, hoverId: hover });
+    };
+    const onMove = (ev: PointerEvent) => setHover(ev.clientX, ev.clientY);
+    const onUp = () => { cleanup(); endScopeDrag(true); };
+    const onCancel = () => { cleanup(); endScopeDrag(false); };
+    const onKey = (ev: KeyboardEvent) => {
+      if (ev.key !== 'Escape') return;
+      ev.stopPropagation();
+      cleanup();
+      endScopeDrag(false);
+    };
+    const cleanup = () => {
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+      window.removeEventListener('pointercancel', onCancel);
+      window.removeEventListener('keydown', onKey, true);
+    };
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+    window.addEventListener('pointercancel', onCancel);
+    window.addEventListener('keydown', onKey, true);
+    setHover(e.clientX, e.clientY);
+    return true;
+  }, [getNodes, showScopeNotice, endScopeDrag]);
+
+  useEffect(() => {
+    setScopeMoveApi({ beginScopeDrag });
+    return () => setScopeMoveApi(null);
+  }, [beginScopeDrag]);
+
+  // A scope drag must never outlive the graph it started in.
+  useEffect(() => {
+    if (getScopeDrag()) { scopeDragRef.current = null; setScopeDrag(null); }
+  }, [currentScope, activeGraph, modelVersion]);
+
+  // DEV-only test hook: React Flow node drags (and therefore the grip's own
+  // pointer gesture) cannot be driven by synthetic pointer events — the same
+  // limitation as box-select and the connection drag. Browser-eval tests run
+  // the move through the SAME `performScopeMove` the drop calls.
+  useEffect(() => {
+    if (!import.meta.env.DEV) return undefined;
+    (window as unknown as Record<string, unknown>).__moveSelectionToScope =
+      (nodeIds: string[], dropTargetNodeId: string) => performScopeMove(nodeIds, dropTargetNodeId);
+    return () => { delete (window as unknown as Record<string, unknown>).__moveSelectionToScope; };
+  }, [performScopeMove]);
+
   // Sync on node data changes (config edits via inline widgets)
   const onNodeDataChange = useCallback(() => {
     pushDebouncedSnapshot();
@@ -4848,6 +5131,15 @@ export function GraphEditorInner() {
           }}
           onCancel={() => setMacroImportState(null)}
         />
+      )}
+      {/* MOVE ACROSS A MACRO BOUNDARY — the in-app notice. Never `window.alert`:
+          a modal dialog blocks the render loop (and every browser-eval
+          verification harness with it). `pointer-events: none` so it can never
+          swallow a click on the canvas underneath. */}
+      {scopeNotice && (
+        <div className={`${styles.scopeNotice} ${scopeNotice.warn ? styles.scopeNoticeWarn : ''}`} data-scope-notice={scopeNotice.warn ? 'warn' : 'info'}>
+          {scopeNotice.text}
+        </div>
       )}
       {namePrompt && (() => {
         // namePrompt.x/y come from contextMenu, which stores coords relative to

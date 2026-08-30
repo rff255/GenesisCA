@@ -1445,6 +1445,38 @@ export function HelpView() {
             <li>When 2+ instances share a definition, a small <strong>count badge</strong> appears at the left of each Macro node&apos;s header. Click it and choose <strong>Make Independent Copy</strong> to break the link for that one instance &mdash; it gets its own definition you can edit and rename freely. (Inspired by Blender&apos;s linked-datablock user count.)</li>
           </ul>
 
+          <h3 className={styles.h3}>Moving nodes in and out of a macro</h3>
+          <p className={styles.p}>
+            You don&apos;t have to undo a macro to change what is inside it. Select the
+            node (or nodes) you want to move &mdash; a small <strong>grip</strong> appears
+            at the right of each selected node&apos;s header &mdash; then drag by that grip:
+          </p>
+          <ul className={styles.list}>
+            <li><strong>Onto a Macro node</strong> &mdash; moves the whole selection <em>inside</em> that macro.</li>
+            <li><strong>Onto a Macro Input or Macro Output node</strong>, while you are editing a macro &mdash; moves the selection <em>out</em> to the parent graph.</li>
+          </ul>
+          <p className={styles.p}>
+            <strong>Every connection is preserved.</strong> A wire that now has to cross the
+            boundary grows the macro a port and is re-wired through it; a port whose only
+            reason to exist just moved across is removed and its wire re-made directly. Ports
+            follow the same rule the rest of the editor does &mdash; <em>one port per distinct
+            source</em>, so a single value feeding several moved nodes creates one port that
+            fans out, not several identical ones. Valid drop targets outline themselves while
+            you drag, the one under the cursor lights up, and <strong>Esc</strong> cancels.
+          </p>
+          <p className={styles.p}>
+            Two limits worth knowing. <strong>Moving a node OUT is refused when the macro has
+            linked copies</strong> &mdash; it would silently remove that computation from every
+            other copy too; use the count badge&apos;s <strong>Make Independent Copy</strong>
+            first. And moving a node <em>in</em> may remove a port, which drops the wires the
+            other linked copies had into it (the on-screen message says how many). An
+            <strong>Explicit Parameter</strong> pointing at a node that leaves a macro is
+            removed with it, so the macro&apos;s interface stays honest. Boundary nodes and
+            event roots (Generation Step, Behaviour Step&hellip;) never move. Because undo is
+            per-graph, <strong>Ctrl+Z will not reverse a move across a boundary</strong> &mdash;
+            it only undoes the half you are looking at.
+          </p>
+
           <h3 className={styles.h3}>Undoing a Macro</h3>
           <p className={styles.p}>
             Right-click a Macro node and choose &quot;Undo Macro&quot; to inline its

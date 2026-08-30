@@ -512,3 +512,59 @@ export function setConnectionHazards(next: Map<string, readonly string[]>): void
   connectionHazardsMap = stabilized;
   if (changed) connectionHazardsListeners.forEach(fn => fn());
 }
+
+// ---------------------------------------------------------------------------
+// MOVE A SELECTION ACROSS A MACRO BOUNDARY — the grip ⇄ editor bridge.
+//
+// The grip lives in a node's HEADER (CaNode), the gesture and the whole
+// rewiring live in GraphEditor. A module global rather than prop-drilling —
+// the `quickAddApi` precedent — and a pub/sub so ONLY the nodes whose highlight
+// changed re-render (a drag that re-rendered every node per pointermove is
+// exactly what the connected-handles store exists to avoid).
+// ---------------------------------------------------------------------------
+
+/** The bits of a PointerEvent the gesture needs — structural, so `graphState`
+ *  stays React-import-free (it is imported BY CaNode → GraphEditor). */
+export interface ScopeDragPointer {
+  clientX: number;
+  clientY: number;
+  pointerId: number;
+}
+
+export interface ScopeMoveApi {
+  /** A pointerdown landed on a node's scope grip. GraphEditor owns the gesture
+   *  from here: it tracks the drop target in FLOW space and performs the move on
+   *  release. Returns false when the gesture cannot start (nothing movable), so
+   *  the grip can fall through. */
+  beginScopeDrag: (nodeId: string, e: ScopeDragPointer) => boolean;
+}
+
+export let scopeMoveApi: ScopeMoveApi | null = null;
+export function setScopeMoveApi(api: ScopeMoveApi | null): void {
+  scopeMoveApi = api;
+}
+
+/** Live state of a scope-move drag, read by CaNode for its drop-target ring. */
+export interface ScopeDragState {
+  /** ids being moved (so they can dim themselves). */
+  movingIds: Set<string>;
+  /** node ids that would ACCEPT a drop right now (a macro instance in the
+   *  parent scope; the two boundary nodes inside a macro). */
+  targetIds: Set<string>;
+  /** the target currently under the cursor, if any. */
+  hoverId: string | null;
+}
+
+let scopeDragGlobal: ScopeDragState | null = null;
+const scopeDragListeners = new Set<() => void>();
+
+export function getScopeDrag(): ScopeDragState | null { return scopeDragGlobal; }
+export function subscribeScopeDrag(fn: () => void): () => void {
+  scopeDragListeners.add(fn);
+  return () => { scopeDragListeners.delete(fn); };
+}
+export function setScopeDrag(val: ScopeDragState | null): void {
+  if (scopeDragGlobal === val) return;
+  scopeDragGlobal = val;
+  scopeDragListeners.forEach(fn => fn());
+}
