@@ -12,16 +12,29 @@
  * hook drives it, and `scripts/test-macro-move-scope.mjs` drives the SAME
  * shipped code rather than a re-implementation.
  *
- * ── THE PORT RULE (inherited from 05a668a, and it is the law here too) ────────
- * ONE exposed port per distinct SOURCE port, never one per crossing edge:
- *   • an INPUT  port is keyed by the OUTER  (source, sourceHandle) — its fan-out
- *     to several internal consumers lives INSIDE the def (one bridge each);
- *   • an OUTPUT port is keyed by the INTERNAL (source, sourceHandle) — its
- *     fan-out to several outer consumers lives OUTSIDE (one outer edge each).
- * Both key on the edge's SOURCE side, which is what makes the merge always
- * legal: a value OUTPUT may fan out, while a value INPUT is single-occupancy
- * (`isValidConnection`), so a group can never need to fold two wires into one
- * input.
+ * ── THE PORT RULE (shared with `createMacroFromSelection`; see the helper) ────
+ * ONE exposed port per CONNECTED COMPONENT of the crossing edges, never one per
+ * crossing edge — `groupCrossingEdges` below is the single definition, and
+ * GraphEditor's Create Macro imports it from here so the two cannot drift.
+ *   • an INPUT  port's component spans the OUTER (source, sourceHandle) ports and
+ *     the INTERNAL (target, targetHandle) ports they reach. Its fan-out to
+ *     several internal consumers lives INSIDE the def (one bridge each); its
+ *     fan-IN from several outer flow sources lives OUTSIDE (they converge on the
+ *     one port).
+ *   • an OUTPUT port is the mirror: fan-in inside (one bridge per internal
+ *     source), fan-out outside (one edge per outer consumer).
+ * For a VALUE port this is provably identical to grouping by SOURCE alone (a
+ * value input is single-occupancy, so every component is a star); only FLOW can
+ * produce a component with several sources, and merging those is exactly the
+ * convergence source-grouping could not express.
+ *
+ * ⚠ REUSING AN EXISTING PORT IS PART OF THE SAME RULE. A crossing edge whose
+ * component touches a port the def already has must join THAT port rather than
+ * mint a second one — by the SOURCE side (the outer feeder already crosses) or by
+ * the TARGET side (the internal consumer is already served). Reuse is taken only
+ * when it stays lossless: the existing port's own set on the identity side must
+ * EQUAL the group's, or the merge would make a pre-existing feeder reach a new
+ * target it never fed (see the guard in `groupCrossingEdges`).
  *
  * ── WHAT MAKES A PORT DISAPPEAR ──────────────────────────────────────────────
  * A port whose reason to exist just walked across the boundary is REMOVED, and
@@ -53,7 +66,7 @@
  * The caller enforces it (it owns the model-wide instance count); this module
  * only needs the instance node it is told about.
  */
-import type { GraphEdge, GraphNode, MacroControl, MacroDef, MacroPort } from '../../model/types';
+import type { GraphEdge, GraphNode, MacroControl, MacroDef } from '../../model/types';
 import { handleId, parseHandleId } from './types';
 import { applyInterfaceEdit } from './explicitControls';
 
@@ -188,7 +201,7 @@ function portLabel(portId: string, prefix: 'in' | 'out'): string {
   return Number.isFinite(n) ? `${word} ${n + 1}` : word;
 }
 
-/** Group a list by a key, preserving first-seen order (the 05a668a rule). */
+/** Group a list by a key, preserving first-seen order. */
 function groupBy<T>(list: T[], key: (t: T) => string): Array<{ key: string; items: T[] }> {
   const map = new Map<string, T[]>();
   for (const t of list) {
@@ -203,6 +216,121 @@ function groupBy<T>(list: T[], key: (t: T) => string): Array<{ key: string; item
 /** The source-side key both directions group by. A NUL separator so a handle
  *  containing the separator can never merge two distinct sources. */
 const srcKey = (e: GraphEdge): string => `${e.source} ${e.sourceHandle ?? ''}`;
+/** The target-side key: the port a crossing edge LANDS on. `groupCrossingEdges`
+ *  needs both sides to build its bipartite components. */
+const tgtKey = (e: GraphEdge): string => `${e.target} ${e.targetHandle ?? ''}`;
+
+// ---------------------------------------------------------------------------
+// THE PORT RULE — one exposed port per CONNECTED COMPONENT of the crossing edges
+// ---------------------------------------------------------------------------
+
+/** A set of crossing edges that becomes ONE exposed macro port. */
+export type CrossingGroup<E> = {
+  /** Every crossing edge the port carries. */
+  edges: E[];
+  /** One representative edge per distinct SOURCE-side port, first-seen order. */
+  sourceReps: E[];
+  /** One representative edge per distinct TARGET-side port, first-seen order. */
+  targetReps: E[];
+};
+
+/** Distinct keys in first-seen order, with one representative item each. */
+function distinctBy<E>(list: E[], key: (e: E) => string): E[] {
+  const seen = new Set<string>();
+  const out: E[] = [];
+  for (const e of list) {
+    const k = key(e);
+    if (seen.has(k)) continue;
+    seen.add(k);
+    out.push(e);
+  }
+  return out;
+}
+
+function makeCrossingGroup<E>(
+  edges: E[],
+  sourceKey: (e: E) => string,
+  targetKey: (e: E) => string,
+): CrossingGroup<E> {
+  return { edges, sourceReps: distinctBy(edges, sourceKey), targetReps: distinctBy(edges, targetKey) };
+}
+
+/**
+ * ONE exposed port per CONNECTED COMPONENT of the crossing edges — never one per
+ * crossing edge.
+ *
+ * Treat the crossing edges as a BIPARTITE graph whose two node sets are the
+ * source-side port and the target-side port of each edge, and emit one exposed
+ * port per connected component. Outside the boundary every source in the
+ * component wires into that one port; inside, that one port fans out to every
+ * target (and mirrored for an OUTPUT port, whose fan-in lives inside and whose
+ * fan-out lives outside).
+ *
+ * This SUBSUMES the older "one port per distinct SOURCE port" rule rather than
+ * replacing it:
+ *   • For a VALUE port it is provably the SAME grouping. A value input is
+ *     single-occupancy (`isValidConnection`), so on the input side every target
+ *     has degree 1 and every component is a star centred on ONE source; on the
+ *     output side every outer value target has degree 1, so every component is a
+ *     star centred on ONE internal source. Either way: one source per component,
+ *     i.e. exactly source-grouping.
+ *   • A FLOW input is MULTI-occupancy, so a flow component may hold several
+ *     sources converging on one target — and merging those into a single port
+ *     (both wires converging on it) is precisely what source-grouping could not
+ *     express.
+ *
+ * ⚠ THE LOSSLESSNESS GUARD. One port with sources S and targets T expands to the
+ * full product S × T, so merging a component is only faithful when the component
+ * ALREADY is complete bipartite. It need not be: with flow edges A→X, B→X, A→Y
+ * the component is {A,B}×{X,Y} but only 3 of the 4 pairs are real, and merging
+ * would silently INVENT the flow edge B→Y. So a component is merged only when
+ * its distinct (source, target) pairs number exactly |S|·|T|; otherwise it falls
+ * back to grouping by SOURCE, which is always a star and therefore always
+ * lossless (and is what shipped before components). Value ports can never take
+ * that branch — their components are stars already.
+ */
+export function groupCrossingEdges<E>(
+  list: E[],
+  sourceKey: (e: E) => string,
+  targetKey: (e: E) => string,
+): Array<CrossingGroup<E>> {
+  // Union-find over the bipartite node set. The `s`/`t` prefixes keep the two
+  // key spaces apart even if a source key ever spelled the same as a target one.
+  const parent = new Map<string, string>();
+  const find = (k: string): string => {
+    if (!parent.has(k)) { parent.set(k, k); return k; }
+    let root = k;
+    while (parent.get(root) !== root) root = parent.get(root)!;
+    let cur = k;
+    while (parent.get(cur) !== root) { const nxt = parent.get(cur)!; parent.set(cur, root); cur = nxt; }
+    return root;
+  };
+  const union = (a: string, b: string): void => {
+    const ra = find(a), rb = find(b);
+    if (ra !== rb) parent.set(ra, rb);
+  };
+  const sNode = (e: E): string => `s ${sourceKey(e)}`;
+  const tNode = (e: E): string => `t ${targetKey(e)}`;
+  for (const e of list) union(sNode(e), tNode(e));
+
+  // Bucket by component, in first-seen edge order.
+  const buckets = new Map<string, E[]>();
+  for (const e of list) {
+    const r = find(sNode(e));
+    const cur = buckets.get(r);
+    if (cur) cur.push(e); else buckets.set(r, [e]);
+  }
+
+  const out: Array<CrossingGroup<E>> = [];
+  for (const edges of buckets.values()) {
+    const g = makeCrossingGroup(edges, sourceKey, targetKey);
+    const pairs = new Set(edges.map(e => `${sourceKey(e)} ${targetKey(e)}`));
+    if (pairs.size === g.sourceReps.length * g.targetReps.length) { out.push(g); continue; }
+    // Not complete bipartite — merging would invent a wire. Split by SOURCE.
+    for (const sub of groupBy(edges, sourceKey)) out.push(makeCrossingGroup(sub.items, sourceKey, targetKey));
+  }
+  return out;
+}
 
 // --- geometry ---------------------------------------------------------------
 
@@ -431,22 +559,35 @@ export function moveIntoMacro(input: ScopeMoveInput): ScopeMoveResult {
   }
 
   // --- outer feeders of the moved nodes → macro INPUT ports -----------------
-  // REUSE an input port this same outer (source, sourceHandle) already feeds:
-  // the value is already crossing the boundary, so a second port carrying it
-  // would be exactly the duplication 05a668a removed. Built AFTER the removals
-  // above and from the SURVIVING parent edges, so it can never hand back a port
-  // that just went (or one whose feeder just moved).
-  const inputPortByOuter = new Map<string, MacroPort>();
+  // The crossing edges are grouped into CONNECTED COMPONENTS, so several outer
+  // flow sources converging on one moved node's flow input become ONE port they
+  // both wire into — and one outer source feeding several moved nodes stays the
+  // single port it always was.
+  //
+  // REUSE an input port whose OUTER FEEDER SET is exactly this component's source
+  // set: that value already crosses the boundary, so a second port carrying it
+  // would be pure duplication. The set EQUALITY is the losslessness guard —
+  // joining a port that has another feeder would make that feeder reach the moved
+  // node too. Built AFTER the removals above and from the SURVIVING parent edges,
+  // so it can never hand back a port that just went (or one whose feeder moved).
+  const feedersOfPort = new Map<string, Set<string>>();
   for (const e of keepParent) {
     if (e.target !== instanceNodeId) continue;
-    const p = exposedInputs.find(pp => pp.portId === portIdOf(e.targetHandle));
-    if (p && !inputPortByOuter.has(srcKey(e))) inputPortByOuter.set(srcKey(e), p);
+    const pid = portIdOf(e.targetHandle);
+    const cur = feedersOfPort.get(pid);
+    if (cur) cur.add(srcKey(e)); else feedersOfPort.set(pid, new Set([srcKey(e)]));
   }
+  const sameSet = (a: Set<string>, b: Set<string>): boolean =>
+    a.size === b.size && [...a].every(k => b.has(k));
   let macroInputNode = findBoundary(def, 'macroInput');
 
-  for (const g of groupBy(needInput, srcKey)) {
-    const first = g.items[0]!;
-    let port = inputPortByOuter.get(g.key);
+  for (const g of groupCrossingEdges(needInput, srcKey, tgtKey)) {
+    const first = g.edges[0]!;
+    const wantFeeders = new Set(g.sourceReps.map(srcKey));
+    let port = exposedInputs.find(p => {
+      const have = feedersOfPort.get(p.portId);
+      return have !== undefined && sameSet(have, wantFeeders);
+    });
     if (!port) {
       const category = categoryOf(first.targetHandle);
       if (!macroInputNode) {
@@ -461,42 +602,71 @@ export function moveIntoMacro(input: ScopeMoveInput): ScopeMoveResult {
       };
       exposedInputs = [...exposedInputs, port];
       addedIn.push(portId);
-      addParent.push({
-        id: freshId('e'), source: first.source, sourceHandle: first.sourceHandle ?? '',
-        target: instanceNodeId, targetHandle: handleId({ id: portId, kind: 'input', category }),
-      });
-      inputPortByOuter.set(g.key, port);
+      // One outer edge per DISTINCT source — a flow component's several feeders
+      // all converge on this one port.
+      for (const s of g.sourceReps) {
+        addParent.push({
+          id: freshId('e'), source: s.source, sourceHandle: s.sourceHandle ?? '',
+          target: instanceNodeId, targetHandle: handleId({ id: portId, kind: 'input', category }),
+        });
+      }
+      feedersOfPort.set(portId, wantFeeders);
     }
     const bridgeHandle = handleId({ id: port.portId, kind: 'output', category: port.category });
-    for (const e of g.items) {
-      defEdges.push({ id: freshId('e'), source: port.internalNodeId, sourceHandle: bridgeHandle, target: mid(e.target), targetHandle: e.targetHandle ?? '' });
+    // One bridge per DISTINCT internal target — the fan-out lives inside.
+    for (const t of g.targetReps) {
+      defEdges.push({ id: freshId('e'), source: port.internalNodeId, sourceHandle: bridgeHandle, target: mid(t.target), targetHandle: t.targetHandle ?? '' });
     }
   }
 
   // --- outer consumers of the moved nodes → macro OUTPUT ports --------------
+  // The mirror: components again, and REUSE an output port whose OUTER CONSUMER
+  // SET is exactly this component's target set (the internal target side of the
+  // port's identity), so a moved node feeding an outer flow input the instance
+  // already feeds joins that port instead of minting a second one.
+  const consumersOfPort = new Map<string, Set<string>>();
+  for (const e of keepParent) {
+    if (e.source !== instanceNodeId) continue;
+    const pid = portIdOf(e.sourceHandle);
+    const cur = consumersOfPort.get(pid);
+    if (cur) cur.add(tgtKey(e)); else consumersOfPort.set(pid, new Set([tgtKey(e)]));
+  }
   let macroOutputNode = findBoundary(def, 'macroOutput');
-  for (const g of groupBy(needOutput, srcKey)) {
-    const first = g.items[0]!;
-    const category = categoryOf(first.sourceHandle);
-    if (!macroOutputNode) {
-      macroOutputNode = makeBoundary(def, 'macroOutput');
-      defNodes = [...defNodes, macroOutputNode];
-      notes.push('Created a Macro Output boundary node (the macro had none).');
-    }
-    const portId = nextPortId(usedOut, 'out');
-    exposedOutputs = [...exposedOutputs, {
-      portId, label: portLabel(portId, 'out'), dataType: 'any', category,
-      internalNodeId: macroOutputNode.id, internalPortId: portId,
-    }];
-    addedOut.push(portId);
-    defEdges.push({
-      id: freshId('e'), source: mid(first.source), sourceHandle: first.sourceHandle ?? '',
-      target: macroOutputNode.id, targetHandle: handleId({ id: portId, kind: 'input', category }),
+  for (const g of groupCrossingEdges(needOutput, srcKey, tgtKey)) {
+    const first = g.edges[0]!;
+    const wantConsumers = new Set(g.targetReps.map(tgtKey));
+    let port = exposedOutputs.find(p => {
+      const have = consumersOfPort.get(p.portId);
+      return have !== undefined && sameSet(have, wantConsumers);
     });
-    for (const e of g.items) {
-      addParent.push({
-        id: freshId('e'), source: instanceNodeId, sourceHandle: handleId({ id: portId, kind: 'output', category }),
-        target: e.target, targetHandle: e.targetHandle ?? '',
+    const category = categoryOf(first.sourceHandle);
+    if (!port) {
+      if (!macroOutputNode) {
+        macroOutputNode = makeBoundary(def, 'macroOutput');
+        defNodes = [...defNodes, macroOutputNode];
+        notes.push('Created a Macro Output boundary node (the macro had none).');
+      }
+      const portId = nextPortId(usedOut, 'out');
+      port = {
+        portId, label: portLabel(portId, 'out'), dataType: 'any', category,
+        internalNodeId: macroOutputNode.id, internalPortId: portId,
+      };
+      exposedOutputs = [...exposedOutputs, port];
+      addedOut.push(portId);
+      // One outer edge per DISTINCT consumer — the fan-out lives outside.
+      for (const t of g.targetReps) {
+        addParent.push({
+          id: freshId('e'), source: instanceNodeId, sourceHandle: handleId({ id: portId, kind: 'output', category }),
+          target: t.target, targetHandle: t.targetHandle ?? '',
+        });
+      }
+      consumersOfPort.set(portId, wantConsumers);
+    }
+    // One bridge per DISTINCT internal source — the fan-IN lives inside.
+    for (const s of g.sourceReps) {
+      defEdges.push({
+        id: freshId('e'), source: mid(s.source), sourceHandle: s.sourceHandle ?? '',
+        target: port.internalNodeId, targetHandle: handleId({ id: port.portId, kind: 'input', category: port.category }),
       });
     }
   }
@@ -620,15 +790,29 @@ export function moveOutOfMacro(input: ScopeMoveInput): ScopeMoveResult {
   }
 
   // --- stayingNode -> movedNode  ⇒  a new (or reused) macro OUTPUT port -----
-  const outputPortByInner = new Map<string, MacroPort>();
+  // Components again: several staying sources converging on one moved node's flow
+  // input become ONE port they both bridge into. REUSE an output port whose
+  // SURVIVING internal-source set is exactly this component's — the set equality
+  // is the losslessness guard.
+  const innerSourcesOfPort = new Map<string, Set<string>>();
   for (const p of exposedOutputs) {
     const bridgeHandle = handleId({ id: p.portId, kind: 'input', category: p.category });
-    const b = def.edges.find(be => be.target === p.internalNodeId && be.targetHandle === bridgeHandle);
-    if (b && !moving.has(b.source)) outputPortByInner.set(srcKey(b), p);
+    const keys = new Set(
+      def.edges
+        .filter(be => be.target === p.internalNodeId && be.targetHandle === bridgeHandle && !moving.has(be.source))
+        .map(srcKey),
+    );
+    if (keys.size > 0) innerSourcesOfPort.set(p.portId, keys);
   }
-  for (const g of groupBy(fromStaying, srcKey)) {
-    const first = g.items[0]!;
-    let port = outputPortByInner.get(g.key);
+  const sameSetOut = (a: Set<string>, b: Set<string>): boolean =>
+    a.size === b.size && [...a].every(k => b.has(k));
+  for (const g of groupCrossingEdges(fromStaying, srcKey, tgtKey)) {
+    const first = g.edges[0]!;
+    const wantSources = new Set(g.sourceReps.map(srcKey));
+    let port = exposedOutputs.find(p => {
+      const have = innerSourcesOfPort.get(p.portId);
+      return have !== undefined && sameSetOut(have, wantSources);
+    });
     if (!port) {
       const category = categoryOf(first.sourceHandle);
       if (!macroOutputNode) {
@@ -643,15 +827,19 @@ export function moveOutOfMacro(input: ScopeMoveInput): ScopeMoveResult {
       };
       exposedOutputs = [...exposedOutputs, port];
       addedOut.push(portId);
-      addDefEdges.push({
-        id: freshId('e'), source: first.source, sourceHandle: first.sourceHandle,
-        target: macroOutputNode.id, targetHandle: handleId({ id: portId, kind: 'input', category }),
-      });
-      outputPortByInner.set(g.key, port);
+      // One bridge per DISTINCT staying source — the fan-in lives inside.
+      for (const s of g.sourceReps) {
+        addDefEdges.push({
+          id: freshId('e'), source: s.source, sourceHandle: s.sourceHandle,
+          target: port.internalNodeId, targetHandle: handleId({ id: portId, kind: 'input', category }),
+        });
+      }
+      innerSourcesOfPort.set(portId, wantSources);
     }
     const outHandle = handleId({ id: port.portId, kind: 'output', category: port.category });
-    for (const e of g.items) {
-      addParent.push({ id: freshId('e'), source: instanceNodeId, sourceHandle: outHandle, target: mid(e.target), targetHandle: e.targetHandle });
+    // One outer edge per DISTINCT moved consumer — the fan-out lives outside.
+    for (const t of g.targetReps) {
+      addParent.push({ id: freshId('e'), source: instanceNodeId, sourceHandle: outHandle, target: mid(t.target), targetHandle: t.targetHandle });
     }
   }
 
@@ -671,29 +859,57 @@ export function moveOutOfMacro(input: ScopeMoveInput): ScopeMoveResult {
     }
   }
 
-  // --- movedNode -> stayingNode  ⇒  a new macro INPUT port -----------------
-  for (const g of groupBy(toStaying, srcKey)) {
-    const first = g.items[0]!;
+  // --- movedNode -> stayingNode  ⇒  a new (or reused) macro INPUT port ------
+  // REUSE an input port whose SURVIVING bridge-target set is exactly this
+  // component's target set: the internal consumer is already served, so the
+  // departing node simply becomes a second outer feeder converging on that port
+  // instead of minting a duplicate. `keepDefEdges` is the surviving-bridge list
+  // (a bridge to a moved node was classified into `fromMacroInput`), so a port
+  // the loop above just removed can never be handed back.
+  const innerTargetsOfPort = new Map<string, Set<string>>();
+  for (const p of exposedInputs) {
+    const bridgeHandle = handleId({ id: p.portId, kind: 'output', category: p.category });
+    const keys = new Set(
+      keepDefEdges.filter(be => be.source === p.internalNodeId && be.sourceHandle === bridgeHandle).map(tgtKey),
+    );
+    if (keys.size > 0) innerTargetsOfPort.set(p.portId, keys);
+  }
+  for (const g of groupCrossingEdges(toStaying, srcKey, tgtKey)) {
+    const first = g.edges[0]!;
     const category = categoryOf(first.sourceHandle);
-    if (!macroInputNode) {
-      macroInputNode = makeBoundary(def, 'macroInput');
-      defNodes = [...defNodes, macroInputNode];
-      notes.push('Created a Macro Input boundary node (the macro had none).');
-    }
-    const portId = nextPortId(usedIn, 'in');
-    exposedInputs = [...exposedInputs, {
-      portId, label: portLabel(portId, 'in'), dataType: 'any', category,
-      internalNodeId: macroInputNode.id, internalPortId: portId,
-    }];
-    addedIn.push(portId);
-    const bridgeHandle = handleId({ id: portId, kind: 'output', category });
-    for (const e of g.items) {
-      addDefEdges.push({ id: freshId('e'), source: macroInputNode.id, sourceHandle: bridgeHandle, target: e.target, targetHandle: e.targetHandle });
-    }
-    addParent.push({
-      id: freshId('e'), source: mid(first.source), sourceHandle: first.sourceHandle,
-      target: instanceNodeId, targetHandle: handleId({ id: portId, kind: 'input', category }),
+    const wantTargets = new Set(g.targetReps.map(tgtKey));
+    let port = exposedInputs.find(p => {
+      const have = innerTargetsOfPort.get(p.portId);
+      return have !== undefined && sameSetOut(have, wantTargets);
     });
+    if (!port) {
+      if (!macroInputNode) {
+        macroInputNode = makeBoundary(def, 'macroInput');
+        defNodes = [...defNodes, macroInputNode];
+        notes.push('Created a Macro Input boundary node (the macro had none).');
+      }
+      const portId = nextPortId(usedIn, 'in');
+      port = {
+        portId, label: portLabel(portId, 'in'), dataType: 'any', category,
+        internalNodeId: macroInputNode.id, internalPortId: portId,
+      };
+      exposedInputs = [...exposedInputs, port];
+      addedIn.push(portId);
+      const bridgeHandle = handleId({ id: portId, kind: 'output', category });
+      // One bridge per DISTINCT staying consumer — the fan-out lives inside.
+      for (const t of g.targetReps) {
+        addDefEdges.push({ id: freshId('e'), source: port.internalNodeId, sourceHandle: bridgeHandle, target: t.target, targetHandle: t.targetHandle });
+      }
+      innerTargetsOfPort.set(portId, wantTargets);
+    }
+    // One outer edge per DISTINCT departing source — several flow feeders
+    // converge on the one port.
+    for (const s of g.sourceReps) {
+      addParent.push({
+        id: freshId('e'), source: mid(s.source), sourceHandle: s.sourceHandle,
+        target: instanceNodeId, targetHandle: handleId({ id: port.portId, kind: 'input', category: port.category }),
+      });
+    }
   }
 
   // --- Explicit Controls: a control whose target left the def must go -------

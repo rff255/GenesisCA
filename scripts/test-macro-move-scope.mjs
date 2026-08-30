@@ -45,7 +45,7 @@ const MUTATE = process.argv.includes('--mutate');
 const ENTRY = `
 export {
   moveIntoMacro, moveOutOfMacro, filterMovableIds, stripControlsForNodes,
-  countInstancesEverywhere, MOVE_SCOPE_EXCLUDED_TYPES,
+  countInstancesEverywhere, MOVE_SCOPE_EXCLUDED_TYPES, groupCrossingEdges,
 } from '../src/modeler/vpl/macroMoveScope.ts';
 export { handleId, parseHandleId } from '../src/modeler/vpl/types.ts';
 // The REAL reducer, so the linked-instance cascade the harness exercises is the
@@ -127,7 +127,7 @@ const hasEdge = (edges, s, sh, t, th) =>
 // ---------------------------------------------------------------------------
 async function run(M) {
   pass = 0; failures.length = 0;
-  const { moveIntoMacro, moveOutOfMacro, filterMovableIds, stripControlsForNodes, countInstancesEverywhere } = M;
+  const { moveIntoMacro, moveOutOfMacro, filterMovableIds, stripControlsForNodes, countInstancesEverywhere, groupCrossingEdges } = M;
 
   // =========================================================================
   // Tier A — MOVE IN
@@ -496,6 +496,165 @@ async function run(M) {
     ok(st4 === st0, 'E3 a handle nothing matches is a no-op that returns the SAME state');
   }
 
+  // =========================================================================
+  // Tier F — THE COMPONENT RULE (flow convergence + the losslessness guard)
+  // =========================================================================
+  // A port is one CONNECTED COMPONENT of the crossing edges, not one SOURCE.
+  // Source-grouping already handled fan-OUT (one source, many targets); what it
+  // could not express is fan-IN, which only FLOW can produce because a flow
+  // input is multi-occupancy.
+
+  const flowDef = (id) => ({
+    id, name: 'F',
+    nodes: [node('mi', 'macroInput', -300, 0, { macroDefId: id }), node('Z', 'setAttribute', 0, 0), node('mo', 'macroOutput', 300, 0, { macroDefId: id })],
+    edges: [],
+    exposedInputs: [],
+    exposedOutputs: [],
+  });
+
+  // F1 — MOVE IN: two outer FLOW sources converging on ONE moved node's flow
+  // input become ONE port they both wire into (the reported bug: source-grouping
+  // gave two).
+  {
+    const def = flowDef('macro_c1');
+    const parentNodes = [
+      node('FA', 'conditional', -500, 0), node('FB', 'conditional', -500, 200),
+      node('INST', 'macro', 0, 0, { macroDefId: 'macro_c1' }), node('M', 'setAttribute', 200, 0),
+    ];
+    const parentEdges = [
+      edge('a', 'FA', fOut('next'), 'M', fIn('do')),
+      edge('b', 'FB', fOut('next'), 'M', fIn('do')),
+    ];
+    const r = moveIntoMacro({ def, parentNodes, parentEdges, instanceNodeId: 'INST', movingIds: ['M'] });
+    ok(r.ok, 'F1 move-in succeeds');
+    eq(r.addedInputPortIds.length, 1, 'F1 ONE input port for both converging flow feeders');
+    const pid = r.addedInputPortIds[0];
+    eq(r.def.exposedInputs.find(p => p.portId === pid).category, 'flow', 'F1 the port is a flow port');
+    ok(hasEdge(r.parentEdges, 'FA', fOut('next'), 'INST', fIn(pid)), 'F1 feeder A converges on the port');
+    ok(hasEdge(r.parentEdges, 'FB', fOut('next'), 'INST', fIn(pid)), 'F1 feeder B converges on the SAME port');
+    eq(r.def.edges.filter(e => e.source === 'mi').length, 1, 'F1 exactly ONE bridge inside');
+    ok(hasEdge(r.def.edges, 'mi', fOut(pid), 'M', fIn('do')), 'F1 the bridge feeds the moved node');
+  }
+
+  // F2 — MOVE IN: an INCOMPLETE component (FA->M1, FA->M2, FB->M1) must NOT
+  // merge — merging would invent the flow edge FB->M2. It falls back to source
+  // grouping, which is always a star.
+  {
+    const def = flowDef('macro_c2');
+    const parentNodes = [
+      node('FA', 'conditional', -500, 0), node('FB', 'conditional', -500, 200),
+      node('INST', 'macro', 0, 0, { macroDefId: 'macro_c2' }),
+      node('M1', 'setAttribute', 200, 0), node('M2', 'setAttribute', 200, 200),
+    ];
+    const parentEdges = [
+      edge('a', 'FA', fOut('next'), 'M1', fIn('do')),
+      edge('b', 'FA', fOut('next'), 'M2', fIn('do')),
+      edge('c', 'FB', fOut('next'), 'M1', fIn('do')),
+    ];
+    const r = moveIntoMacro({ def, parentNodes, parentEdges, instanceNodeId: 'INST', movingIds: ['M1', 'M2'] });
+    ok(r.ok, 'F2 move-in succeeds');
+    eq(r.addedInputPortIds.length, 2, 'F2 an incomplete component splits by SOURCE (2 ports, not 1)');
+    const pA = r.addedInputPortIds[0], pB = r.addedInputPortIds[1];
+    eq(r.def.edges.filter(e => e.source === 'mi').length, 3, 'F2 exactly the 3 original wires survive as bridges');
+    ok(hasEdge(r.def.edges, 'mi', fOut(pA), 'M1', fIn('do')), 'F2 FA reaches M1');
+    ok(hasEdge(r.def.edges, 'mi', fOut(pA), 'M2', fIn('do')), 'F2 FA reaches M2');
+    ok(hasEdge(r.def.edges, 'mi', fOut(pB), 'M1', fIn('do')), 'F2 FB reaches M1');
+    ok(!hasEdge(r.def.edges, 'mi', fOut(pB), 'M2', fIn('do')), 'F2 FB does NOT reach M2 — no wire was invented');
+  }
+
+  // F3 — MOVE IN, the mirror: two moved nodes' flow outputs converging on ONE
+  // outer flow input become ONE output port — fan-IN inside, one wire outside.
+  {
+    const def = flowDef('macro_c3');
+    const parentNodes = [
+      node('INST', 'macro', 0, 0, { macroDefId: 'macro_c3' }),
+      node('M1', 'setAttribute', 200, 0), node('M2', 'setAttribute', 200, 200),
+      node('OUT', 'conditional', 500, 0),
+    ];
+    const parentEdges = [
+      edge('a', 'M1', fOut('next'), 'OUT', fIn('do')),
+      edge('b', 'M2', fOut('next'), 'OUT', fIn('do')),
+    ];
+    const r = moveIntoMacro({ def, parentNodes, parentEdges, instanceNodeId: 'INST', movingIds: ['M1', 'M2'] });
+    ok(r.ok, 'F3 move-in succeeds');
+    eq(r.addedOutputPortIds.length, 1, 'F3 ONE output port for both converging flow sources');
+    const pid = r.addedOutputPortIds[0];
+    eq(r.def.edges.filter(e => e.target === 'mo').length, 2, 'F3 TWO bridges converge on it inside');
+    ok(hasEdge(r.def.edges, 'M1', fOut('next'), 'mo', fIn(pid)), 'F3 M1 bridges to the port');
+    ok(hasEdge(r.def.edges, 'M2', fOut('next'), 'mo', fIn(pid)), 'F3 M2 bridges to the SAME port');
+    eq(r.parentEdges.filter(e => e.source === 'INST').length, 1, 'F3 ONE outer wire leaves the instance');
+    ok(hasEdge(r.parentEdges, 'INST', fOut(pid), 'OUT', fIn('do')), 'F3 and it lands on the outer consumer');
+  }
+
+  // F4 — MOVE OUT: the departing node feeds a STAYING node whose flow input an
+  // existing input port already serves — it REUSES that port (a second feeder
+  // converging on it) instead of minting a duplicate. This is the target-side
+  // half of the reuse rule.
+  {
+    const def = {
+      id: 'macro_c4', name: 'F',
+      nodes: [node('mi', 'macroInput', -300, 0, {}), node('Z', 'setAttribute', 0, 0), node('M', 'setAttribute', 0, 200), node('mo', 'macroOutput', 300, 0, {})],
+      edges: [
+        edge('b0', 'mi', fOut('in_0'), 'Z', fIn('do')),
+        edge('b1', 'M', fOut('next'), 'Z', fIn('do')),
+      ],
+      exposedInputs: [port('in_0', 'mi', 'flow')],
+      exposedOutputs: [],
+    };
+    const parentNodes = [node('FA', 'conditional', -500, 0), node('INST', 'macro', 0, 0, { macroDefId: 'macro_c4' })];
+    const parentEdges = [edge('p0', 'FA', fOut('next'), 'INST', fIn('in_0'))];
+    const r = moveOutOfMacro({ def, parentNodes, parentEdges, instanceNodeId: 'INST', movingIds: ['M'] });
+    ok(r.ok, 'F4 move-out succeeds');
+    eq(r.addedInputPortIds.length, 0, 'F4 NO new input port — in_0 already serves that internal target');
+    eq(r.def.exposedInputs.length, 1, 'F4 the def still has exactly one input port');
+    ok(hasEdge(r.parentEdges, 'M', fOut('next'), 'INST', fIn('in_0')), 'F4 the departed node converges on in_0');
+    ok(hasEdge(r.parentEdges, 'FA', fOut('next'), 'INST', fIn('in_0')), 'F4 the original feeder still does too');
+    eq(r.def.edges.filter(e => e.source === 'mi').length, 1, 'F4 still exactly ONE bridge inside');
+  }
+
+  // F5 — MOVE OUT: two STAYING sources converging on the departing node's flow
+  // input become ONE output port with two bridges.
+  {
+    const def = {
+      id: 'macro_c5', name: 'F',
+      nodes: [node('mi', 'macroInput', -300, 0, {}), node('S1', 'setAttribute', 0, 0), node('S2', 'setAttribute', 0, 200), node('M', 'setAttribute', 200, 0), node('mo', 'macroOutput', 300, 0, {})],
+      edges: [
+        edge('b1', 'S1', fOut('next'), 'M', fIn('do')),
+        edge('b2', 'S2', fOut('next'), 'M', fIn('do')),
+      ],
+      exposedInputs: [], exposedOutputs: [],
+    };
+    const parentNodes = [node('INST', 'macro', 0, 0, { macroDefId: 'macro_c5' })];
+    const r = moveOutOfMacro({ def, parentNodes, parentEdges: [], instanceNodeId: 'INST', movingIds: ['M'] });
+    ok(r.ok, 'F5 move-out succeeds');
+    eq(r.addedOutputPortIds.length, 1, 'F5 ONE output port for both converging staying sources');
+    const pid = r.addedOutputPortIds[0];
+    eq(r.def.edges.filter(e => e.target === 'mo').length, 2, 'F5 TWO bridges converge on it inside');
+    eq(r.parentEdges.filter(e => e.source === 'INST').length, 1, 'F5 ONE outer wire reaches the departed node');
+    ok(hasEdge(r.parentEdges, 'INST', fOut(pid), 'M', fIn('do')), 'F5 and it lands on its flow input');
+  }
+
+  // F6 — the helper itself, on bare keys.
+  {
+    const g = (list) => groupCrossingEdges(list, e => e.s, e => e.t);
+    const star = g([{ s: 'A', t: 'X' }, { s: 'A', t: 'Y' }]);
+    eq(star.length, 1, 'F6 one source, two targets — ONE group (the fan-out rule)');
+    eq(star[0].sourceReps.length, 1, 'F6 ...with one distinct source');
+    eq(star[0].targetReps.length, 2, 'F6 ...and two distinct targets');
+    const conv = g([{ s: 'A', t: 'X' }, { s: 'B', t: 'X' }]);
+    eq(conv.length, 1, 'F6 two sources, one target — ONE group (the fan-in rule)');
+    eq(conv[0].sourceReps.length, 2, 'F6 ...with two distinct sources');
+    const full = g([{ s: 'A', t: 'X' }, { s: 'A', t: 'Y' }, { s: 'B', t: 'X' }, { s: 'B', t: 'Y' }]);
+    eq(full.length, 1, 'F6 a COMPLETE 2x2 component merges');
+    const partial = g([{ s: 'A', t: 'X' }, { s: 'A', t: 'Y' }, { s: 'B', t: 'X' }]);
+    eq(partial.length, 2, 'F6 an INCOMPLETE component falls back to source groups');
+    eq(partial[0]?.targetReps.length, 2, 'F6 ...A keeps both its targets');
+    eq(partial[1]?.targetReps.length, 1, 'F6 ...and B only its own');
+    const two = g([{ s: 'A', t: 'X' }, { s: 'B', t: 'Y' }]);
+    eq(two.length, 2, 'F6 two disjoint edges stay two groups');
+    eq(g([]).length, 0, 'F6 an empty list yields no group');
+  }
+
   return { pass, failures: [...failures] };
 }
 
@@ -523,8 +682,14 @@ if (MUTATE) {
   const CTX_PATH = join(ROOT, 'src', 'model', 'ModelContext.tsx');
   const MUTATIONS = [
     [SRC_PATH, 'drop the input-port de-dup (one port per crossing EDGE again)',
-      'for (const g of groupBy(needInput, srcKey)) {',
-      'for (const g of needInput.map(e => ({ key: srcKey(e) + Math.random(), items: [e] }))) {'],
+      'for (const g of groupCrossingEdges(needInput, srcKey, tgtKey)) {',
+      'for (const g of needInput.map(e => ({ edges: [e], sourceReps: [e], targetReps: [e] }))) {'],
+    [SRC_PATH, 'the component rule collapses to SOURCE grouping (no flow convergence)',
+      'for (const e of list) union(sNode(e), tNode(e));',
+      'for (const e of list) { find(sNode(e)); find(tNode(e)); }'],
+    [SRC_PATH, 'drop the losslessness guard (merge every component blindly)',
+      'if (pairs.size === g.sourceReps.length * g.targetReps.length) { out.push(g); continue; }',
+      'if (true) { out.push(g); continue; }'],
     [SRC_PATH, 'never remove a port whose feeder moved in',
       'if (!outerFeederRemains) {',
       'if (false) {'],

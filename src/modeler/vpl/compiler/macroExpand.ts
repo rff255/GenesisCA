@@ -62,13 +62,28 @@ export function expandMacros(
     if (!def) continue;
     const prefix = `m${m.id}_`;
 
-    // Map external sources for each input port (via outer edges arriving at the macro instance).
-    const extInMap = new Map<string, { source: string; sourceHandle: string }>();
+    // Map external sources for each input port (via outer edges arriving at the
+    // macro instance). ⚠ A macro input port may have SEVERAL outer feeders — a
+    // FLOW input is multi-occupancy, so two outer flow sources legitimately
+    // converge on one port (Create Macro emits exactly that for a component with
+    // several sources, and a user could always hand-wire it). So this is one
+    // ARRAY of feeders per port id, not one feeder: keying by `targetHandle` and
+    // taking the first match silently dropped every feeder but one, and a whole
+    // flow path just vanished at compile time with no error anywhere.
+    const extInMap = new Map<string, Array<{ source: string; sourceHandle: string }>>();
     const extInArr = edgesByTarget.get(m.id) ?? [];
-    for (const e of extInArr) extInMap.set(e.targetHandle ?? '', { source: e.source, sourceHandle: e.sourceHandle ?? '' });
+    for (const e of extInArr) {
+      const pid = parseHandle(e.targetHandle)?.portId ?? e.targetHandle ?? '';
+      const feeder = { source: e.source, sourceHandle: e.sourceHandle ?? '' };
+      const cur = extInMap.get(pid);
+      if (cur) cur.push(feeder); else extInMap.set(pid, [feeder]);
+    }
 
     // Outer edges consuming the macro instance's output ports.
     const extOutArr = edgesBySource.get(m.id) ?? [];
+    // How many internal bridges into each macro OUTPUT port have been emitted so
+    // far — used only to keep the expanded edge ids unique (see that arm).
+    const outBridgeSeen = new Map<string, number>();
 
     // Copy internal non-boundary nodes with prefixed ids.
     for (const inner of def.nodes) {
@@ -85,21 +100,26 @@ export function expandMacros(
       if (srcIsBoundary && tgtIsBoundary) continue; // pure boundary-to-boundary — no work
 
       if (srcInner?.data.nodeType === 'macroInput') {
-        // MacroInput output → wire from the outer source feeding the matching instance port.
+        // MacroInput output → wire from EVERY outer source feeding the matching
+        // instance port. Structurally symmetric with the macroOutput arm below,
+        // which already loops over every outer consumer: a port with F feeders
+        // and B bridges expands to F x B edges, which IS what one merged port
+        // means (Create Macro only ever merges a COMPLETE bipartite component,
+        // so every one of those pairs is a wire the user really drew).
         const ep = parseHandle(e.sourceHandle);
         const epPortId = ep?.portId ?? e.sourceHandle ?? '';
-        let ext: { source: string; sourceHandle: string } | undefined;
-        for (const [th, src] of extInMap) {
-          const parsed = parseHandle(th);
-          if (parsed?.portId === epPortId) { ext = src; break; }
-        }
-        if (!ext) continue;
-        newEdges.push({
-          ...e,
-          id: prefix + e.id,
-          source: ext.source,
-          sourceHandle: ext.sourceHandle,
-          target: prefix + e.target,
+        const feeders = extInMap.get(epPortId) ?? [];
+        feeders.forEach((ext, fi) => {
+          newEdges.push({
+            ...e,
+            // The first feeder keeps the historical id, so a single-feeder port
+            // (every macro that shipped before multi-feeder ports existed) emits
+            // byte-for-byte what it always did.
+            id: fi === 0 ? prefix + e.id : `${prefix}${e.id}_f${fi}`,
+            source: ext.source,
+            sourceHandle: ext.sourceHandle,
+            target: prefix + e.target,
+          });
         });
         continue;
       }
@@ -107,12 +127,24 @@ export function expandMacros(
       if (tgtInner?.data.nodeType === 'macroOutput') {
         // Internal source → MacroOutput input: re-target every outer consumer of
         // that macro output port to the internal source directly.
+        //
+        // This arm was ALREADY correct for a port with SEVERAL internal sources
+        // (the flow-convergence case on the output side): it is driven by
+        // `def.edges`, so each such bridge visits this arm and emits its own edge
+        // per consumer. Only the ids needed care — every push reused `eOut.id`,
+        // so two bridges produced two edges with the SAME id. Nothing in the
+        // compilers keys on an edge id (`buildAdjacency` maps by node+port only),
+        // but a duplicate id is a trap for any future consumer, so a second and
+        // later bridge gets a suffix while the first keeps the historical id.
         const epPortId = parseHandle(e.targetHandle)?.portId ?? e.targetHandle ?? '';
+        const seen = outBridgeSeen.get(epPortId) ?? 0;
+        outBridgeSeen.set(epPortId, seen + 1);
         for (const eOut of extOutArr) {
           const epExt = parseHandle(eOut.sourceHandle);
           if (epExt?.portId !== epPortId) continue;
           newEdges.push({
             ...eOut,
+            ...(seen === 0 ? {} : { id: `${eOut.id}_s${seen}` }),
             source: prefix + e.source,
             sourceHandle: e.sourceHandle,
           });
