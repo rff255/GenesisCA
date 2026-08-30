@@ -1387,6 +1387,30 @@ function CaNodeComponent({ id, data, selected }: NodeProps) {
   const scopeStateClass =
     (isScopeHover ? ` ${styles.scopeDropHover}` : isScopeTarget ? ` ${styles.scopeDropTarget}` : '')
     + (isScopeMoving ? ` ${styles.scopeMoving}` : '');
+  /** ONE grip, TWO placements — the gesture (`onScopeGripDown`) is shared, only
+   *  where it sits differs. EXPANDED: a flex child at the header's right edge.
+   *  COLLAPSED: an absolutely-positioned overlay on the node ROOT, centred just
+   *  BELOW it — a collapsed strip is ~25px tall (no room in its header) and a
+   *  collapsed colour constant renders a 24px swatch with NO header at all, so
+   *  one overlay serves both collapsed shapes. Below, because the top corners
+   *  belong to the warning badge / port-count indicators and the left+right
+   *  edges to the handles, which fan out past the node's own height once
+   *  several ports are connected. The expanded/collapsed branches are mutually
+   *  exclusive (`showExpanded`), so a hover-expanded collapsed node renders the
+   *  header grip only — never both. */
+  const renderScopeGrip = (collapsed: boolean) => (selected && !scopeDrag) ? (
+    <span
+      className={`${styles.scopeGrip}${collapsed ? ` ${styles.scopeGripCollapsed}` : ''} nodrag`}
+      title="Drag onto a macro instance to move this selection INSIDE it — or, while editing a macro, onto a Macro Input/Output node to move it OUT. Every connection is preserved."
+      onPointerDown={onScopeGripDown}
+      onClick={stopAll}
+      onDoubleClick={stopAll}
+    >
+      <svg width="9" height="9" viewBox="0 0 9 9" aria-hidden="true">
+        <path d="M1.5 3h6M1.5 6h6" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" fill="none" />
+      </svg>
+    </span>
+  ) : null;
   /** Height of the expression textarea at the start of a resize drag (mousedown),
    *  so mouseup can detect a deliberate resize and persist it to config. Width is
    *  the NODE's (see `_exprW` below), so the textarea only resizes vertically. */
@@ -1858,6 +1882,7 @@ function CaNodeComponent({ id, data, selected }: NodeProps) {
         {configIssues.length > 0 && (
           <div className={styles.warningBadge} title={configIssues.join('\n')}>!</div>
         )}
+        {renderScopeGrip(true)}
 
         {/* Handles — CONNECTED ports fan out around the vertical centre with a
             tight spacing so the user can still tell which wire lands on which
@@ -1977,19 +2002,7 @@ function CaNodeComponent({ id, data, selected }: NodeProps) {
           </span>
         )}
         {displayNodeLabel(def)}
-        {selected && !scopeDrag && (
-          <span
-            className={`${styles.scopeGrip} nodrag`}
-            title="Drag onto a macro instance to move this selection INSIDE it — or, while editing a macro, onto a Macro Input/Output node to move it OUT. Every connection is preserved."
-            onPointerDown={onScopeGripDown}
-            onClick={stopAll}
-            onDoubleClick={stopAll}
-          >
-            <svg width="9" height="9" viewBox="0 0 9 9" aria-hidden="true">
-              <path d="M1.5 3h6M1.5 6h6" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" fill="none" />
-            </svg>
-          </span>
-        )}
+        {renderScopeGrip(false)}
         {linkCount >= 2 && showLinkMenu && (
           <div className={`${styles.linkMenu} nodrag`} onMouseDown={stopDrag} onDoubleClick={stopAll}>
             <button

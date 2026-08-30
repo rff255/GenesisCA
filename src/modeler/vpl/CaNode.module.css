@@ -751,6 +751,36 @@
   cursor: grabbing;
 }
 
+/* COLLAPSED placement — an overlay on the node ROOT, centred just BELOW it.
+   A collapsed strip is ~25px tall (no room inside its header) and a collapsed
+   colour constant renders a 24px swatch with NO header at all, so one overlay
+   serves both shapes. It hangs below because the top corners belong to the
+   warning badge (top:-7 right:-7) and the port-count indicators (top:-6), and
+   the left/right edges to the handles, which fan out past the node's own
+   height once several ports are connected. It sits over the CANVAS rather than
+   over a coloured header, so it takes an opaque surface + border to stay
+   legible. MUST come after the .scopeGrip rules — same specificity, order
+   decides. */
+.scopeGripCollapsed {
+  position: absolute;
+  top: 100%;
+  left: 50%;
+  margin: 3px 0 0;
+  transform: translateX(-50%);
+  color: var(--color-text-secondary);
+  background: var(--color-bg-elevated);
+  border: 1px solid var(--color-border);
+  opacity: 0.9;
+  z-index: 3;
+}
+
+.scopeGripCollapsed:hover {
+  opacity: 1;
+  color: var(--color-accent);
+  background: var(--color-accent-soft);
+  border-color: var(--color-accent);
+}
+
 /* A node that WOULD accept the drop (a macro instance in the parent scope, or a
    boundary node while editing a macro). */
 .scopeDropTarget {
