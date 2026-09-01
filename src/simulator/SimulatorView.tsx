@@ -1261,21 +1261,23 @@ const AGENT_BRUSH_MODE_TITLE: Record<typeof AGENT_BRUSH_MODES[number], string> =
 };
 
 /** Brush-cursor ICON geometry. The glyph is drawn on the COLOURED cursor layer
- *  just outside the TOP-LEFT of the brush footprint's bounding box, so the
- *  active brush is readable without looking away from the board. */
+ *  just BELOW the brush footprint's bounding box, horizontally CENTRED on it, so
+ *  the active brush is readable without looking away from the board and without
+ *  the glyph sitting where the eye is aiming. */
 const BRUSH_CURSOR_ICON_SIZE = 16;
 /** Gap between the icon's backing chip and the footprint it annotates. */
 const BRUSH_CURSOR_ICON_GAP = 4;
-/** Top-left of the glyph box for a footprint whose bounding box starts at
- *  (`bboxL`, `bboxT`) — clamped into the viewport, so a footprint at (or beyond)
- *  the canvas edge still shows its icon instead of drawing it off-screen. */
-function brushCursorIconPos(bboxL: number, bboxT: number, parentW: number, parentH: number): { x: number; y: number } {
+/** Top-left of the glyph box for a footprint whose bounding box spans
+ *  [`bboxL`, `bboxR`] horizontally and ends at `bboxB` — bottom-CENTRE, clamped
+ *  into the viewport so a footprint at (or beyond) the canvas edge still shows
+ *  its icon instead of drawing it off-screen. */
+function brushCursorIconPos(bboxL: number, bboxR: number, bboxB: number, parentW: number, parentH: number): { x: number; y: number } {
   const s = BRUSH_CURSOR_ICON_SIZE;
-  const off = s + BRUSH_ICON_CHIP_PAD + BRUSH_CURSOR_ICON_GAP;
+  const off = BRUSH_ICON_CHIP_PAD + BRUSH_CURSOR_ICON_GAP;
   const m = BRUSH_ICON_CHIP_PAD + 1;
   return {
-    x: Math.max(m, Math.min(parentW - s - m, bboxL - off)),
-    y: Math.max(m, Math.min(parentH - s - m, bboxT - off)),
+    x: Math.max(m, Math.min(parentW - s - m, (bboxL + bboxR) / 2 - s / 2)),
+    y: Math.max(m, Math.min(parentH - s - m, bboxB + off)),
   };
 }
 /** The footprint-shape glyph for a brush shape — the cell brush has no "mode",
@@ -1613,6 +1615,75 @@ const AGENT_GEOM_ATTR_SPECS: Array<{ id: string; name: string }> = [
   { id: GEOM_VX, name: 'Velocity X' }, { id: GEOM_VY, name: 'Velocity Y' }, { id: GEOM_VZ, name: 'Velocity Z' },
   { id: GEOM_X, name: 'Position X' }, { id: GEOM_Y, name: 'Position Y' }, { id: GEOM_Z, name: 'Position Z' },
 ];
+/** The ADD (seed) config's geometry rows. Only the RADIUS: the POSITION comes
+ *  from the brush itself, and the seed message carries no velocity (an initial
+ *  velocity is wiped the same step by any momentum-0 model, and the Edit brush
+ *  already writes velocity on demand) — so neither would be a control that does
+ *  something. `seedAgents` has ALWAYS carried a per-agent `radius`; the main
+ *  thread simply never filled it in. */
+const AGENT_SEED_GEOM_ATTR_SPECS: Array<{ id: string; name: string }> = [
+  { id: GEOM_RADIUS, name: 'Radius' },
+];
+
+// --- Add-brush DENSITY: a fraction of the DENSEST packing at the seed radius ---
+//
+// `agentSeedPacking` ∈ (0, 1] is a PACKING FRACTION, so it means the same thing
+// at every brush size and every agent radius: 1.0 lays the agents out as densely
+// as equal discs (2D) / spheres (3D) can be packed, 0.25 a quarter as many. It
+// SUPERSEDED a raw "agents per square world unit" number that ignored the agent
+// radius entirely, so the same setting produced a sparse dusting for small
+// agents and a solid overlapping mass for large ones.
+//
+// Count per unit AREA at the densest 2D (hexagonal) packing: each disc of radius
+// r owns a hexagon of area 2√3·r². Count per unit VOLUME at the densest 3D (FCC)
+// packing: each sphere owns 4√2·r³.
+const HEX_PACK_CELL = 2 * Math.sqrt(3);   // ≈ 3.4641 — area per disc at packing 1
+const FCC_PACK_CELL = 4 * Math.sqrt(2);   // ≈ 5.6569 — volume per sphere at packing 1
+/** Hard ceiling on the points ONE stamp may generate, so a huge footprint at a
+ *  tiny agent radius cannot lock the main thread building an array the agent
+ *  ceiling would reject anyway. */
+const AGENT_SEED_MAX_POINTS = 4000;
+/** Packing-fraction slider range. The floor is not 0: a packing of 0 would seed
+ *  nothing but the ≥1 floor, i.e. a control that appears to do nothing. */
+const AGENT_SEED_PACKING_MIN = 0.02, AGENT_SEED_PACKING_MAX = 1;
+const AGENT_SEED_PACKING_DEFAULT = 0.25;
+function clampSeedPacking(v: number): number {
+  if (!Number.isFinite(v)) return AGENT_SEED_PACKING_DEFAULT;
+  return Math.max(AGENT_SEED_PACKING_MIN, Math.min(AGENT_SEED_PACKING_MAX, v));
+}
+/** Agents to scatter over `extent` (an AREA in 2D, a VOLUME in 3D) at packing
+ *  fraction `packing` for agents of radius `r`. Always ≥ 1, so a click on a
+ *  degenerate footprint still seeds one agent. */
+function agentSeedCount(extent: number, packing: number, r: number, is3d: boolean): number {
+  const rr = Math.max(1e-3, r);              // guard: r → 0 would divide by zero
+  const cell = is3d ? FCC_PACK_CELL * rr * rr * rr : HEX_PACK_CELL * rr * rr;
+  const n = Math.round(Math.max(0, packing) * Math.max(0, extent) / cell);
+  return Math.max(1, Math.min(AGENT_SEED_MAX_POINTS, n));
+}
+/** The Add brush's density tooltip — one sentence, with the formula, so the
+ *  meaning of the number is discoverable without leaving the panel. */
+function agentSeedDensityTitle(r: number, is3d: boolean): string {
+  return `Fraction of the densest possible packing of radius-${formatSeedNumber(r)} agents: `
+    + `1.0 = ${is3d ? 'close-packed spheres' : 'close-packed discs'} (touching), 0.5 = half as many. `
+    + `Count = packing × ${is3d ? 'volume' : 'area'} / (${is3d ? '4√2' : '2√3'} × r${is3d ? '³' : '²'}), `
+    + `capped at ${AGENT_SEED_MAX_POINTS} agents per stamp. The radius is the Add config's Radius row, or the model default.`;
+}
+
+/** Shortest readable decimal for a value the ENGINE handed back. Agent state
+ *  round-trips through f32 on the WebGPU target, so a radius the user typed as
+ *  `0.4` comes back as 0.4000000059604645 and a position as 31.788856506347656
+ *  — both unreadable in a small field, and both meaningless past the ~7 digits
+ *  f32 actually carries. Prefer the shortest string that is EXACT in f64 (so a
+ *  clean value like 12.5 is untouched), else the shortest that round-trips the
+ *  same f32, else the full value rather than a lossy guess. */
+function formatSeedNumber(v: number): string {
+  if (!Number.isFinite(v)) return '0';
+  if (Number.isInteger(v)) return String(v);
+  for (let p = 1; p <= 9; p++) { const s = v.toPrecision(p); if (parseFloat(s) === v) return String(parseFloat(s)); }
+  const f = Math.fround(v);
+  for (let p = 1; p <= 9; p++) { const s = v.toPrecision(p); if (Math.fround(parseFloat(s)) === f) return String(parseFloat(s)); }
+  return String(v);
+}
 
 // "Include central cell" is a schema-level flag that is compiled away before
 // simulation: a neighborhood with the flag set gets [0,0] appended to its
@@ -2514,11 +2585,19 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
   });
 
   // Bond-Graph Agents — brush sizing (world units). Radius drives the seed/kill
-  // disc; density = agents per unit² in the seeded cluster; spacing = the
-  // drag-stream step; type = the seed Type. Persisted in genesisca_sim_settings.
+  // disc; packing = how densely the Add brush scatters agents, as a fraction of
+  // the densest packing at the SEED radius (agentSeedCount); spacing = the
+  // drag-stream step. Persisted in genesisca_sim_settings.
   // (Declared before the persist effect that serialises them.)
+  //
+  // ⚠ `agentSeedPacking` is a NEW key, deliberately: it REPLACED
+  // `agentSeedDensity`, whose stored number meant "agents per square world unit"
+  // and is meaningless under the packing-fraction rule. A session holding the old
+  // key simply starts from the new default rather than inheriting a number that
+  // would seed a wildly different count; the old key is left unread and unwritten.
   const [agentBrushRadius, setAgentBrushRadius] = useState<number>((saved.current.agentBrushRadius as number) ?? 8);
-  const [agentSeedDensity, setAgentSeedDensity] = useState<number>((saved.current.agentSeedDensity as number) ?? 0.05);
+  const [agentSeedPacking, setAgentSeedPacking] = useState<number>(
+    clampSeedPacking((saved.current.agentSeedPacking as number) ?? AGENT_SEED_PACKING_DEFAULT));
   const [agentSeedSpacing, setAgentSeedSpacing] = useState<number>((saved.current.agentSeedSpacing as number) ?? 6);
   // Push / Pull strength, in WORLD UNITS PER SECOND at the centre of the disc
   // (the falloff scales it to 0 at the rim). Per-second, not per-frame: the
@@ -3026,7 +3105,7 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
           brushShape, brushRadius, brushRingWidth, brushLineWidth, brush3dVolume, brushBoxDepth,
           infinityCanvas, indicatorVizModes, recordFormat, captureScope, captureResolution, recordQuality, recordOverload, captureOverlays, brushSectionH, agentsFront3d,
           light3d, cellGaps3d, agentMetaballs, agentGlow,
-          agentBrushRadius, agentSeedDensity, agentSeedSpacing, agentNudgeIntensity,
+          agentBrushRadius, agentSeedPacking, agentSeedSpacing, agentNudgeIntensity,
           agentBrushShape, agentBrushW, agentBrushH, agentBrushRingWidth, agentBrushLineWidth,
           showCaGrid, showAgents, showBonds, simulateCells, simulateAgents, brushTarget, bg2d, agentOutlines, showVision,
           showBackdrop, backdropOpacity,
@@ -3041,7 +3120,7 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
       } catch { /* localStorage full */ }
     }, 300);
     return () => clearTimeout(timer);
-  }, [targetFps, unlimitedFps, gensPerFrame, unlimitedGens, activeViewer, brushColor, agentPaintColor, brushW, brushH, brushMapping, showBrushCursor, showGridlines, show2dAxes, smoothScaling, brushShape, brushRadius, brushRingWidth, brushLineWidth, brush3dVolume, brushBoxDepth, infinityCanvas, indicatorVizModes, recordFormat, captureScope, captureResolution, recordQuality, recordOverload, captureOverlays, brushSectionH, agentsFront3d, light3d, cellGaps3d, agentMetaballs, agentGlow, agentBrushRadius, agentSeedDensity, agentSeedSpacing, agentNudgeIntensity, agentBrushShape, agentBrushW, agentBrushH, agentBrushRingWidth, agentBrushLineWidth, showCaGrid, showAgents, showBonds, simulateCells, simulateAgents, brushTarget, bg2d, agentOutlines, showVision, showBackdrop, backdropOpacity, indicatorHiddenCategories, indicatorChartOverrides]);
+  }, [targetFps, unlimitedFps, gensPerFrame, unlimitedGens, activeViewer, brushColor, agentPaintColor, brushW, brushH, brushMapping, showBrushCursor, showGridlines, show2dAxes, smoothScaling, brushShape, brushRadius, brushRingWidth, brushLineWidth, brush3dVolume, brushBoxDepth, infinityCanvas, indicatorVizModes, recordFormat, captureScope, captureResolution, recordQuality, recordOverload, captureOverlays, brushSectionH, agentsFront3d, light3d, cellGaps3d, agentMetaballs, agentGlow, agentBrushRadius, agentSeedPacking, agentSeedSpacing, agentNudgeIntensity, agentBrushShape, agentBrushW, agentBrushH, agentBrushRingWidth, agentBrushLineWidth, showCaGrid, showAgents, showBonds, simulateCells, simulateAgents, brushTarget, bg2d, agentOutlines, showVision, showBackdrop, backdropOpacity, indicatorHiddenCategories, indicatorChartOverrides]);
 
   // Manual Brush — signature-keyed merge effect. Re-derives `manualBrush`
   // whenever the cell attribute set (id+type) changes. Surviving attrs carry
@@ -3150,6 +3229,16 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
       next[a.id] = prev
         ? { enabled: !!prev.enabled, value: typeof prev.value === 'string' ? prev.value : (a.defaultValue ?? '') }
         : { enabled: false, value: a.defaultValue ?? '' };
+    }
+    // …plus the synthetic GEOMETRY rows (just the Radius — see
+    // AGENT_SEED_GEOM_ATTR_SPECS), seeded from the model's own default so an
+    // untouched row already shows the radius the worker would apply.
+    const dr = String(cbNum(model.centerBased, 'defaultRadius'));
+    for (const g of AGENT_SEED_GEOM_ATTR_SPECS) {
+      const prev = stored[g.id];
+      next[g.id] = prev
+        ? { enabled: !!prev.enabled, value: typeof prev.value === 'string' ? prev.value : dr }
+        : { enabled: false, value: dr };
     }
     setAgentSeedAttrs(next);
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -3609,6 +3698,20 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
     // inferAgentProfile (which scans them) when the profile isn't explicit — keeps
     // this in lockstep with the sibling `agentCapProfile` memo.
   }, [model.agentAttributes, model.centerBased, model.topologyMode, model.agentGraphNodes, model.macroDefs, is3D]);
+  // ADD (seed) config rows = the agent attributes + the seed geometry row
+  // (Radius). Same Body-capability gate as the Edit panel: a model with no body
+  // has no radius to set, so the row is HIDDEN rather than shown-and-inert.
+  const agentSeedPanelAttrs = useMemo<Attribute[]>(() => {
+    const dr = String(cbNum(model.centerBased, 'defaultRadius'));
+    const prof = model.topologyMode?.agents ? resolveAgentProfile(model) : null;
+    const showRadius = !prof || prof.body;
+    return [
+      ...(model.agentAttributes ?? []).filter(a => a.type !== 'color' && a.type !== 'lookupTable'),
+      ...(showRadius
+        ? AGENT_SEED_GEOM_ATTR_SPECS.map(g => ({ id: g.id, name: g.name, type: 'float', description: '', defaultValue: dr } as Attribute))
+        : []),
+    ];
+  }, [model.agentAttributes, model.centerBased, model.topologyMode, model.agentGraphNodes, model.macroDefs]);
   // Resolved Agent Capability Profile (null for non-agent models) — used to gate
   // the inspector-popover geometry rows to the enabled capabilities.
   const agentCapProfile = useMemo(
@@ -3713,8 +3816,24 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
   const agentPaintIsSpawnerRef = useRef(agentPaintIsSpawner); agentPaintIsSpawnerRef.current = agentPaintIsSpawner;
   const agentGlueAnchorRef = useRef<number>(-1);
   const agentBrushRadiusRef = useRef(agentBrushRadius); agentBrushRadiusRef.current = agentBrushRadius;
-  const agentSeedDensityRef = useRef(agentSeedDensity); agentSeedDensityRef.current = agentSeedDensity;
+  const agentSeedPackingRef = useRef(agentSeedPacking); agentSeedPackingRef.current = agentSeedPacking;
   const agentSeedSpacingRef = useRef(agentSeedSpacing); agentSeedSpacingRef.current = agentSeedSpacing;
+  // The Add brush's SEED RADIUS. TWO derivations, deliberately:
+  //   • the OVERRIDE (`number | undefined`) is what rides the `seedAgents`
+  //     message — absent means the WORKER keeps applying its own `defaultRadius`,
+  //     so an unchecked Radius row is a true no-op rather than a value we guess;
+  //   • the EFFECTIVE radius is what the packing maths needs, so it is always a
+  //     concrete number (the override, else the model's default).
+  const agentSeedRadiusOverride = useMemo<number | undefined>(() => {
+    const e = agentSeedAttrs[GEOM_RADIUS];
+    if (!e?.enabled) return undefined;
+    const n = parseFloat(e.value);
+    return Number.isFinite(n) && n > 0 ? n : undefined;
+  }, [agentSeedAttrs]);
+  const agentModelDefaultRadius = cbNum(model.centerBased, 'defaultRadius');
+  const agentSeedEffRadius = agentSeedRadiusOverride ?? agentModelDefaultRadius;
+  const agentSeedRadiusOverrideRef = useRef(agentSeedRadiusOverride); agentSeedRadiusOverrideRef.current = agentSeedRadiusOverride;
+  const agentSeedEffRadiusRef = useRef(agentSeedEffRadius); agentSeedEffRadiusRef.current = agentSeedEffRadius;
   const agentBrushShapeRef = useRef(agentBrushShape); agentBrushShapeRef.current = agentBrushShape;
   const agentBrushWRef = useRef(agentBrushW); agentBrushWRef.current = agentBrushW;
   const agentBrushHRef = useRef(agentBrushH); agentBrushHRef.current = agentBrushH;
@@ -3892,17 +4011,30 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
       editPrefillIdRef.current = -1;
       setAgentEditAttrs(prev => {
         const next = { ...prev };
+        // Every DECIMAL is shortened for display (formatSeedNumber): agent state
+        // round-trips through f32 on the WebGPU target, so a radius the user set
+        // to 0.4 comes back as 0.4000000059604645 and a position as
+        // 31.788856506347656 — unreadable in a small field, and precision f32
+        // never carried. The rounding is display-only in the sense that it is the
+        // PREFILL: an untouched row is not written back at all (rows are opt-in),
+        // and a row the user does enable writes the shortened value, which is the
+        // same f32 the engine already holds.
         const put = (id: string, v: number | undefined, attr?: Attribute) => {
           if (v === undefined) return;
           const cur = next[id] ?? { enabled: false, value: '' };
-          next[id] = { enabled: cur.enabled, value: attr ? decodeAttrValue(attr, v) : String(v) };
+          const value = attr
+            ? (attr.type === 'float' ? formatSeedNumber(v) : decodeAttrValue(attr, v))
+            : formatSeedNumber(v);   // no attr = a synthetic geometry row (float)
+          next[id] = { enabled: cur.enabled, value };
         };
         for (const attr of (model.agentAttributes ?? [])) {
           if (attr.type === 'vector') {
             // A vector agent attr is published as its scalar components (`<id>_vx`…);
             // recombine into the "x,y[,z]" string the vector brush widget edits.
             const cur = next[attr.id] ?? { enabled: false, value: '' };
-            next[attr.id] = { enabled: cur.enabled, value: decodeVectorFromValues(attr, r.attrs ?? null) };
+            const vec = decodeVectorFromValues(attr, r.attrs ?? null)
+              .split(',').map(t => formatSeedNumber(parseFloat(t))).join(',');
+            next[attr.id] = { enabled: cur.enabled, value: vec };
           } else {
             put(attr.id, r.attrs?.[attr.id], attr);
           }
@@ -4887,11 +5019,12 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
       let edges: Array<[number, number, number, number]>;
       let baseRow: number, baseCol: number;
       let extentMinDc = 0, extentMaxDc = 0, extentMinDr = 0, extentMaxDr = 0;
-      // TRUE top-left of the stamp, for the cursor ICON. Deliberately separate
-      // from the extents above, which start at 0 (they size the infinity tiling
-      // span, where a 0 floor is harmless) — for the ABSOLUTE cells of a line
-      // preview that floor would pin the box to row/col 0.
+      // TRUE bounding box of the stamp, for the cursor ICON. Deliberately
+      // separate from the extents above, which start at 0 (they size the
+      // infinity tiling span, where a 0 floor is harmless) — for the ABSOLUTE
+      // cells of a line preview that floor would pin the box to row/col 0.
       let bbMinDr = Infinity, bbMinDc = Infinity;
+      let bbMaxDr = -Infinity, bbMaxDc = -Infinity;
       if (lineAnchor) {
         // Two-click line preview: anchor → cursor, torus-folded in infinity so
         // the preview matches what paintLine will commit across a seam.
@@ -4914,6 +5047,8 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
           if (c[1] > extentMaxDc) extentMaxDc = c[1];
           if (c[0] < bbMinDr) bbMinDr = c[0];
           if (c[1] < bbMinDc) bbMinDc = c[1];
+          if (c[0] > bbMaxDr) bbMaxDr = c[0];
+          if (c[1] > bbMaxDc) bbMaxDc = c[1];
         }
       } else {
         const offsets = currentStampOffsets();
@@ -4926,6 +5061,8 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
           if (o[1] > extentMaxDc) extentMaxDc = o[1];
           if (o[0] < bbMinDr) bbMinDr = o[0];
           if (o[1] < bbMinDc) bbMinDc = o[1];
+          if (o[0] > bbMaxDr) bbMaxDr = o[0];
+          if (o[1] > bbMaxDc) bbMaxDc = o[1];
         }
       }
       const path = new Path2D();
@@ -4956,14 +5093,16 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
       } else {
         negCtx.stroke(path);
       }
-      // ── Cursor ICON — the active brush, just outside the footprint's top-left.
+      // ── Cursor ICON — the active brush, centred just BELOW the footprint.
       // The CELL brush has no "mode", so its SHAPE is what identifies it. Drawn
       // on the COLOURED layer (a glyph needs stable contrast, which the
       // difference-composited silhouette layer cannot give) and only once, on
-      // the tile under the pointer.
+      // the tile under the pointer. A cell at (dr, dc) occupies [dc, dc+1] ×
+      // [dr, dr+1], so the box's RIGHT / BOTTOM edges are the max offsets + 1.
       const bbL = ox + iconDx + (baseCol + (Number.isFinite(bbMinDc) ? bbMinDc : 0)) * scale;
-      const bbT = oy + iconDy + (baseRow + (Number.isFinite(bbMinDr) ? bbMinDr : 0)) * scale;
-      const p = brushCursorIconPos(bbL, bbT, parentW, parentH);
+      const bbR = ox + iconDx + (baseCol + (Number.isFinite(bbMaxDc) ? bbMaxDc + 1 : 1)) * scale;
+      const bbB = oy + iconDy + (baseRow + (Number.isFinite(bbMaxDr) ? bbMaxDr + 1 : 1)) * scale;
+      const p = brushCursorIconPos(bbL, bbR, bbB, parentW, parentH);
       drawBrushIcon(hlCtx, shapeIconName(brushShapeRef.current), p.x, p.y, BRUSH_CURSOR_ICON_SIZE);
     }
 
@@ -5200,11 +5339,11 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
       hlCtx.beginPath(); hlCtx.arc(cx, cy, rad, 0, Math.PI * 2);
       hlCtx.strokeStyle = 'rgba(232, 161, 58, 0.95)'; hlCtx.lineWidth = 2; hlCtx.setLineDash([4, 3]); hlCtx.stroke(); hlCtx.setLineDash([]);
     }
-    // ── Cursor ICON — the ACTIVE agent brush, just outside the top-left of
-    // whatever this mode's cursor occupies: the shape footprint for the area
-    // modes, the effect disc for Push / Pull and a spawner paint, and the bare
-    // cursor point for the single-agent and two-click (Glue / Cut) modes, which
-    // draw no extent at all. LAST, so it sits above every ring on the coloured
+    // ── Cursor ICON — the ACTIVE agent brush, centred just BELOW whatever this
+    // mode's cursor occupies: the shape footprint for the area modes, the effect
+    // disc for Push / Pull and a spawner paint, and the bare cursor point for
+    // the single-agent and two-click (Glue / Cut) modes, which draw no extent at
+    // all. LAST, so it sits above every ring on the coloured
     // layer; gated exactly like the rest of the agent cursor, so it disappears
     // with the Show-brush-cursor toggle and when the pointer leaves the canvas.
     if (showAgentCursor && cursorW) {
@@ -5219,7 +5358,7 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
         else { halfWx = halfWy = R; }
       }
       const icx = ox + iconDx + cursorW.x * scale, icy = oy + iconDy + cursorW.y * scale;
-      const p = brushCursorIconPos(icx - halfWx * scale, icy - halfWy * scale, parentW, parentH);
+      const p = brushCursorIconPos(icx - halfWx * scale, icx + halfWx * scale, icy + halfWy * scale, parentW, parentH);
       drawBrushIcon(hlCtx, mode, p.x, p.y, BRUSH_CURSOR_ICON_SIZE);
     }
   }, []);
@@ -9176,7 +9315,7 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
   // fixed-axis coordinate is the constant 3rd axis); volumetric mode lays a 3D
   // ball. Returns continuous {x,y,z} world positions, torus-wrapped / bounds-
   // clipped per the model boundary. Mirrors agentSeedPoints' 2D disc.
-  const agentSeedPoints3d = useCallback((center: { x: number; y: number; z: number }, radius: number, density: number, ball: boolean): Array<{ x: number; y: number; z: number }> => {
+  const agentSeedPoints3d = useCallback((center: { x: number; y: number; z: number }, radius: number, packing: number, ball: boolean, seedR: number): Array<{ x: number; y: number; z: number }> => {
     const W = gridWidth.current, H = gridHeight.current, Dd = gridDepth.current;
     if (W <= 0 || H <= 0) return [];
     const torus = boundaryTreatmentRef.current === 'torus';
@@ -9191,9 +9330,10 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
       return { x, y, z };
     };
     if (ball) {
-      // 3D ball: N ≈ density·(4/3)πr³ via a Fibonacci-sphere shell scan at jittered
-      // radii (cheap, even-ish), clipped to the sphere.
-      const n = Math.max(1, Math.round(density * (4 / 3) * Math.PI * r * r * r));
+      // 3D ball: N is a fraction of the densest SPHERE packing over the ball's
+      // volume, laid down by a Fibonacci-sphere shell scan at jittered radii
+      // (cheap, even-ish), clipped to the sphere.
+      const n = agentSeedCount((4 / 3) * Math.PI * r * r * r, packing, seedR, true);
       const golden = Math.PI * (3 - Math.sqrt(5));
       for (let i = 0; i < n; i++) {
         const rr = n === 1 ? 0 : r * Math.cbrt((i + 0.5) / n);
@@ -9207,7 +9347,8 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
     }
     // Flat disc IN the plane: the Vogel disc lives in the two FREE axes; the plane's
     // FIXED axis is held at the picked cell's coordinate.
-    const n = Math.max(1, Math.round(density * Math.PI * r * r));
+    // A flat disc is a 2D footprint even in a 3D model, so it packs by AREA.
+    const n = agentSeedCount(Math.PI * r * r, packing, seedR, false);
     const golden = Math.PI * (3 - Math.sqrt(5));
     for (let i = 0; i < n; i++) {
       const rr = n === 1 ? 0 : r * Math.sqrt((i + 0.5) / n);
@@ -11036,23 +11177,33 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
   const seedAgentsAt = useCallback((pts: Array<{ x: number; y: number; z?: number; type?: number }>, sets?: Array<{ attrId: string; value: number }>) => {
     const worker = workerRef.current;
     if (!worker || !isAgentModelRef.current || pts.length === 0) return;
-    worker.postMessage({ type: 'seedAgents', agents: pts, sets: sets && sets.length > 0 ? sets : undefined, activeViewer: activeViewerRef.current });
+    // The Add config's RADIUS row, read HERE (flush time) rather than captured at
+    // press time — the Manual Brush's own rule, so a widget edit mid-stroke takes
+    // effect on the rest of the stroke. `SeedAgentsMsg` has always carried a
+    // per-agent `radius` (`seedAgents` → `initAgentSlot`), so this needs no worker
+    // change and lands identically on every agent target; UNDEFINED leaves the
+    // worker applying `cbNum(centerBased, 'defaultRadius')` exactly as before.
+    const radius = agentSeedRadiusOverrideRef.current;
+    const agents = radius === undefined ? pts : pts.map(p => ({ ...p, radius }));
+    worker.postMessage({ type: 'seedAgents', agents, sets: sets && sets.length > 0 ? sets : undefined, activeViewer: activeViewerRef.current });
   }, []);
 
   // Bond-Graph Agents — sample N jittered cluster points in a disc of `radius`
   // around `center` (world units), via a sunflower (Vogel) spiral so they don't
-  // stack. N = density · π · r² (≥1 inside the disc). Boundary-correct (C-B7):
+  // stack. N comes from `agentSeedCount` — a fraction of the DENSEST packing of
+  // radius-`seedR` agents over the disc's area, so the count tracks the size of
+  // the agents being seeded (≥1 inside the disc). Boundary-correct (C-B7):
   // the agent world IS the grid 1:1, so when the model is a torus we wrap each
   // point with ((v%n)+n)%n; for a bounded model we clamp into [0, n) (so a click
   // near the edge still seeds a partial disc rather than spilling out of bounds).
   // NOT brushShapeOffsets — that returns integer CELL offsets; agents need
   // continuous jittered positions.
-  const agentSeedPoints = useCallback((center: { x: number; y: number }, radius: number, density: number): Array<{ x: number; y: number }> => {
+  const agentSeedPoints = useCallback((center: { x: number; y: number }, radius: number, packing: number, seedR: number): Array<{ x: number; y: number }> => {
     const W = gridWidth.current, H = gridHeight.current;
     if (W <= 0 || H <= 0) return [];
     const torus = boundaryTreatmentRef.current === 'torus';
     const r = Math.max(0, radius);
-    const n = Math.max(1, Math.round(density * Math.PI * r * r));
+    const n = agentSeedCount(Math.PI * r * r, packing, seedR, false);
     const pts: Array<{ x: number; y: number }> = [];
     const golden = Math.PI * (3 - Math.sqrt(5)); // ~2.39996 rad
     for (let i = 0; i < n; i++) {
@@ -11401,11 +11552,12 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
    *  keeps the even sunflower; rect/ring rejection-sample the bbox. Torus-wrap /
    *  bounded-clip each point. */
   const agentSeedInShape = useCallback((cx: number, cy: number): Array<{ x: number; y: number }> => {
-    if (agentBrushShapeRef.current === 'circle') return agentSeedPoints({ x: cx, y: cy }, agentBrushRadiusRef.current, agentSeedDensityRef.current);
+    const seedR = agentSeedEffRadiusRef.current;
+    if (agentBrushShapeRef.current === 'circle') return agentSeedPoints({ x: cx, y: cy }, agentBrushRadiusRef.current, agentSeedPackingRef.current, seedR);
     const m = agentShapeMetrics();
     const W = gridWidth.current, H = gridHeight.current;
     const torus = boundaryTreatmentRef.current === 'torus';
-    const n = Math.max(1, Math.round(agentSeedDensityRef.current * m.area));
+    const n = agentSeedCount(m.area, agentSeedPackingRef.current, seedR, false);
     const pts: Array<{ x: number; y: number }> = [];
     let tries = 0; const maxTries = n * 30 + 50;
     while (pts.length < n && tries++ < maxTries) {
@@ -11442,8 +11594,10 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
     const W = gridWidth.current, H = gridHeight.current, torus = boundaryTreatmentRef.current === 'torus';
     const width = Math.max(1, agentBrushLineWidthRef.current);
     const vx = b.x - a.x, vy = b.y - a.y, len = Math.hypot(vx, vy);
-    const n = Math.max(1, Math.round(agentSeedDensityRef.current * (len + 1) * width));
-    const half = width / 2, nx = len > 0 ? -vy / len : 0, ny = len > 0 ? vx / len : 0;
+    const half = width / 2;
+    // Capsule AREA: the rectangle plus the two half-disc caps.
+    const n = agentSeedCount(len * width + Math.PI * half * half, agentSeedPackingRef.current, agentSeedEffRadiusRef.current, false);
+    const nx = len > 0 ? -vy / len : 0, ny = len > 0 ? vx / len : 0;
     const pts: Array<{ x: number; y: number }> = [];
     for (let i = 0; i < n; i++) {
       const t = Math.random(), p = Math.random() * width - half;
@@ -11562,13 +11716,14 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
     // The 3D agent brush is ALWAYS a volumetric solid (ball/box/shell through the
     // depth), matching agentsInShape3dAt and the outline cursor — NOT the CA-grid-only
     // "Volumetric Brush" toggle. So Add seeds the same solid the outline previews.
-    if (shape === 'circle') return agentSeedPoints3d({ x: hit.col, y: hit.row, z: hit.layer }, agentBrushRadiusRef.current, agentSeedDensityRef.current, true);
+    const seedR = agentSeedEffRadiusRef.current;
+    if (shape === 'circle') return agentSeedPoints3d({ x: hit.col, y: hit.row, z: hit.layer }, agentBrushRadiusRef.current, agentSeedPackingRef.current, true, seedR);
     const m = agentShapeMetrics();
     const W = gridWidth.current, H = gridHeight.current, D = gridDepth.current, torus = boundaryTreatmentRef.current === 'torus';
     const axis = plane3dRef.current.axis;
     const hd = Math.max(m.halfW, m.halfH);
     const vol = (m.shape === 'rect' ? (m.halfW * 2) * (m.halfH * 2) : m.area) * (hd * 2 + 1);
-    const n = Math.max(1, Math.round(agentSeedDensityRef.current * vol));
+    const n = agentSeedCount(vol, agentSeedPackingRef.current, seedR, true);
     const toWorld = (u: number, v: number, w: number): Cell3 =>
       axis === 'z' ? { col: hit.col + u, row: hit.row + v, layer: hit.layer + w }
         : axis === 'y' ? { col: hit.col + u, row: hit.row + w, layer: hit.layer + v }
@@ -11613,7 +11768,9 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
     const W = gridWidth.current, H = gridHeight.current, D = gridDepth.current, torus = boundaryTreatmentRef.current === 'torus';
     const width = Math.max(1, agentBrushLineWidthRef.current), half = width / 2;
     const vx = b.col - a.col, vy = b.row - a.row, vz = b.layer - a.layer, len = Math.hypot(vx, vy, vz);
-    const n = Math.max(1, Math.round(agentSeedDensityRef.current * (len + 1) * width));
+    // Capsule VOLUME: the cylinder plus the two hemispherical caps.
+    const n = agentSeedCount(Math.PI * half * half * len + (4 / 3) * Math.PI * half * half * half,
+      agentSeedPackingRef.current, agentSeedEffRadiusRef.current, true);
     const pts: Array<{ x: number; y: number; z: number }> = [];
     for (let i = 0; i < n; i++) {
       const t = Math.random();
@@ -17026,15 +17183,35 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
                       ><BrushIcon name={m} size={14} /></button>
                     ))}
                   </div>
-                  {/* Add: density + spacing (area scatter) + the initial-value config. */}
+                  {/* Add (Area): how densely ONE stamp scatters + how often a DRAG
+                      lays the next stamp, then the initial-value config.
+                      Density is a PACKING FRACTION of the densest possible
+                      arrangement at the seed radius, so it means the same thing at
+                      every brush size and every agent size — hence a slider over its
+                      own well-defined range, with the number field beside it (the
+                      `.paramRow` geometry rule: the number is a FIXED width, the
+                      slider is the only elastic part). */}
                   {agentBrushMode === 'add' && agentBrushScope === 'area' && (
                     <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
-                      <label className={styles.brushFieldRow}>
+                      <label className={styles.brushFieldRow} title={agentSeedDensityTitle(agentSeedEffRadius, is3D)}>
                         <span className={styles.brushFieldLabel}>Density</span>
-                        <NumberField className={styles.brushInput} value={agentSeedDensity} onNumber={v => setAgentSeedDensity(Math.max(0, v))} min={0} step={0.01} />
+                        <input
+                          type="range" className={styles.brushSlider}
+                          min={AGENT_SEED_PACKING_MIN} max={AGENT_SEED_PACKING_MAX} step={0.01}
+                          value={agentSeedPacking}
+                          onChange={e => setAgentSeedPacking(clampSeedPacking(parseFloat(e.target.value)))}
+                        />
+                        <NumberField className={styles.brushNumber} value={agentSeedPacking}
+                          onNumber={v => setAgentSeedPacking(clampSeedPacking(v))}
+                          min={AGENT_SEED_PACKING_MIN} max={AGENT_SEED_PACKING_MAX} step={0.05} />
                       </label>
-                      <label className={styles.brushFieldRow}>
-                        <span className={styles.brushFieldLabel}>Spacing</span>
+                      {/* NOT the gap between agents (that is Density) — the distance
+                          the CURSOR must travel before a DRAG lays down the next
+                          stamp. A single click never uses it, which is why the old
+                          "Spacing" label read as inert; the honest name is what it
+                          actually steps. */}
+                      <label className={styles.brushFieldRow} title="How far the cursor must travel, in world units, before a DRAG lays down another stamp. A single click ignores it. Lower = a denser, more continuous trail; higher = separated dabs.">
+                        <span className={styles.brushFieldLabel}>Drag step</span>
                         <NumberField className={styles.brushInput} value={agentSeedSpacing} onNumber={v => setAgentSeedSpacing(Math.max(0.5, v))} min={0.5} step={1} />
                       </label>
                     </div>
@@ -17044,12 +17221,15 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
                       <button
                         onClick={() => setAgentSeedConfigOpen(v => !v)}
                         style={{ alignSelf: 'flex-start', padding: '2px 6px', borderRadius: 'var(--radius-sm)', cursor: 'pointer', border: '1px solid var(--color-widget-border)', background: 'transparent', color: 'var(--color-text-muted)', fontSize: '0.62rem' }}
-                        title="Initial agent-attribute values for added agents"
+                        title="Initial values for added agents — their attributes, and their radius"
                       >{agentSeedConfigOpen ? '▾' : '▸'} Add config</button>
                       {agentSeedConfigOpen && (
                         <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                          {/* Agent attributes + the synthetic Radius row. An
+                              unchecked Radius leaves the worker applying the
+                              model's own defaultRadius, exactly as before. */}
                           <ManualBrushPanel
-                            cellAttributes={(model.agentAttributes ?? []).filter(a => a.type !== 'color' && a.type !== 'lookupTable')}
+                            cellAttributes={agentSeedPanelAttrs}
                             neighborhoods={model.neighborhoods}
                             state={agentSeedAttrs}
                             onChange={setAgentSeedAttrs}

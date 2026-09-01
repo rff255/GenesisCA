@@ -65,8 +65,11 @@ export function ManualBrushPanel({ cellAttributes, neighborhoods, state, onChang
               onChange={e => setEntry(attr.id, { enabled: e.target.checked })}
               title={entry.enabled ? `Uncheck to skip writing ${attr.name}` : `Check to write ${attr.name}`}
             />
+            {/* The name column is a FIXED width (see .manualBrushLabel), so a long
+                name ellipsises — the `title` carries it in full, with the
+                description after it when there is one. */}
             <div className={styles.manualBrushLabel}>
-              <div className={styles.manualBrushName} title={attr.description || undefined}>{attr.name}</div>
+              <div className={styles.manualBrushName} title={attr.description ? `${attr.name} — ${attr.description}` : attr.name}>{attr.name}</div>
               {info && (
                 <div className={styles.manualBrushHint}>
                   writes only when {info.parent.name} ∈ {'{'}

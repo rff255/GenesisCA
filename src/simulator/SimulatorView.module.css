@@ -1282,6 +1282,34 @@
   font-size: var(--font-2xs);
 }
 
+/* A brush field whose value has a WELL-DEFINED RANGE renders a slider beside its
+   number field. The `.paramRow` discipline in miniature, and for the same reason:
+   the NUMBER is a FIXED width so a digit-count change (0.25 → 0.075) can never
+   reflow the row, and the SLIDER is the ONLY elastic part, so its width is a
+   function of the panel width alone. */
+.brushSlider {
+  flex: 1 1 auto;
+  min-width: 32px;
+  padding: 0;
+  margin: 0;
+  border: none;
+  background: transparent;
+  accent-color: var(--color-accent);
+}
+
+.brushNumber {
+  flex: 0 0 62px;
+  min-width: 0;
+  padding: var(--space-1) var(--space-2);
+  background: var(--color-bg-canvas);
+  border: 1px solid var(--color-widget-border);
+  border-radius: var(--radius-md);
+  color: var(--color-text-primary);
+  font-size: var(--font-2xs);
+  font-family: inherit;
+  text-align: center;
+}
+
 /* Compact explanatory line. The DETAIL belongs in a `title` (the capture-popover
    doctrine: a control surface is a label + a control, and prose that is always
    visible is what bloats a narrow panel). */
@@ -1451,11 +1479,26 @@
   overflow-y: auto;
 }
 
+/* ONE row = [Set checkbox] [name (+ sub-attr hint)] [value widget].
+   GEOMETRY follows the `.paramRow` discipline below, and for the same reason:
+   the old rule was `grid-template-columns: auto 1fr minmax(70px, 90px)`, which
+   gave the LABEL every spare pixel (measured 339px of a 450px row for a name as
+   short as "Radius") and pinned the WIDGET at 90px — so a float rendered
+   truncated and a vector's X / Y fields were ~34px each, with a dead gap in
+   between. Now the label is CAPPED and the widget takes the slack:
+     · the label is `flex: 1 1 auto` with a max-width, so it is sized to its own
+       content and ellipsises instead of stretching;
+     · the widget is the elastic part (`flex: 1 1 140px`), so its width is a
+       function of the PANEL width alone — never of the value (a text input's
+       box does not change with its digits, so there is no feedback loop);
+     · below ~350px the widget's basis no longer fits the line and the row WRAPS
+       it under the label at full width, rather than crushing either. */
 .manualBrushRow {
-  display: grid;
-  grid-template-columns: auto 1fr minmax(70px, 90px);
+  display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: var(--space-2);
+  column-gap: var(--space-2);
+  row-gap: 2px;
   font-size: var(--font-xs);
 }
 
@@ -1478,11 +1521,18 @@
 }
 
 .manualBrushCheckbox {
+  flex: 0 0 auto;
   margin: 0;
   cursor: pointer;
 }
 
 .manualBrushLabel {
+  /* A FIXED column, like the sibling `.brushFieldLabel`. Elastic label widths
+   * would each settle at a different size (basis = their own text) and leave the
+   * widgets' left edges RAGGED down the panel; a fixed column aligns them, and
+   * makes the widget's width a function of the panel width alone. A name too
+   * long for the column ellipsises — the row's `title` carries it in full. */
+  flex: 0 0 120px;
   display: flex;
   flex-direction: column;
   gap: 1px;
@@ -1506,6 +1556,9 @@
 }
 
 .manualBrushWidget {
+  /* THE elastic cell — the basis is what decides the WRAP (see .manualBrushRow). */
+  flex: 1 1 140px;
+  min-width: 0;
   display: flex;
   align-items: center;
 }
@@ -1660,9 +1713,13 @@
   color: var(--color-accent);
 }
 
-/* Vector attribute: a row of small labelled X / Y [/ Z] number fields. */
+/* Vector attribute: a row of small labelled X / Y [/ Z] number fields. They
+   share the widget cell, so each gets an equal share of whatever the row's
+   elastic cell was given — and WRAP (rather than shrinking to a few px) once
+   three components no longer fit a narrow panel. */
 .manualBrushVector {
   display: flex;
+  flex-wrap: wrap;
   gap: 4px;
   width: 100%;
 }
@@ -1671,7 +1728,7 @@
   display: flex;
   align-items: center;
   gap: 2px;
-  flex: 1 1 0;
+  flex: 1 1 56px;
   min-width: 0;
 }
 
