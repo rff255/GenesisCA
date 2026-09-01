@@ -14,13 +14,18 @@
  *     already used for WebM recording), falling back to a single frame.
  *  4. Static image: a single frame.
  *
- * After building the frames, an optional CHROMA KEY (`removeBgColor`) makes pixels
+ * After building the frames, an optional CROP (`crop`) trims every frame to one
+ * source rectangle, and then an optional CHROMA KEY (`removeBgColor`) makes pixels
  * within tolerance of the chosen colour transparent (classic magenta/green
  * background removal for traditional sprites).
+ *
+ * CROP BEFORE CHROMA KEY, deliberately: the crop is a statement about the SOURCE
+ * artwork, so the key should only ever see the pixels the user kept.
  */
 
+import { resolveSpriteCrop } from '../model/spriteCrop';
 import { sheetFrameRects } from '../model/spriteSheet';
-import type { SpriteSheetSpec } from '../model/types';
+import type { SpriteCropRect, SpriteSheetSpec } from '../model/types';
 
 /** A decoded sprite — one `ImageBitmap` per animation frame + per-frame durations. */
 export interface DecodedSprite {
@@ -41,6 +46,8 @@ export interface SpriteDecodeSpec {
    *  which is a list of CELL INDICES within the single sheet image. */
   frames?: string[];
   sheet?: SpriteSheetSpec;
+  /** Source rect applied to EVERY frame (clamped per frame) — see `spriteCrop.ts`. */
+  crop?: SpriteCropRect;
   removeBgColor?: string;
   removeBgTolerance?: number;
 }
@@ -168,6 +175,21 @@ export async function decodeSpriteAsset(spec: SpriteDecodeSpec): Promise<Decoded
     durations = decoded.durations;
   }
 
+  // Optional CROP on every frame, clamped against THAT frame (a sequence's frames
+  // may differ in size). A rect that resolves to null selects the whole frame, so
+  // the bitmap is left exactly as decoded — no copy, no cost.
+  if (spec.crop) {
+    const cropped: ImageBitmap[] = [];
+    for (const f of frames) {
+      const r = resolveSpriteCrop(spec.crop, f.width, f.height);
+      if (!r) { cropped.push(f); continue; }
+      const c = await createImageBitmap(f, r.x, r.y, r.w, r.h);
+      cropped.push(c);
+      f.close();   // superseded — the crop returned a NEW bitmap
+    }
+    frames = cropped;
+  }
+
   // Optional chroma-key background removal on every frame.
   if (spec.removeBgColor) {
     const tol = spec.removeBgTolerance ?? 24;
@@ -196,9 +218,13 @@ export async function decodeSprite(dataUrl: string, mimeType: string): Promise<D
  *  `sheet` is serialised WHOLESALE, so every gridding field (including the frame
  *  SELECTION) is captured: editing the selection re-decodes, which is what makes
  *  the new frame set flow to the CPU overlay, the 3D atlas and the worker's 2D
- *  atlas through the registry's existing `onReady`. */
+ *  atlas through the registry's existing `onReady`. `crop` rides it for the same
+ *  reason (it changes the frames).
+ *
+ *  `colorize` is deliberately ABSENT — it is a RENDER-time tint that changes no
+ *  frame, so busting the decode cache for it would be pure waste. */
 export function spriteDecodeKey(s: SpriteDecodeSpec): string {
-  return JSON.stringify([s.dataUrl, s.frames ?? null, s.sheet ?? null, s.removeBgColor ?? null, s.removeBgTolerance ?? null, s.mimeType]);
+  return JSON.stringify([s.dataUrl, s.frames ?? null, s.sheet ?? null, s.crop ?? null, s.removeBgColor ?? null, s.removeBgTolerance ?? null, s.mimeType]);
 }
 const decodeKey = spriteDecodeKey;
 

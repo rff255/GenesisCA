@@ -198,6 +198,7 @@ genesis-ca/
 │   │   ├── ThumbMedia.tsx            # The ONE model-thumbnail renderer — <video> for a WebM clip, <img> otherwise
 │   │   ├── MacroExportDialog.tsx     # Export Macro… — the per-element opt-out over the collected references (embed by default)
 │   │   ├── SpriteSheetDialog.tsx     # Sprite-sheet gridding: the first-cell GIZMO + grid params + WHICH cells, in WHICH order, are the animation
+│   │   ├── SpriteCropDialog.tsx      # Sprite CROP for NON-sheet assets (image / GIF / frame sequence): the pan-zoom viewport + crop-box gizmo + numeric rect
 │   │   └── navStyles.ts              # Shared navbar icon-button style (shortcuts, Install)
 │   ├── modeler/
 │   │   ├── ActivityBar.tsx           # Left panel-switch tabs — floating "ear-tab" icon pills (SVG icons)
@@ -288,6 +289,7 @@ genesis-ca/
 │   │   ├── typeLabels.ts             # typeDisplayName(): 'bool'→Binary, 'float'→Decimal (UI-only names)
 │   │   ├── thumbnail.ts              # Thumbnail media rules: accept list, size cap, isVideoThumbnail (WebM)
 │   │   ├── spriteSheet.ts            # Sprite-sheet cell GEOMETRY (derived OR explicit) + the frame SELECTION (the ONE definition; decoder + dialog both derive from it)
+│   │   ├── spriteCrop.ts             # Sprite CROP rect rules (resolve / clamp-for-editing / the whole-image FOLD) — the ONE definition; decoder + dialog + previews derive from it
 │   │   ├── macroImport.ts            # cloneMacroWithFreshIds — ID regen for macro imports; countMacroInstances — THE model-wide instance walk (all 4 stores)
 │   │   ├── macroReferences.ts        # M1: which MODEL ELEMENTS a macro's subgraph names (config values, ids embedded in KEYS + edge HANDLES, the transitive closure) → the `.gcamacro` `references` bundle
 │   │   ├── defaultModel.ts           # EMPTY_MODEL (for New + the initial state on every app load)
@@ -321,6 +323,7 @@ genesis-ca/
 │   ├── test-macro-references.mjs     # M1: macro reference collection + closure + the .gcamacro round trip (5 source-mutation negative controls)
 │   ├── test-explicit-controls.mjs    # Explicit Controls: the schema/resolver/clone fix, the 3 control classes, groups, chaining, and that M1/M2/the clipboard need no new pass (8 source-mutation negative controls)
 │   ├── test-sprite-sheet.mjs         # Sprite-sheet gridding: geometry, back-compat vs an independent legacy transcription, the selection, the decode signature
+│   ├── test-sprite-crop.mjs          # Sprite CROP + COLORIZE: the rect rules by value, the per-frame sequence clamp, the fold, the decode signature (crop yes / colorize no), the multiply + 5-bit quantisation bound, the decoder ordering pins
 │   ├── verify-handle-remeasure.mjs   # VPL editor: the port-signature remeasure is keyed on HANDLE ids (kind_category_portId), so a value ⇄ flow category flip re-measures (--self-test = negative control)
 │   └── verify-3d-depth-precision.mjs # 3D depth contract: agent radius spans >= 8 depth buckets at every zoom + the WebGPU near-clip margin (--old = negative control)
 ├── src-tauri/                        # Tauri v2 native-shell scaffold (Cargo.toml, tauri.conf.json, src/, icons/) — build needs Rust
@@ -5575,7 +5578,8 @@ Extends the sprite exhibition layer ([spriteRegistry.ts](src/simulator/spriteReg
 - **Chroma key:** `removeBgColor` + `removeBgTolerance` — matching pixels are made transparent at decode time via an offscreen-canvas pass (`applyChromaKey`). The Sprites panel adds a **`SpriteBgPicker`** — a small canvas of the sprite's first frame; **clicking a pixel sets `removeBgColor`** to that pixel's hex (the native colour picker covers the sprite, so this lets the user pick the background off the image directly).
 - **Image sequence:** `SpriteAsset.frames?: string[]` — several imported images become one animated sprite (filename order).
 - **Sprite sheet:** `SpriteAsset.sheet?: SpriteSheetSpec` (cols/rows/count + margin/spacing + **`frames?: number[]`** + an optional explicit **`cellW?`/`cellH?`**) — one grid image sliced into frames (`sliceSheet` via `createImageBitmap` crop). **The GEOMETRY and the frame SELECTION both live in [spriteSheet.ts](src/model/spriteSheet.ts)** — see the next section.
-- Decode is restructured into **`decodeSpriteAsset`** (sequence → sheet → animated → static, then chroma-key); the `SpriteRegistry` re-decodes on a **decode-signature** change (dataUrl/frames/sheet/chroma), not just dataUrl. Import UI adds "+ Frame sequence" (multi-file) and "+ Sprite sheet" buttons.
+- **Crop:** `SpriteAsset.crop?: SpriteCropRect` — see the "Sprite CROP" section below.
+- Decode is restructured into **`decodeSpriteAsset`** (sequence → sheet → animated → static, **then crop, then chroma-key**); the `SpriteRegistry` re-decodes on a **decode-signature** change (dataUrl/frames/sheet/**crop**/chroma), not just dataUrl. Import UI adds "+ Frame sequence" (multi-file) and "+ Sprite sheet" buttons.
 
 #### Sprite-sheet FRAME SELECTION — pick which cells, in which order (branch `tasks_batch_2026_08`)
 A sheet's frames were forced to be a **row-major PREFIX** of the grid (`count`), but real sheets almost never hold one animation — a walk cycle sits beside an idle pose, a door, a UI icon. Isolating one cycle therefore meant fighting the Set Agent Sprite node's frame/speed inputs to skip the cells you did not want. **`SpriteSheetSpec.frames?: number[]`** is an ORDERED list of grid-cell indices that ARE the animation, so a sheet behaves exactly like an imported frame SEQUENCE and speed becomes trivial again. **Presentation + decode only** — `git status` touches no compiler/worker/engine file, and `check-compile-identity` reports **31 models, all surfaces unchanged**.
@@ -5638,6 +5642,110 @@ caller renders a blank box rather than flashing the whole sheet for a frame. Ver
 NOT cell 0's red — the selection was `[1,2,…,8,0]`), and a centre click on the picker set
 `removeBgColor` to **`#00ff00`** where the whole-sheet centre would have been the middle cell's
 magenta.
+**Since the crop round they show the CROPPED first frame** — `useSpriteFrameSrc` applies the sheet
+rect and THEN `resolveSpriteCrop`, so the picker samples the pixels the sprite actually draws
+(picking a background colour off padding that is cropped away would be a dead control).
+
+#### Sprite COLORIZE — tint the art by the agent's colour (branch `tasks_batch_01-09`)
+**`SpriteAsset.colorize?: boolean`** (additive, **ABSENT ⇒ false ⇒ today's behaviour byte-for-byte**,
+no migration): the sprite's pixels are MULTIPLIED by the agent's colour
+(`texel.rgb × agentColour.rgb / 255`, **alpha untouched**), so ONE grayscale/white asset serves a
+whole coloured population instead of one asset per species. Off, the agent colour still scales the
+sprite's ALPHA exactly as it always did. **Zero compiler impact** (`git status` touches nothing under
+`src/modeler/vpl/compiler/`); `check-compile-identity`: **31 models, all surfaces unchanged**.
+- **MULTIPLY, and it is a per-texel multiply on every path — NOT a Canvas2D blend mode.** The W3C
+  separable formula composites the blended colour against the BACKDROP weighted by both alphas, so
+  `'multiply'` + `'destination-in'` is only an exact tint at alpha 255 and drifts everywhere else —
+  precisely where sprite art lives (its antialiased edges). The CPU path therefore multiplies the
+  RGB **in an ImageData pass**, which is exact at every alpha and needs no compositing rules.
+- **THE CPU COST IS BOUGHT BY A CACHE, not paid per draw.** A per-agent `filter`/`ImageData` pass
+  would run once per agent per frame; instead `tintedSpriteFrame(spriteId, frame, bmp, r,g,b)`
+  ([SimulatorView.tsx](src/simulator/SimulatorView.tsx), beside the glow-sprite cache) memoises a
+  tinted canvas keyed by **(sprite id, frame, colour QUANTISED to 5 bits/channel)** — the glow
+  cache's own key discipline, and what collapses a Color-Scale population to a handful of entries.
+  Bounded by BOTH an entry count (`SPRITE_TINT_MAX_ENTRIES` 512) and a **pixel budget**
+  (`SPRITE_TINT_MAX_PIXELS` 16 M — a 512-entry cache of large frames is the real memory risk, not
+  the count), evicting **oldest-first**; a `Map` preserves insertion order, so eviction is
+  `keys().next()`. **On pressure it evicts, never falls back to untinted** — a silently wrong colour
+  is worse than a slower frame.
+  - **⚠ THE QUANTISER AND DEQUANTISER ARE A MATCHED PAIR, and my own harness caught them drifting.**
+    `q = round(v·31/255)` with `(q<<3)|(q>>2)` is exact at 0 and 255 and worst-case 4/255; the
+    obvious `v>>3` with the same reconstruction measures **11/255 at v=220**. Tier F of
+    [test-sprite-crop.mjs](scripts/test-sprite-crop.mjs) asserts the bound AND (F3b) that it is
+    non-vacuous.
+- **THE GPU PATHS CARRY THE TINT, THEY DO NOT RE-TINT PER FRAME.** 2D worker WGSL
+  ([agentWebgpuRuntime.ts](src/simulator/engine/agentWebgpuRuntime.ts)): a new meta **flag bit**
+  `SPRITE_FLAG_COLORIZE = 8` (so **`SPRITE_META_BYTES` (32) never moves** — the `SPRITE_FLAG_ABSOLUTE`
+  precedent), the VS unpacks the agent colour into a `tint` varying (**exactly `vec3(1,1,1)` when the
+  flag is clear, including the cull path**) and the FS returns `t.rgb * in.tint`. The atlas is
+  PREMULTIPLIED, and `(straight × tint) × a ≡ premult × tint`, so multiplying premultiplied RGB by an
+  unpremultiplied tint is the same answer — no un-premultiply step. 3D gl3d
+  ([gl3d.ts](src/simulator/render/gl3d.ts)): the sprite instance stride grew **9 → 12 floats** through
+  ONE constant, `Gl3DRenderer.SPRITE_INST_FLOATS`, which every stride/offset/capacity site reads —
+  a hand-written `36` at any one of them is the classic silent-corruption bug this avoids.
+- **COLORIZE DOES NOT BUST THE DECODE CACHE** — it changes no pixel of the decoded frames, so it is
+  deliberately ABSENT from `spriteDecodeKey` (re-decoding an animated GIF to change a tint would be
+  absurd). Every path re-renders instead: the `model.sprites` effect rebuilds the render meta, calls
+  `clearSpriteTintCache()`, re-ships the worker atlas and redraws.
+- **⚠ A CRASH THE REDRAW EXPOSED, and the rule it leaves behind: `SimulatorView` is ALWAYS MOUNTED**
+  (`display:none` on other tabs), so its canvas is **0×0** while the user is in the Modeler — and
+  `drawImage` into a 0-width canvas THROWS (`InvalidStateError`), unmounting React. Toggling colorize
+  from the Modeler did exactly that via the metaball goo path. **Every draw call added outside the
+  step loop must be `visibleRef.current`-gated**; the pre-existing unguarded `drawRef.current()` in
+  the registry's `onReady` is gated now too.
+- **Verified by pixels on all three paths** (real UI, a throwaway model whose agents carry six
+  saturated colours and a WHITE sprite, so the multiply is decisive): CPU overlay + worker billboard
+  + 3D each render the six agent colours where the art is white; **black art stays black**; and — the
+  headline — **colorize OFF is BIT-IDENTICAL to the pre-change build** (`git stash` A/B with the
+  population pinned by `pasteAgents` so both builds render the same state: FNV hash **3329000182**,
+  18 123 lit pixels, over a 1080×914 frame with 260 sprite agents, repeatable on both sides). Pinned
+  by three invariants in [verify-agent-render.mjs](scripts/verify-agent-render.mjs) (rgb-only tint
+  with alpha kept · the exact `vec3(1.0)` identity including the cull path · the flag bit with
+  `SPRITE_META_BYTES = 32`), which REPLACED the older "the sprite is untinted" pin rather than
+  deleting it.
+
+#### Sprite CROP — a rectangle for NON-sheet assets (branch `tasks_batch_01-09`)
+A sheet is cropped by its grid; a plain image, an animated GIF/WebP or a frame SEQUENCE had no
+cropping at all and rendered exactly as imported — **padding included, which sets the drawn size just
+as much as the art does**. **`SpriteAsset.crop?: SpriteCropRect` (`{x,y,width,height}` in SOURCE
+pixels, additive, ABSENT ⇒ no crop)** is applied **at DECODE time to EVERY frame**, in the same seam
+the chroma key sits in — after frame extraction, **before** the chroma key (so a key colour is
+matched on the pixels that survive).
+- **[src/model/spriteCrop.ts](src/model/spriteCrop.ts) is the ONE rule** (dependency-free + DOM-free,
+  the `spriteSheet.ts` pattern, so the decoder, the dialog, the panel previews and the Node harness
+  all run the same code): `resolveSpriteCrop` (**null = use the whole frame**) / `clampSpriteCrop`
+  (the EDITING rule — never returns null, so a rect cannot vanish mid-drag) / `fullSpriteCrop` /
+  `spriteCropIsFull` / **`spriteCropPatch`** (the FOLD — a rect equal to the whole image is NOT
+  stored, mirroring `sheetWithCellSize`, so a drag that lands back on the full image leaves the asset
+  in its legacy shape and every consumer stays on the no-crop path).
+- **CLAMPED PER FRAME, deliberately**: a frame SEQUENCE is N independent files that may differ in
+  size, so one stored rect is reconciled with each frame rather than with "the" image. A
+  **degenerate or fully-outside rect degrades to the WHOLE frame, never to a zero-area bitmap** —
+  a frame that cannot be produced would take the sprite off screen entirely, far worse than ignoring
+  a rect that says nothing about this frame.
+- **It IS in `spriteDecodeKey`** (unlike colorize): it changes the decoded pixels, so the registry
+  must re-decode. The decoder closes the bitmap a crop supersedes and keeps the ORIGINAL object
+  (no copy) when the resolution is null.
+- **[SpriteCropDialog.tsx](src/components/SpriteCropDialog.tsx)** is a lean sibling of
+  `SpriteSheetDialog` for NON-sheet assets (a sheet is cropped by its grid, so the row is hidden
+  there — the structurally-impossible rule), reusing its viewport discipline verbatim: a **FIXED-size
+  letterboxed viewport** (sizing it to the image reflows the card mid-drag — the documented feedback
+  loop), pan/zoom, a crop box with move / corner-resize / draw-new at hit priority **handle → inside
+  → outside**, `tryCapture` on real drags only, numeric x/y/w/h `NumberField`s, "Full image", and a
+  frame stepper for sequences.
+- **Verified end-to-end in the real UI** on a 64×64 frame that is transparent except for a white
+  16×16 block at (24,20): the **draw gizmo lands exactly on `24,20,16,16`** (and a press inside the
+  full-image box correctly MOVES it instead — hit priority working); Apply took the white pixel count
+  **3189 → 42841 (13.4×, fully opaque)** = the quad is now all art; **all 4 frames of the sequence are
+  cropped** (~43k across six stepped samples — a single uncropped frame would collapse to ~3k);
+  re-editing to `24,20,32,32` **without a reload** gave **11 601 ≈ ¼** (16×16 art inside a 32×32 crop),
+  the decode-signature invalidation proven quantitatively; the dialog **reopens with the applied
+  rect**; Clear returns the row to "whole image", removes its own button and restores ~3155 ≈ the
+  3189 baseline (the fold); and the real **Save** path writes `crop: {x:24,y:20,width:16,height:16}`
+  and `colorize: true` into the `.gcaproj`. Guarded by
+  [scripts/test-sprite-crop.mjs](scripts/test-sprite-crop.mjs) (Tiers A–G: the null cases, real rects
+  by value incl. the per-frame sequence clamp, the editing clamp, the fold, the decode signature
+  — crop yes / colorize no —, the colorize multiply + quantisation, and the decoder ordering pins).
 
 ### "Map Image to Cells" dialog (replaces the 2D Open-Image import)
 A [ImageMappingDialog.tsx](src/simulator/ImageMappingDialog.tsx) modal: source image (left, with a draggable/resizable region box + a cell-grid overlay) + gridified preview (right). Setup: Input-Mapping picklist, average-pixels, invert, binarize+threshold, **resize-grid vs paste-centered**, and **"use manual input mapping"** (binarize-true cells painted with the manual-brush values, embeds `ManualBrushPanel`). Also opens on **Ctrl+V** of a clipboard image (a window `paste` listener, latest-ref, `visibleRef`-gated). The pure sampler is [imageMapping.ts](src/simulator/imageMapping.ts) (`gridifyImage` → `{cols, rows, pixels, mask}`). Apply covers 4 combos: resize (reinit to cols×rows, then `importImage` or a pending `paintManual`) × center (keep grid; `importImage` with a region, or `paintManual` on centred cells). The worker's **`importImage` gained an optional `region`** — paste-centered writes ONLY the sub-region (cells outside preserved); under WebGPU with `gpuOwnsAttrs` (post-Play) it uses **`patchWebGPUCells(regionIdxs)`** instead of a full `uploadAttrs` so evolved cells outside the region aren't clobbered by the stale CPU mirror. **2D-only** (the worker's per-cell `importImage` is 2D-linear); a 3D model keeps the classic 1px=1cell resize import.

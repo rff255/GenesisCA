@@ -249,6 +249,9 @@ export interface SpriteAtlasInput {
    *  Sprite override) is the drawn size in WORLD UNITS, so the agent radius is not
    *  consulted. Absent/false = the historical agent-diameter multiplier. */
   absoluteSize?: boolean;
+  /** `SpriteAsset.colorize` — multiply each texel's rgb by the AGENT's colour
+   *  (alpha untouched). Absent/false = the historical untinted billboard. */
+  colorize?: boolean;
 }
 
 /** gl3d-internal per-slot sprite render meta (built by setSpriteAtlas). */
@@ -262,6 +265,7 @@ interface SpriteSlotMeta {
   orientToVelocity: boolean;
   scale: number;
   absoluteSize: boolean;  // scale IS the world-unit size (radius not consulted)
+  colorize: boolean;      // multiply the art by the agent's colour (alpha kept)
 }
 
 /** 3D scene lighting. One directional key light + ambient fill (+ an optional
@@ -898,7 +902,12 @@ void main() {
 // camera-facing textured quad from the sprite atlas (a TEXTURE_2D_ARRAY, one layer
 // per (sprite, frame)) INSTEAD of the sphere impostor (which is skipped via the
 // sign-flag above). Per-instance: [x,y,z (world), halfW, halfH (cell units),
-// cosRot, sinRot, layer, alpha] × 9 floats (stride 36). The quad is ASPECT-shaped
+// cosRot, sinRot, layer, alpha, tintR, tintG, tintB] × 12 floats (stride 48). The
+// TINT is the agent's colour when the asset COLORIZES and (1,1,1) otherwise, so the
+// FS's multiply is an exact identity on the historical path (a per-instance float
+// triple rather than a packed uint attribute: the sprite instance buffer is small —
+// 12 floats × 10k agents is 480 KB — and one all-float record keeps the VAO on a
+// single vertexAttribPointer path). The quad is ASPECT-shaped
 // (halfW/halfH) so the atlas frame — stored stretched-to-square in its cell —
 // renders at the sprite's native aspect with the longest side ≈ the agent
 // diameter, matching the 2D `drawImage` sizing. The rotation is clockwise-on-screen
@@ -912,6 +921,7 @@ layout(location=2) in vec2 aHalf;        // half-extent (w,h) in cell units
 layout(location=3) in vec2 aRot;         // cos,sin of the facing rotation
 layout(location=4) in float aLayer;      // atlas layer (baseLayer + resolved frame)
 layout(location=5) in float aAlpha;      // agent alpha 0..1
+layout(location=6) in vec3 aTint;        // colorize tint, or (1,1,1)
 uniform mat4 uMVP;
 uniform vec3 uHalf;
 uniform vec3 uCamRight;
@@ -919,8 +929,10 @@ uniform vec3 uCamUp;
 out vec2 vTex;
 out float vLayer;
 out float vAlpha;
+out vec3 vTint;
 out vec3 vSurf;
 void main() {
+  vTint = aTint;
   vec3 centre = vec3(aPos.x - uHalf.x, uHalf.y - aPos.y, uHalf.z - aPos.z);
   // Texcoord from the UNROTATED corner (the image is fixed to the quad); the quad
   // VERTICES rotate, so the image rotates with them. Flip V (image top = +V).
@@ -941,6 +953,7 @@ precision highp sampler2DArray;
 in vec2 vTex;
 in float vLayer;
 in float vAlpha;
+in vec3 vTint;
 in vec3 vSurf;
 uniform sampler2DArray uAtlas;
 uniform int uClipEnabled;
@@ -957,7 +970,10 @@ void main() {
     float w = uClipAxis == 0 ? vSurf.x : uClipAxis == 1 ? vSurf.y : uClipAxis == 2 ? vSurf.z : dot(vSurf, uClipForward);
     if (w < uClipLo || w > uClipHi) { discard; }
   }
-  outColor = vec4(t.rgb, a);
+  // COLORIZE — this atlas is STRAIGHT-alpha (UNPACK_PREMULTIPLY_ALPHA off), so the
+  // multiply is directly "texel.rgb x tint, alpha untouched". vTint is (1,1,1) when
+  // the asset does not colorize, making this bit-identical to the historical line.
+  outColor = vec4(t.rgb * vTint, a);
 }`;
 
 // ---------------------------------------------------------------------------
@@ -1387,7 +1403,7 @@ export class Gl3DRenderer {
   // --- Agent SPRITES (3D billboard pass). ---
   private spriteProg: WebGLProgram;
   private spriteVao: WebGLVertexArrayObject;
-  private spriteInstBuf: WebGLBuffer;      // [x,y,z,halfW,halfH,cos,sin,layer,alpha] × 9 floats
+  private spriteInstBuf: WebGLBuffer;      // SPRITE_INST_FLOATS per billboard (see SPRITE_VS)
   private spriteInstData: Float32Array = new Float32Array(0);
   private spriteInstCapacity = 0;          // floats allocated in spriteInstBuf
   /** Number of sprite billboards in the last uploadAgents. DEV/verification. */
@@ -1398,6 +1414,10 @@ export class Gl3DRenderer {
   /** Fixed atlas cell size (each frame is drawn stretched to CELL×CELL; the
    *  aspect-shaped billboard quad un-stretches it — see SPRITE_VS). */
   private static readonly ATLAS_CELL = 128;
+  /** Floats per sprite billboard instance — [x,y,z,halfW,halfH,cos,sin,layer,alpha,
+   *  tintR,tintG,tintB]. The ONE definition; the VAO strides and the capacity
+   *  helper both derive from it. */
+  private static readonly SPRITE_INST_FLOATS = 12;
   // --- Agent METABALLS (implicit-surface agent render mode). The density field
   //     is baked LAZILY in render() from the packed agentInstData (which already
   //     carries alive-compacted positions/radii/colours + the negative-radius
@@ -1527,7 +1547,8 @@ export class Gl3DRenderer {
     gl.enableVertexAttribArray(3); gl.vertexAttribPointer(3, 4, gl.FLOAT, false, 32, 16); gl.vertexAttribDivisor(3, 1);
     gl.bindVertexArray(null);
     // Sprite billboard pipeline: the SAME static unit quad (attrib 0, from quadBuf)
-    // + a per-instance [x,y,z,halfW,halfH,cos,sin,layer,alpha] buffer (stride 36).
+    // + a per-instance [x,y,z,halfW,halfH,cos,sin,layer,alpha,tintR,tintG,tintB]
+    // buffer (SPRITE_INST_FLOATS = 12, stride 48).
     this.spriteProg = compileProgram(gl, SPRITE_VS, SPRITE_FS);
     this.spriteVao = gl.createVertexArray()!;
     this.spriteInstBuf = gl.createBuffer()!;
@@ -1535,11 +1556,13 @@ export class Gl3DRenderer {
     gl.bindBuffer(gl.ARRAY_BUFFER, this.quadBuf);
     gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 8, 0);
     gl.bindBuffer(gl.ARRAY_BUFFER, this.spriteInstBuf);
-    gl.enableVertexAttribArray(1); gl.vertexAttribPointer(1, 3, gl.FLOAT, false, 36, 0); gl.vertexAttribDivisor(1, 1);
-    gl.enableVertexAttribArray(2); gl.vertexAttribPointer(2, 2, gl.FLOAT, false, 36, 12); gl.vertexAttribDivisor(2, 1);
-    gl.enableVertexAttribArray(3); gl.vertexAttribPointer(3, 2, gl.FLOAT, false, 36, 20); gl.vertexAttribDivisor(3, 1);
-    gl.enableVertexAttribArray(4); gl.vertexAttribPointer(4, 1, gl.FLOAT, false, 36, 28); gl.vertexAttribDivisor(4, 1);
-    gl.enableVertexAttribArray(5); gl.vertexAttribPointer(5, 1, gl.FLOAT, false, 36, 32); gl.vertexAttribDivisor(5, 1);
+    const SS = Gl3DRenderer.SPRITE_INST_FLOATS * 4;   // stride in bytes
+    gl.enableVertexAttribArray(1); gl.vertexAttribPointer(1, 3, gl.FLOAT, false, SS, 0); gl.vertexAttribDivisor(1, 1);
+    gl.enableVertexAttribArray(2); gl.vertexAttribPointer(2, 2, gl.FLOAT, false, SS, 12); gl.vertexAttribDivisor(2, 1);
+    gl.enableVertexAttribArray(3); gl.vertexAttribPointer(3, 2, gl.FLOAT, false, SS, 20); gl.vertexAttribDivisor(3, 1);
+    gl.enableVertexAttribArray(4); gl.vertexAttribPointer(4, 1, gl.FLOAT, false, SS, 28); gl.vertexAttribDivisor(4, 1);
+    gl.enableVertexAttribArray(5); gl.vertexAttribPointer(5, 1, gl.FLOAT, false, SS, 32); gl.vertexAttribDivisor(5, 1);
+    gl.enableVertexAttribArray(6); gl.vertexAttribPointer(6, 3, gl.FLOAT, false, SS, 36); gl.vertexAttribDivisor(6, 1);
     gl.bindVertexArray(null);
     // Metaball raymarch pipeline: the SAME static unit quad (attrib 0, from
     // quadBuf) on its own tiny VAO (keeps instanced-attrib divisors out of the
@@ -1843,6 +1866,7 @@ export class Gl3DRenderer {
         loop: s.loop, defaultDirection: s.defaultDirection,
         rotationOffset: s.rotationOffset, orientToVelocity: s.orientToVelocity,
         scale: s.scale > 0 ? s.scale : 1, absoluteSize: !!s.absoluteSize,
+        colorize: !!s.colorize,
       });
       for (const f of s.frames) {
         sctx.clearRect(0, 0, CELL, CELL);
@@ -2303,12 +2327,16 @@ export class Gl3DRenderer {
             if (vX * vX + vY * vY > 1e-9) facingDeg = Math.atan2(vX, -vY) * 180 / Math.PI;
           }
           const rr = ((facingDeg - meta.defaultDirection) + meta.rotationOffset) * Math.PI / 180;
-          const so = ns * 9;
+          const so = ns * Gl3DRenderer.SPRITE_INST_FLOATS;
           sp[so] = x; sp[so + 1] = y; sp[so + 2] = z;
           sp[so + 3] = halfW; sp[so + 4] = halfH;
           sp[so + 5] = Math.cos(rr); sp[so + 6] = Math.sin(rr);
           sp[so + 7] = meta.baseLayer + frame;
           sp[so + 8] = snap.colors[c + 3]! / 255;
+          // COLORIZE — the agent's rgb, or an exact (1,1,1) identity otherwise.
+          sp[so + 9] = meta.colorize ? snap.colors[c]! / 255 : 1;
+          sp[so + 10] = meta.colorize ? snap.colors[c + 1]! / 255 : 1;
+          sp[so + 11] = meta.colorize ? snap.colors[c + 2]! / 255 : 1;
           ns++;
           isSprite = true;
         }
@@ -2328,12 +2356,13 @@ export class Gl3DRenderer {
     this.metaTorus = torus;
     if (sp && ns > 0) {
       const gl2 = this.gl;
+      const need = ns * Gl3DRenderer.SPRITE_INST_FLOATS;
       gl2.bindBuffer(gl2.ARRAY_BUFFER, this.spriteInstBuf);
-      if (this.spriteInstCapacity < ns * 9) {
+      if (this.spriteInstCapacity < need) {
         gl2.bufferData(gl2.ARRAY_BUFFER, sp, gl2.DYNAMIC_DRAW);
         this.spriteInstCapacity = sp.length;
       } else {
-        gl2.bufferSubData(gl2.ARRAY_BUFFER, 0, sp.subarray(0, ns * 9));
+        gl2.bufferSubData(gl2.ARRAY_BUFFER, 0, sp.subarray(0, need));
       }
     }
     // Fresh upload = compacted order → identity permutation.
@@ -2400,9 +2429,9 @@ export class Gl3DRenderer {
   }
 
   /** Grow + return the CPU-side sprite instance scratch to hold `hw` billboards
-   *  (9 floats each). Reused across frames. */
+   *  (SPRITE_INST_FLOATS each). Reused across frames. */
   private ensureSpriteCapacity(hw: number): Float32Array {
-    const need = hw * 9;
+    const need = hw * Gl3DRenderer.SPRITE_INST_FLOATS;
     if (this.spriteInstData.length < need) this.spriteInstData = new Float32Array(need);
     return this.spriteInstData;
   }

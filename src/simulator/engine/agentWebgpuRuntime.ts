@@ -1941,6 +1941,12 @@ const SPRITE_FLAG_ORIENT = 2;
  *  WORLD units (the agent radius is not consulted). Carried as a FLAG bit rather
  *  than a new struct member so SPRITE_META_BYTES (and the packing) never moves. */
 const SPRITE_FLAG_ABSOLUTE = 4;
+/** `SpriteAsset.colorize` — multiply each texel's rgb by the AGENT's colour (alpha
+ *  untouched), so one grayscale asset serves a whole coloured population. A FLAG
+ *  BIT for the same reason ABSOLUTE is one: SPRITE_META_BYTES (and the packing)
+ *  never moves. With the bit clear the FS multiplies by an exact vec3(1.0), which
+ *  is bit-identical to not multiplying at all. */
+const SPRITE_FLAG_COLORIZE = 8;
 /** 2D-only floor on the drawn sprite span, in SCREEN px — the absolute arm's
  *  analogue of the relative arm's 1.2 px radius floor (mirrors the CPU overlay's
  *  MIN_SPRITE_SPAN_PX, which is the span that floor bottoms out at for scale 1). */
@@ -1984,6 +1990,9 @@ struct SpriteOut {
   @location(0)       uv    : vec2<f32>,
   @location(1)       layer : f32,
   @location(2)       alpha : f32,
+  /** COLORIZE — the agent's rgb, or (1,1,1) when the asset does not colorize, in
+   *  which case the FS's multiply is an exact identity. */
+  @location(3)       tint  : vec3<f32>,
 };
 
 fn cullSprite() -> SpriteOut {
@@ -1992,6 +2001,7 @@ fn cullSprite() -> SpriteOut {
   o.uv = vec2<f32>(0.0, 0.0);
   o.layer = 0.0;
   o.alpha = 0.0;
+  o.tint = vec3<f32>(1.0, 1.0, 1.0);
   return o;
 }
 
@@ -2071,6 +2081,12 @@ fn vsSprite(@builtin(vertex_index) vi: u32, @builtin(instance_index) inst: u32) 
   out.uv = vec2<f32>((corner.x + 1.0) * 0.5, (corner.y + 1.0) * 0.5);
   out.layer = f32(i32(m.baseLayer) + frame);
   out.alpha = a;
+  // COLORIZE — the agent's own rgb (agentColors packs r | g<<8 | b<<16 | a<<24).
+  var tint: vec3<f32> = vec3<f32>(1.0, 1.0, 1.0);
+  if ((m.flags & ${SPRITE_FLAG_COLORIZE}u) != 0u) {
+    tint = vec3<f32>(f32(packed & 0xffu), f32((packed >> 8u) & 0xffu), f32((packed >> 16u) & 0xffu)) / 255.0;
+  }
+  out.tint = tint;
   return out;
 }
 
@@ -2080,10 +2096,15 @@ fn fsSprite(in: SpriteOut) -> @location(0) vec4<f32> {
   // so scaling the whole texel by the agent alpha keeps it premultiplied — which is
   // what the disc pipeline's blend expects. The 0.02 cutout is gl3d's, and it is what
   // lets the pass draw unsorted.
+  //
+  // COLORIZE multiplies the RGB only. On premultiplied data that is still exactly
+  // "texel.rgb x tint, alpha untouched": premult = straight x a, so
+  // (straight x tint) x a = premult x tint. With the flag clear the tint is an
+  // exact vec3(1.0), so this reduces to the historical \`t * in.alpha\`, bit for bit.
   let t: vec4<f32> = textureSampleLevel(spriteAtlas, spriteSamp, in.uv, i32(in.layer), 0.0);
   let a: f32 = t.a * in.alpha;
   if (a < 0.02) { discard; }
-  return t * in.alpha;
+  return vec4<f32>(t.rgb * in.tint, t.a) * in.alpha;
 }`;
 }
 
@@ -3426,7 +3447,7 @@ export function setAgentSpriteAtlas(rt: AgentRenderSurface, p: AgentSpriteAtlasP
         mu[o] = s.baseLayer >>> 0;
         mu[o + 1] = s.frameCount >>> 0;
         mu[o + 2] = ((s.loop ? SPRITE_FLAG_LOOP : 0) | (s.orientToVelocity ? SPRITE_FLAG_ORIENT : 0)
-          | (s.absoluteSize ? SPRITE_FLAG_ABSOLUTE : 0)) >>> 0;
+          | (s.absoluteSize ? SPRITE_FLAG_ABSOLUTE : 0) | (s.colorize ? SPRITE_FLAG_COLORIZE : 0)) >>> 0;
         mf[o + 4] = s.aspect > 0 ? s.aspect : 1;
         mf[o + 5] = s.scale > 0 ? s.scale : 1;
         mf[o + 6] = s.defaultDirection;

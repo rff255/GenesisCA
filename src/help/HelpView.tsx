@@ -3346,7 +3346,8 @@ export function HelpView() {
             and
             <strong> clicking a row opens its editor in the second panel</strong>. There you
             set the <strong>size mode</strong> and size, whether the frames <strong>loop</strong>, the sheet grid + frame
-            selection (via <strong>Edit sheet grid&hellip;</strong>), the
+            selection (via <strong>Edit sheet grid&hellip;</strong>), the <strong>crop</strong> (see
+            below), <strong>Colorize by agent colour</strong> (see below), the
             <strong> rotation</strong> &mdash; the art&rsquo;s default facing on the compass dial,
             plus <strong>Orient to velocity</strong> so it auto-points along the agent&rsquo;s
             heading, plus a fixed offset &mdash; and <strong>remove a background colour</strong>
@@ -3371,6 +3372,32 @@ export function HelpView() {
             (the other is shortened by the frame&rsquo;s aspect), and the mode is a property of the
             <em> sprite</em>, so the library&rsquo;s Size field and the node&rsquo;s Scale port always
             mean the same thing.
+          </p>
+          <p className={styles.p}>
+            <strong>Colorize by agent colour.</strong> Tick it and the sprite&rsquo;s pixels are
+            <strong> multiplied</strong> by the colour that agent already has, so <em>one</em> asset
+            serves a whole coloured population instead of one asset per species. Draw the art in
+            <strong> white or grey</strong> and it takes the agent&rsquo;s colour exactly; a black
+            pixel stays black, and anything in between is shaded by it &mdash; which is what makes
+            it work for a shaded sprite, not just a flat silhouette. Transparency is untouched, so
+            the outline stays exactly as drawn. Left off (the default), the agent colour still
+            scales the sprite&rsquo;s <em>opacity</em> exactly as it always did, and the art is drawn
+            with its own colours. The colour comes from wherever it normally does &mdash;
+            <strong> Set Cell Looks</strong> in the agent graph, or an
+            <strong> Agent Output Mapping</strong>.
+          </p>
+          <p className={styles.p}>
+            <strong>Crop.</strong> Downloaded art is usually padded, and that padding counts toward
+            the drawn size just as much as the picture does &mdash; so a sprite can end up small and
+            floating in an invisible box. <strong>Crop&hellip;</strong> opens a viewport where you
+            drag a rectangle over the art (or type the numbers); <strong>Full image</strong> resets
+            it and <strong>Clear</strong> removes it entirely. It applies to a plain image, an
+            animated GIF/WebP and a <strong>frame sequence</strong> &mdash; the same rectangle on
+            every frame, clamped to each one, so frames of different sizes are safe. A sprite
+            <em> sheet</em> has no Crop row: its grid already does the cropping. Every preview (the
+            row thumbnail, the editor image and the background-colour picker) shows the
+            <strong> cropped</strong> frame, so you pick a chroma-key colour off the pixels the
+            sprite actually draws.
           </p>
           <p className={styles.p}>
             To actually show a sprite, use that <strong>Set Agent Sprite</strong> node in an

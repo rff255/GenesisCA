@@ -376,6 +376,28 @@ export interface SpriteAsset {
   orientToVelocity?: boolean;
   /** ROTATION — a fixed extra rotation (degrees, clockwise) applied on top. */
   rotationOffset?: number;
+  /** COLORIZE — tint the art by the AGENT's colour: every texel's rgb is MULTIPLIED
+   *  by `agentColour.rgb / 255` and its ALPHA is left alone. So white art becomes
+   *  exactly the agent colour, black stays black, and shading survives — which lets
+   *  ONE grayscale/white sprite serve a whole coloured population (species colours,
+   *  an Output-Mapping colour ramp). The colour is `s.colors`, the same buffer that
+   *  already supplies the sprite's alpha.
+   *
+   *  RENDER-time, not decode-time: it changes no frame, so it does NOT enter the
+   *  decode signature. Absent/false ⇒ the historical untinted blit, byte-for-byte,
+   *  on all three sprite render paths. */
+  colorize?: boolean;
+  /** CROP — a source rectangle applied to EVERY frame at decode time (after the
+   *  frames are extracted, before the chroma key). For plain images / animated
+   *  GIFs / frame SEQUENCES, which otherwise render exactly as imported — padding
+   *  and all. A sheet crops through its grid instead, so the UI offers this only
+   *  for non-sheet assets (a crop on a sheet is still well defined: it trims every
+   *  cell).
+   *
+   *  Clamped PER FRAME (a sequence's frames may differ in size); a degenerate or
+   *  fully-outside rect degrades to the whole frame rather than a zero-area bitmap.
+   *  See `spriteCrop.ts` — the one definition. */
+  crop?: SpriteCropRect;
   /** CHROMA KEY — when set, pixels within `removeBgTolerance` per channel of this
    *  `#rrggbb` colour are made transparent at decode time (classic magenta /
    *  green-screen background removal for traditional sprites). */
@@ -389,6 +411,15 @@ export interface SpriteAsset {
   /** SPRITE SHEET — slice the single grid image in `dataUrl` into frames
    *  (row-major). Classic RPGMaker / pixel-art sheet import. */
   sheet?: SpriteSheetSpec;
+}
+
+/** A crop rectangle in SOURCE pixels, applied to every frame of a sprite asset.
+ *  Absent on the asset ⇒ no crop. See `spriteCrop.ts` for the clamping rules. */
+export interface SpriteCropRect {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
 }
 
 /** Grid layout of a sprite sheet — how to slice one image into animation frames
