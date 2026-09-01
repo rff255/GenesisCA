@@ -73,6 +73,29 @@ function inputParamIssues(
     : [];
 }
 
+/** BY-ID agent nodes whose UNWIRED `Agent` input is a SILENT no-op, and the badge
+ *  that says so. Every one of them emits the missing id as the `-1` empty sentinel
+ *  (the deliberate guard that keeps `_agentX[-1]` = undefined → NaN, and an
+ *  adjacent-memory read on WASM, out of the engine), so the range guard resolves it
+ *  to a READ OF 0 or a SKIPPED WRITE — plausible, wrong, and reported nowhere.
+ *
+ *  That is a genuinely easy trap: on the Agents graph a `Get Attribute (by ID)`
+ *  reads "Get Attribute", so it is routinely dropped in where `Get Self Attribute`
+ *  was meant, and it then feeds 0 into everything downstream. Each message names
+ *  the self-reading alternative, so the badge is a fix and not just a complaint.
+ *
+ *  `getVelocity` / `setVelocity` / `setAttribute` / `setTargetRadius` / `killAgent`
+ *  / `setAgentSprite` are deliberately ABSENT: their unwired id means SELF, which
+ *  is a documented, useful default (see "Agent action TARGETING" in CLAUDE.md). */
+const BY_ID_UNWIRED: Readonly<Record<string, string | undefined>> = {
+  getAgentAttribute: 'Connect an Agent input (it reads 0 otherwise) — use Get Self Attribute for this agent',
+  getAgentPosition: 'Connect an Agent input (it reads 0 otherwise) — use Get Self Position for this agent',
+  getAgentRadius: 'Connect an Agent input (it reads 0 otherwise) — use Get Radius for this agent',
+  getAgentOffset: 'Connect an Agent input (it reads 0 otherwise) — e.g. from Get Nearby Agents or For Each Bond',
+  setAgentPosition: 'Connect an Agent input (it writes nothing otherwise) — e.g. from Get Self Handle or Create Agent',
+  setAgentRadius: 'Connect an Agent input (it writes nothing otherwise) — e.g. from Get Self Handle, or use Set Target Radius for this agent',
+};
+
 export function detectMissingConfig(
   nodeType: string,
   config: NodeConfig,
@@ -235,9 +258,10 @@ export function detectMissingConfig(
     // agent-equivalent gather / filter / write-many nodes. All target the AGENT
     // attribute set.
     case 'getAgentAttribute':
-      // Single-agent (scalar agentId) — only the attribute is required.
+      // Single-agent (scalar agentId) — the attribute AND the id are required.
       if (!hasAgentAttr(config.attributeId)) issues.push('Select an agent attribute');
       checkSlots(hasAgentAttr, 'an agent attribute');
+      if (isInputConnected('agentId') === false) issues.push(BY_ID_UNWIRED.getAgentAttribute!);
       break;
 
     case 'getAgentsAttribute':
@@ -498,6 +522,18 @@ export function detectMissingConfig(
       if (config.setSprite !== false && !(model.sprites ?? []).some(s => s.id === config.spriteId)) {
         issues.push('Select a sprite (or untick "Change sprite")');
       }
+      break;
+
+    // BY-ID agent readers / writers whose UNWIRED `Agent` id is a SILENT no-op.
+    // See BY_ID_UNWIRED — every one of them compiles the missing id to the -1
+    // sentinel, which the range guard turns into a read of 0 (or a skipped write)
+    // on all three agent targets, with no error anywhere.
+    case 'getAgentPosition':
+    case 'getAgentRadius':
+    case 'getAgentOffset':
+    case 'setAgentPosition':
+    case 'setAgentRadius':
+      if (isInputConnected('agentId') === false) issues.push(BY_ID_UNWIRED[nodeType]!);
       break;
 
     case 'setIndicator':
