@@ -3532,20 +3532,42 @@ export function HelpView() {
             <strong> Single / Area</strong> scope (Single acts on exactly one agent; Area on the whole
             shape footprint), across modes
             <strong> Add</strong> (place agents &mdash; Single: one at the cursor; Area: fill the
-            shape, with <em>Density</em>/<em>Spacing</em> and an <em>Add config</em> section for the
-            new agents' initial attribute values), <strong>Remove</strong> (delete the nearest agent
+            shape, with <em>Density</em> / <em>Drag step</em> and an <em>Add config</em> section for
+            the new agents' initial attribute values <em>and their radius</em>),
+            <strong>Remove</strong> (delete the nearest agent
             or all in the footprint), <strong>Move</strong> (drag one agent, or rigid-drag a whole
             footprint of agents; right-click cancels), <strong>Edit</strong> (overwrite chosen
             properties &mdash; agent attributes plus radius / velocity / position &mdash; on the
-            clicked agent via <em>Apply</em>, or on every agent under the footprint),
+            clicked agent via <em>Apply</em>, or on every agent under the footprint; clicking an
+            agent prefills the rows from its live state, rounded to the precision the engine
+            actually carries, so a radius you set to <code>0.4</code> reads back as
+            <code>0.4</code> rather than <code>0.4000000059604645</code>),
             <strong> Push</strong> / <strong>Pull</strong> (see below), and
             <strong> Glue</strong> / <strong>Cut</strong> (bond/unbond two clicked agents).
             Glue / Cut appear only on a model whose <strong>Bonds</strong> capability is on
             (Properties &rsaquo; Bond-Graph Agents) &mdash; without a bond store there is nothing for
             them to do, so they are left out rather than shown doing nothing. Each built-in action is
             an <strong>icon button</strong> (as are the shape buttons); hover one for its name and
-            what it does &mdash; and the same glyph follows your cursor on the board, so the armed
-            brush is readable without looking away.
+            what it does &mdash; and the same glyph follows your cursor on the board, drawn just
+            below the footprint, so the armed brush is readable without looking away.
+          </p>
+          <p className={styles.p}>
+            <strong>Add: Density, Drag step, and the seed Radius.</strong> <em>Density</em> is a
+            <strong> fraction of the densest possible packing</strong> at the radius the new agents
+            will have: <code>1.0</code> lays them out like close-packed discs (spheres in 3D) just
+            touching, <code>0.5</code> half as many. Concretely the count is
+            <code> packing &times; area / (2&radic;3 &times; r&sup2;)</code> in 2D and
+            <code> packing &times; volume / (4&radic;2 &times; r&sup3;)</code> in 3D, capped at 4000
+            agents per stamp. Because it is defined against the agent&apos;s own size it means the
+            same thing at every brush size and in every model &mdash; the same setting no longer
+            gives a sparse dusting for small agents and an overlapping mass for large ones.
+            The radius it uses is the <strong>Radius</strong> row in <em>Add config</em> when you
+            tick it, and otherwise the model&apos;s own <em>Default Radius</em> (Properties &rsaquo;
+            Bond-Graph Agents) &mdash; so ticking that row changes both how big the new agents are
+            and, at the same Density, how many of them fit. <em>Drag step</em> is a different thing
+            entirely: how far the cursor must travel, in world units, before a <em>drag</em> lays
+            down the next stamp. A single click never uses it; lower values give a denser,
+            continuous trail and higher ones separated dabs.
           </p>
           <p className={styles.p}>
             <strong>Built-in vs User defined.</strong> Those actions are the <strong>Built-in</strong>
