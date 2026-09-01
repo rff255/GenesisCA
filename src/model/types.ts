@@ -1436,8 +1436,15 @@ export interface CenterBasedConfig {
   seedCount?: number;
   /** Initial seeding layout. 'compact' (default) = a centred packed blob (the
    *  morphogenesis starting point). 'scatter' = uniformly random across the
-   *  world (dispersed populations — flocking, chemotaxis aggregation). */
-  seedPattern?: 'compact' | 'scatter';
+   *  world (dispersed populations — flocking, chemotaxis aggregation).
+   *  'none' = NO automatic seeding at all: the population comes entirely from
+   *  the Agent Init Event and/or the Add brush. It is a genuine third option,
+   *  not "seedCount 0" — the count keeps its value (so switching back to a
+   *  pattern restores it) and 'none' draws NOTHING from the seeded RNG stream
+   *  (C7/P7: the scatter placement is the only seeding path that advances it,
+   *  so a 'none' model's stream is byte-identical to an unseeded one). ABSENT
+   *  ⇒ 'compact' ⇒ today's behaviour, so old files need no migration. */
+  seedPattern?: 'compact' | 'scatter' | 'none';
   /** Default agent radius (the rest contact distance between two agents is the
    *  sum of their radii). */
   defaultRadius?: number;

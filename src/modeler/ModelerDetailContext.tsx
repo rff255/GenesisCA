@@ -9,6 +9,12 @@ import type { PanelId } from './ActivityBar';
 export interface ModelerDetailValue {
   selectedByPanel: Partial<Record<PanelId, string | null>>;
   setSelected: (panel: PanelId, id: string | null) => void;
+  /** Clear EVERY panel's detail selection, so the second (detail) PanelShell
+   *  unmounts whichever panel is active. Called when the user clicks the graph
+   *  canvas — attention moved to the graph, so the editor for a model element
+   *  gets out of the way. Stable identity (a `useCallback` with no deps), so a
+   *  consumer can hold it in a ref without re-subscribing. */
+  clearAllSelections: () => void;
 }
 
 export const ModelerDetailContext = createContext<ModelerDetailValue | null>(null);
@@ -18,6 +24,15 @@ export const ModelerDetailContext = createContext<ModelerDetailValue | null>(nul
 export type PanelMode = 'list' | 'detail';
 export interface PanelContentProps {
   mode?: PanelMode;
+}
+
+const NOOP = () => {};
+
+/** Clear every panel's detail selection. Returns a no-op outside the provider
+ *  so a consumer rendered without it (a future standalone editor) still works. */
+export function useClearDetailSelections(): () => void {
+  const ctx = useContext(ModelerDetailContext);
+  return ctx ? ctx.clearAllSelections : NOOP;
 }
 
 /** Per-panel detail selection — used like `useState` by the master-detail panels. */

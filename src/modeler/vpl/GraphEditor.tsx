@@ -63,6 +63,7 @@ import type { CrossingGroup } from './macroMoveScope';
 import { computeAlignmentSnap, sameGuides } from './alignmentSnap';
 import type { AlignGuides, AlignTarget } from './alignmentSnap';
 import { useThemeTokens } from '../../styles/useThemeTokens';
+import { useClearDetailSelections } from '../ModelerDetailContext';
 import styles from './GraphEditor.module.css';
 
 /** Canvas colors that React-Flow takes as JS props (Background grid, MiniMap)
@@ -125,6 +126,16 @@ function fadeColor(color: string | undefined, alpha: number, fallback: string): 
   const a = Math.round(Math.max(0, Math.min(1, alpha)) * 255).toString(16).padStart(2, '0');
   return `#${body}${a}`;
 }
+
+/** A click that travels further than this is a DRAG, not a click. Matches the
+ *  other gesture thresholds in the app (the gizmo's GIZMO_DRAG_PX is 4). */
+const CANVAS_CLICK_SLOP_PX = 5;
+
+/** What counts as "the graph canvas" for the detail-panel close. Deliberately an
+ *  ACCEPT-list: anything else inside the editor (toolbars, the graph-kind pills,
+ *  the minimap, the context / connection-drop menus, the name + macro dialogs)
+ *  is excluded without having to be enumerated. */
+const CANVAS_CLICK_TARGETS = '.react-flow__pane, .react-flow__node, .react-flow__edge';
 
 // ---------------------------------------------------------------------------
 // Clipboard for copy/paste — see graphClipboard.ts. It spans BROWSER TABS
@@ -3911,6 +3922,21 @@ export function GraphEditorInner() {
   // same LMB-up via the synthesized click event) doesn't immediately close it.
   const suppressNextEditorClickRef = useRef(false);
 
+  // --- Canvas click closes the modeler's DETAIL (second left) panel ----------
+  // Attention moved to the graph, so the editor for a model element gets out of
+  // the way. Two guards make this a CLICK and not a gesture:
+  //   1) the pointerdown position, so a DRAG never closes it. The browser still
+  //      dispatches `click` after a drag whose down/up share a target (a node
+  //      drag, a box-select, an RMB pan), and React Flow's own onPaneClick
+  //      suppression does not stop the event bubbling to this wrapper — so the
+  //      distance test is what actually discriminates, not xyflow.
+  //   2) an ACCEPT-list of canvas targets (pane / node / edge). A deny-list
+  //      would silently swallow every overlay added later; this way the graph
+  //      pills, the view toggles, the minimap, the context menu and the
+  //      connection-drop menu are all excluded by construction.
+  const clearDetailSelections = useClearDetailSelections();
+  const clickDownRef = useRef<{ x: number; y: number; primary: boolean } | null>(null);
+
   // --- Connection-drop menu search (quick-add style): drag a wire onto empty
   // canvas → the compatible-nodes menu opens with a focused search box; type
   // to filter, ↑/↓ to move the always-present selection, Enter adds + wires.
@@ -4722,12 +4748,26 @@ export function GraphEditorInner() {
     <div
       ref={editorWrapperRef}
       className={styles.editor}
-      onClick={() => {
+      onPointerDownCapture={e => {
+        // Capture phase so a child that stops propagation (an inline widget, a
+        // menu item) can't hide the gesture's origin from the click test below.
+        clickDownRef.current = { x: e.clientX, y: e.clientY, primary: e.button === 0 };
+      }}
+      onClick={e => {
         if (suppressNextEditorClickRef.current) {
           suppressNextEditorClickRef.current = false;
           return;
         }
         setContextMenu(null);
+        // Close the modeler's detail (second left) panel — but only for a real
+        // LMB CLICK on the canvas itself. See CANVAS_CLICK_TARGETS above.
+        const down = clickDownRef.current;
+        clickDownRef.current = null;
+        if (!down || !down.primary) return;
+        if (Math.abs(e.clientX - down.x) > CANVAS_CLICK_SLOP_PX
+          || Math.abs(e.clientY - down.y) > CANVAS_CLICK_SLOP_PX) return;
+        if (!(e.target as Element | null)?.closest?.(CANVAS_CLICK_TARGETS)) return;
+        clearDetailSelections();
       }}
       onChangeCapture={onNodeDataChange}
       onDragOver={onPaletteDragOver}
