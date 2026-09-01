@@ -97,7 +97,7 @@ export function IndicatorsPanelSection({ mode = 'list', selectedId, onSelect, hi
               key={ind.id}
               id={`ind-${ind.id}`}
               data-reorder-row
-              className={`${styles.listItem} ${ind.id === selectedId ? styles.listItemSelected : ''} ${isDragging ? styles.draggingRow : ''} ${showBefore ? styles.dropIndicatorBefore : ''} ${showAfter ? styles.dropIndicatorAfter : ''}`}
+              className={`${styles.listItem} ${styles.listItemDraggable} ${ind.id === selectedId ? styles.listItemSelected : ''} ${isDragging ? styles.draggingRow : ''} ${showBefore ? styles.dropIndicatorBefore : ''} ${showAfter ? styles.dropIndicatorAfter : ''}`}
               onClick={() => onSelect(ind.id === selectedId ? null : ind.id)}
               draggable
               onDragStart={handleIndicatorDragStart(ind.id)}

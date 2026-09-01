@@ -864,7 +864,7 @@ export function MappingsPanelContent({ mode = 'list' }: PanelContentProps = {}) 
                 key={m.id}
                 id={`mapping-${m.id}`}
                 data-reorder-row
-                className={`${styles.listItem} ${selectedCellId === m.id ? styles.listItemSelected : ''} ${isDragging ? styles.draggingRow : ''} ${showBefore ? styles.dropIndicatorBefore : ''} ${showAfter ? styles.dropIndicatorAfter : ''}`}
+                className={`${styles.listItem} ${styles.listItemDraggable} ${selectedCellId === m.id ? styles.listItemSelected : ''} ${isDragging ? styles.draggingRow : ''} ${showBefore ? styles.dropIndicatorBefore : ''} ${showAfter ? styles.dropIndicatorAfter : ''}`}
                 onClick={() => setSelectedId(m.id)}
                 draggable
                 onDragStart={handleMappingDragStart(m.id, true)}
@@ -911,7 +911,7 @@ export function MappingsPanelContent({ mode = 'list' }: PanelContentProps = {}) 
                 key={m.id}
                 id={`mapping-${m.id}`}
                 data-reorder-row
-                className={`${styles.listItem} ${selectedCellId === m.id ? styles.listItemSelected : ''} ${isDragging ? styles.draggingRow : ''} ${showBefore ? styles.dropIndicatorBefore : ''} ${showAfter ? styles.dropIndicatorAfter : ''}`}
+                className={`${styles.listItem} ${styles.listItemDraggable} ${selectedCellId === m.id ? styles.listItemSelected : ''} ${isDragging ? styles.draggingRow : ''} ${showBefore ? styles.dropIndicatorBefore : ''} ${showAfter ? styles.dropIndicatorAfter : ''}`}
                 onClick={() => setSelectedId(m.id)}
                 draggable
                 onDragStart={handleMappingDragStart(m.id, false)}
@@ -972,7 +972,7 @@ export function MappingsPanelContent({ mode = 'list' }: PanelContentProps = {}) 
                   key={m.id}
                   id={`mapping-${m.id}`}
                   data-reorder-row
-                  className={`${styles.listItem} ${selectedAgentId === m.id ? styles.listItemSelected : ''} ${isDragging ? styles.draggingRow : ''} ${showBefore ? styles.dropIndicatorBefore : ''} ${showAfter ? styles.dropIndicatorAfter : ''}`}
+                  className={`${styles.listItem} ${styles.listItemDraggable} ${selectedAgentId === m.id ? styles.listItemSelected : ''} ${isDragging ? styles.draggingRow : ''} ${showBefore ? styles.dropIndicatorBefore : ''} ${showAfter ? styles.dropIndicatorAfter : ''}`}
                   onClick={() => setSelectedId(AGENT_MAP_PREFIX + m.id)}
                   draggable
                   onDragStart={handleAgentMappingDragStart(m.id, true)}
@@ -1033,7 +1033,7 @@ export function MappingsPanelContent({ mode = 'list' }: PanelContentProps = {}) 
                   key={m.id}
                   id={`mapping-${m.id}`}
                   data-reorder-row
-                  className={`${styles.listItem} ${selectedAgentId === m.id ? styles.listItemSelected : ''} ${isDragging ? styles.draggingRow : ''} ${showBefore ? styles.dropIndicatorBefore : ''} ${showAfter ? styles.dropIndicatorAfter : ''}`}
+                  className={`${styles.listItem} ${styles.listItemDraggable} ${selectedAgentId === m.id ? styles.listItemSelected : ''} ${isDragging ? styles.draggingRow : ''} ${showBefore ? styles.dropIndicatorBefore : ''} ${showAfter ? styles.dropIndicatorAfter : ''}`}
                   onClick={() => setSelectedId(AGENT_MAP_PREFIX + m.id)}
                   draggable
                   onDragStart={handleAgentMappingDragStart(m.id, false)}
@@ -1095,7 +1095,7 @@ export function MappingsPanelContent({ mode = 'list' }: PanelContentProps = {}) 
                   key={s.id}
                   id={`sprite-${s.id}`}
                   data-reorder-row
-                  className={`${styles.listItem} ${selectedSpriteId === s.id ? styles.listItemSelected : ''} ${isDragging ? styles.draggingRow : ''} ${showBefore ? styles.dropIndicatorBefore : ''} ${showAfter ? styles.dropIndicatorAfter : ''}`}
+                  className={`${styles.listItem} ${styles.listItemDraggable} ${selectedSpriteId === s.id ? styles.listItemSelected : ''} ${isDragging ? styles.draggingRow : ''} ${showBefore ? styles.dropIndicatorBefore : ''} ${showAfter ? styles.dropIndicatorAfter : ''}`}
                   onClick={() => setSelectedId(SPRITE_PREFIX + s.id)}
                   draggable
                   onDragStart={handleSpriteDragStart(s.id)}

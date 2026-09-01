@@ -240,26 +240,109 @@
   margin-bottom: var(--space-4);
 }
 
+/* A model-element row (attribute / neighbourhood / mapping / sprite / indicator /
+ * variable). It is a first-class OBJECT — most of these rows drag onto the graph
+ * canvas — so it carries a real outline rather than the bare 2.5-3% white wash it
+ * used to have, which read as a line of text rather than as a thing you can grab.
+ *
+ * ⚠ THE OUTLINE TOKEN IS --color-border, NOT --color-widget-border. The two themes
+ * need OPPOSITE edges and only this token supplies both: Nocturne is near-black, so
+ * definition comes from a LIGHTER line (#2a2d35 on #16181d), while Blender's own
+ * idiom is a DARKER separator (#1d1d1d on #3d3d3d). --color-widget-border is the
+ * input/button outline and its own token comment records that it is "almost
+ * identical to panel bg - outlines virtually disappear" on Blender, so a row
+ * outlined with it would read on Nocturne and stay exactly as flat as before on
+ * Blender. Same class of trap as the glyph-colour note on .dragHandle below.
+ *
+ * The base border ALSO fixes a latent jitter: .listItemSelected used to declare the
+ * only border on the row, so selecting shifted the whole list by 2px. */
 .listItem {
+  position: relative;
   display: flex;
   align-items: center;
   gap: var(--space-3);
   padding: var(--space-3) var(--space-4);
   background: var(--color-overlay-row);
+  border: 1px solid var(--color-border);
   border-radius: var(--radius-md);
   font-size: var(--font-md);
   color: var(--color-text-secondary);
   cursor: pointer;
-  transition: background 0.12s;
+  transition: background 0.12s, border-color 0.12s;
 }
 
 .listItem:hover {
   background: var(--color-hover-bg);
 }
 
+/* Selected must still outrank a plain row now that every row is outlined, so the
+ * border is promoted from --color-accent-strong (a 0.42-0.45 alpha wash) to the
+ * SOLID accent. It sets only border-COLOR, so the width never changes. */
 .listItemSelected {
   background: var(--color-accent-soft);
-  border: 1px solid var(--color-accent-strong);
+  border-color: var(--color-accent);
+}
+
+/* Rows that can be dragged ONTO THE GRAPH CANVAS (the
+ * `application/genesisca-model-element` payload). Applied only where the row
+ * actually carries `draggable` + `onDragStart`, so the rail means exactly one
+ * thing — bond attributes, face patterns and the input-parameter editor row use
+ * .listItem WITHOUT it and keep `cursor: pointer` and no rail.
+ *
+ * `cursor: grab` is the affordance's core: it is the strongest "you can pick this
+ * up" signal a pointer can carry, and it needs no second dotted glyph 4px from the
+ * existing ⋮⋮ reorder handle (which means the completely different gesture of
+ * reordering WITHIN the list). */
+.listItemDraggable {
+  cursor: grab;
+}
+
+/* The drag rail — a 3px bar down the row's leading edge, dim neutral at rest and
+ * accent on hover.
+ *
+ * ⚠ It MUST be a pseudo-element, not box-shadow and not border-left:
+ *   - box-shadow is already owned by .dropIndicatorBefore/.dropIndicatorAfter
+ *     during a reorder drag, and a second rule setting box-shadow REPLACES theirs
+ *     rather than composing, so the drop indicator would vanish on exactly the rows
+ *     that can be reordered;
+ *   - border-left would reflow the row's content by 3px.
+ * --color-text-muted is legible on both panel surfaces (Nocturne #6f6c64 on
+ * #16181d, Blender #898989 on #3d3d3d) while staying subordinate to the row name. */
+.listItemDraggable::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 3px;
+  bottom: 3px;
+  width: 3px;
+  border-radius: 0 2px 2px 0;
+  background: var(--color-text-muted);
+  transition: background var(--duration-base);
+  pointer-events: none;
+}
+
+.listItemDraggable:hover {
+  border-color: var(--color-accent-strong);
+}
+
+.listItemDraggable:hover::before,
+.listItemDraggable.listItemSelected::before {
+  background: var(--color-accent);
+}
+
+.listItemDraggable:active {
+  cursor: grabbing;
+}
+
+/* SELECTION OUTRANKS HOVER. Without this, `.listItem:hover` / `.listItemDraggable:hover`
+ * (specificity 0,2,0) beat `.listItemSelected` (0,1,0), so hovering the selected row
+ * replaced its accent tint with the neutral hover wash and dimmed its border back to
+ * accent-strong — i.e. the row you are editing became the LEAST identifiable one under
+ * the pointer. It keeps a hover lift by deepening the accent wash rather than by
+ * abandoning it (the same color-mix idiom .gridCellPreviewAdd uses). */
+.listItem.listItemSelected:hover {
+  background: color-mix(in srgb, var(--color-accent) 26%, transparent);
+  border-color: var(--color-accent);
 }
 
 .listItemName {

@@ -112,7 +112,7 @@ export function VariablesPanelSection({ mode = 'list', selectedId, onSelect }: {
               key={v.id}
               id={`var-${v.id}`}
               data-reorder-row
-              className={`${styles.listItem} ${v.id === selectedId ? styles.listItemSelected : ''} ${isDragging ? styles.draggingRow : ''} ${showBefore ? styles.dropIndicatorBefore : ''} ${showAfter ? styles.dropIndicatorAfter : ''}`}
+              className={`${styles.listItem} ${styles.listItemDraggable} ${v.id === selectedId ? styles.listItemSelected : ''} ${isDragging ? styles.draggingRow : ''} ${showBefore ? styles.dropIndicatorBefore : ''} ${showAfter ? styles.dropIndicatorAfter : ''}`}
               onClick={() => onSelect(v.id === selectedId ? null : v.id)}
               draggable
               onDragStart={handleRowDragStart({ kind: 'variable', variableId: v.id, varKind: v.kind })}
