@@ -199,11 +199,16 @@ export const PalettePanelContent = forwardRef<PaletteHandle, PalettePanelContent
         if (typeof id === 'string' && id.length > 0) ids.add(id);
       }
     };
+    // Every graph store counts as "used" — a macro instantiated only on the
+    // Agents or Overseer graph is not stale, and dropping either store here
+    // would hide a live macro from the palette (the same graph-coverage gap
+    // that used to hide the linked-copies badge; see `countMacroInstances`).
     collect(model.graphNodes);
-    collect(model.agentGraphNodes ?? []); // Agents-graph instances count as "used"
+    collect(model.agentGraphNodes ?? []);
+    collect(model.overseerGraphNodes ?? []);
     for (const md of (model.macroDefs || [])) collect(md.nodes);
     return ids;
-  }, [model.graphNodes, model.agentGraphNodes, model.macroDefs]);
+  }, [model.graphNodes, model.agentGraphNodes, model.overseerGraphNodes, model.macroDefs]);
 
   const projectMacros = (model.macroDefs || [])
     .filter(m => usedMacroIds.has(m.id))
