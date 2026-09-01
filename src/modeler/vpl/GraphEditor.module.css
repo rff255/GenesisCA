@@ -255,6 +255,19 @@
   color: var(--color-text-primary) !important;
 }
 
+/* Minimap contour. The minimap's background token is near-black in BOTH shipped
+ * themes — and in Nocturne it is EXACTLY --color-bg-canvas — so without a border
+ * the overview dissolves into the canvas and its extent is unreadable.
+ * --color-widget-border is the canonical outline token (and the one that stays
+ * visible over the canvas in both themes, unlike --color-border, which IS the
+ * canvas colour in Blender); the radius matches the app's other floating cards.
+ * The MiniMap's inline `background` comes from the theme-reactive JS token, so
+ * only the border/radius belong here. */
+:global(.react-flow__minimap) {
+  border: 1px solid var(--color-widget-border);
+  border-radius: var(--radius-lg);
+}
+
 /* Hide the persistent selection indicator rectangle after box select */
 :global(.react-flow__nodesselection-rect) {
   display: none !important;

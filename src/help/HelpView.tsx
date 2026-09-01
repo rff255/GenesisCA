@@ -3168,7 +3168,9 @@ export function HelpView() {
           </p>
           <h3 className={styles.h3}>Spawning Agents (Create &rarr; Add, in either event)</h3>
           <p className={styles.p}>
-            Beyond the <em>Seed Count</em> the engine lays down on Reset, you spawn agents
+            Beyond the <em>Seed Count</em> the engine lays down on Reset (set <em>Seed Pattern</em>
+            {' '}to <strong>None</strong> if the graph should be the <em>only</em> source of agents),
+            you spawn agents
             <strong> from the graph</strong> with one idiom that works in <strong>both</strong> the Agent
             Init Event <em>and</em> the Behaviour Step &mdash; just like <em>Set Attribute</em> works in
             both events. Build an agent with <strong>Create Agent</strong> (position / radius &rarr; an
@@ -3452,9 +3454,17 @@ export function HelpView() {
               work &mdash; including the WebGPU target&rsquo;s CPU&harr;GPU transfers &mdash;
               tracks the LIVE population, not the ceiling.</li>
             <li><strong>Seeding</strong> &mdash; the <strong>Seed Count</strong> laid down on
-              Reset (0 = seed by hand), the <strong>Default Radius</strong>, and the
-              <strong> Seed Pattern</strong> (a compact centred blob for tissue, or scattered
-              across the world for flocking / aggregation).</li>
+              Reset, the <strong>Default Radius</strong> (also the radius the Add brush and{' '}
+              <em>Create Agent</em> use), and the <strong>Seed Pattern</strong>:
+              <em> Compact</em> (a centred blob &mdash; the tissue start), <em>Scatter</em>
+              (uniformly random across the world &mdash; flocking / aggregation), or
+              <strong> None</strong> for <strong>no automatic seeding at all</strong> &mdash; Reset
+              leaves the world empty and the population comes entirely from your{' '}
+              <em>Agent Init Event</em> and/or the <em>Add</em> brush. Under <em>None</em> the Seed
+              Count is greyed out (it keeps its value, so switching back to a pattern restores it).
+              Scatter draws its placement from the seeded random stream, so
+              <em> Set Random Seed</em> + Reset reproduces it exactly; <em>None</em> draws nothing
+              at all.</li>
             <li><strong>Motion mode</strong> (Properties &rarr; Agent Capabilities) &mdash; what the
               ENGINE is allowed to move. <strong>Force</strong> (the default) integrates
               <code>v = momentum&middot;v + (&Delta;t/&eta;)&middot;&Sigma;F</code> and then

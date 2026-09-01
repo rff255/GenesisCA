@@ -1557,7 +1557,12 @@ function initAgents(): void {
     : null;
   if (generationAgentView) generationAgentView[0] = generation;
   const seedCount = Math.max(0, Math.floor(cbNum(centerBasedConfig, 'seedCount')));
-  if (seedCount > 0) {
+  // `seedPattern: 'none'` = the author seeds entirely from the Agent Init Event
+  // and/or the Add brush, so NOTHING is laid down here — and, because the
+  // scatter placement is the only seeding path that draws from the shared
+  // seeded stream (C7/P7), 'none' advances the RNG by exactly 0. Absent ⇒
+  // 'compact' ⇒ the historical branch below, unchanged.
+  if (seedCount > 0 && centerBasedConfig.seedPattern !== 'none') {
     const r = cbNum(centerBasedConfig, 'defaultRadius');
     const ww = agentStore.worldWidth, wh = agentStore.worldHeight;
     const is3d = agentStore.worldDepth > 1, D = agentStore.worldDepth;

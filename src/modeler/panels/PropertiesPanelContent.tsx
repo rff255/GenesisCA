@@ -1354,6 +1354,10 @@ export function PropertiesPanelContent({ mode = 'list' }: PanelContentProps = {}
                 {hint && <span style={{ color: '#888', fontSize: '0.62rem', display: 'block' }}>{hint}</span>}
               </div>
             );
+            // Seed Pattern = None ⇒ the Reset seeding is off entirely, so Seed
+            // Count has nothing to act on (the worker's initAgents skips the
+            // whole block). Absent ⇒ 'compact', matching the engine's default.
+            const seedingOff = (cb?.seedPattern ?? 'compact') === 'none';
             return (
               <div style={{ marginTop: 14, borderTop: '1px solid #333', paddingTop: 10 }}>
                 <label className={styles.fieldLabel} style={{ marginBottom: 6, color: '#b58fd6' }}>Bond-Graph Agents</label>
@@ -1438,14 +1442,36 @@ export function PropertiesPanelContent({ mode = 'list' }: PanelContentProps = {}
                     meaningful once bonds exist, so it follows Max Bonds. */}
                 {resolveMaxBonds(cb) > 0 && Row('Bond Requests / Agent / Step', NF('bondRequestDepth', { min: 1, max: BOND_REQUEST_DEPTH_MAX, integer: true }), 'How many Form / Break / Rewire Bond ops one agent may issue in ONE step — graph rewrites (triangle split, edge swap) need several at once. Ops past this are rejected whole with a notice. Changing it re-inits the engine.')}
                 <div style={{ fontSize: '0.6rem', color: '#888', textTransform: 'uppercase', letterSpacing: '0.05em', margin: '8px 0 4px' }}>Seeding</div>
-                {Row('Seed Count', NF('seedCount', { min: 0, integer: true }), 'Agents laid down on Reset (0 = seed via the brush).')}
-                {Row('Default Radius', NF('defaultRadius', { min: 0.01, step: 0.1 }))}
-                {/* Seed Pattern — how the Reset seed population is laid out. */}
+                {/* Seed Count is INERT under Seed Pattern = None, and the pattern
+                    radio that makes it live is the adjacent control — so it is
+                    DISABLED IN PLACE with the reason in its tooltip (the honest-
+                    controls doctrine), never hidden. Default Radius stays live:
+                    it is the default radius for the Add brush and Create Agent
+                    too, not a seeding-only field. */}
+                {Row(
+                  'Seed Count',
+                  <NumberField
+                    className={styles.numberInput}
+                    value={num('seedCount')}
+                    min={0}
+                    integer
+                    disabled={seedingOff}
+                    title={seedingOff ? 'Seed Pattern is None — no agents are laid down on Reset. Pick Compact or Scatter to use this count.' : undefined}
+                    onNumber={n => updateCenterBased({ seedCount: n })}
+                  />,
+                  seedingOff
+                    ? 'Kept, but unused while Seed Pattern is None.'
+                    : 'Agents laid down on Reset (0 = seed via the brush).',
+                )}
+                {Row('Default Radius', NF('defaultRadius', { min: 0.01, step: 0.1 }), 'Also the radius the Add brush and Create Agent use.')}
+                {/* Seed Pattern — how the Reset seed population is laid out, or
+                    None for no automatic seeding at all. */}
                 <div style={{ fontSize: '0.6rem', color: '#888', textTransform: 'uppercase', letterSpacing: '0.05em', margin: '6px 0 4px' }}>Seed Pattern</div>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 5, marginTop: 2, marginBottom: 4 }}>
                   {([
                     ['compact', 'Compact', 'Centred packed blob — the morphogenesis / tissue start.'],
                     ['scatter', 'Scatter', 'Uniformly random across the world — dispersed flocking / chemotaxis populations.'],
+                    ['none', 'None', 'No automatic seeding — spawn via the Agent Init Event or the Add brush. Reset leaves the world empty.'],
                   ] as const).map(([val, title, hint]) => (
                     <label key={val} style={{ display: 'flex', alignItems: 'flex-start', gap: 6, cursor: 'pointer', fontSize: '0.72rem' }}>
                       <input

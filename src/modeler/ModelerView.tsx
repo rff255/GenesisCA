@@ -165,6 +165,14 @@ export function ModelerView() {
   const setSelected = useCallback((panel: PanelId, id: string | null) => {
     setSelectedByPanel(prev => ({ ...prev, [panel]: id }));
   }, []);
+  // Clearing EVERY panel's slot (rather than just the active one) is what makes
+  // the detail PanelShell unmount whichever tab the user later switches to —
+  // and it persists as cleared through the modelerUiState snapshot effect below,
+  // so a Simulator round-trip does not resurrect a stale editor. Same-object
+  // early return so a repeated canvas click re-renders nothing.
+  const clearAllSelections = useCallback(() => {
+    setSelectedByPanel(prev => (Object.values(prev).every(v => v == null) ? prev : {}));
+  }, []);
 
   // Write the layout state through to the module-level snapshot on every change
   // so the next ModelerView mount (after a tab round-trip) restores it.
@@ -176,8 +184,8 @@ export function ModelerView() {
     modelerUiState.selectedByPanel = selectedByPanel;
   }, [activePanel, activeRightPanel, lastLeftPanel, lastRightPanel, selectedByPanel]);
   const detailContextValue = useMemo<ModelerDetailValue>(
-    () => ({ selectedByPanel, setSelected }),
-    [selectedByPanel, setSelected],
+    () => ({ selectedByPanel, setSelected, clearAllSelections }),
+    [selectedByPanel, setSelected, clearAllSelections],
   );
 
   const handleTogglePanel = useCallback((panel: PanelId) => {
