@@ -762,10 +762,99 @@ function agentRenderModelTermsOk(
     && (agentTarget !== 'webgpu' || omCount === 0 || !!omGpuSupported);
 }
 
+// ---------------------------------------------------------------------------
+// SPRITE COLORIZE — the CPU tint cache.
+//
+// `SpriteAsset.colorize` multiplies every texel's rgb by the AGENT's colour (alpha
+// untouched), so one white/grayscale asset serves a whole coloured population. The
+// two GPU paths do it in their fragment shaders for free; the CPU overlay has to
+// produce actual pixels, and doing that per agent per frame is unusable at the
+// scale an agent model reaches — so a tinted frame is baked ONCE per
+// (sprite, frame, QUANTISED colour) and reused, exactly like the glow halo sprite.
+//
+// ⚠ THE BAKE IS PER-PIXEL, NOT A BLEND MODE. The usual `'multiply'` composite +
+// `'destination-in'` alpha restore is *not* the multiply: by the W3C separable-blend
+// formula a backdrop pixel of alpha `ab` comes out at `(1-ab)*Cs + ab*Cb*Cs`, so
+// every ANTI-ALIASED EDGE pixel is lightened toward the tint instead of multiplied
+// — visibly wrong against the two GPU paths. Because the result is CACHED, an exact
+// getImageData pass (the shape `applyChromaKey` already uses) is affordable, and
+// `getImageData` returns UN-premultiplied bytes, so it is literally `rgb * tint`.
+// ---------------------------------------------------------------------------
+
+/** Baked tinted frames, keyed `spriteId|frame|quantisedColour`. */
+const SPRITE_TINTS = new Map<string, HTMLCanvasElement>();
+let spriteTintPixels = 0;
+/** Entry cap — a Color-Scale agent viewer over a few sprites stays far under it. */
+const SPRITE_TINT_MAX_ENTRIES = 512;
+/** Pixel cap (≈64 MB of RGBA). The entry cap alone is not a memory bound: 512
+ *  entries of a 512×512 frame would be half a gigabyte. Evicts oldest-first on
+ *  EITHER bound. A single frame larger than the whole budget is still cached (it
+ *  simply becomes the only entry) — correctness over the bound. */
+const SPRITE_TINT_MAX_PIXELS = 16_777_216;
+
+/** Drop every baked tint. Called when the registry re-decodes and on any sprite-set
+ *  edit: the cache is keyed by (id, frame) but the ART behind those is the
+ *  registry's `ImageBitmap`s, which a re-decode CLOSES — so a stale entry would
+ *  keep painting the pre-crop / pre-chroma-key frame forever. */
+function clearSpriteTintCache(): void { SPRITE_TINTS.clear(); spriteTintPixels = 0; }
+
+/** The tinted frame for one agent colour, or the untinted bitmap when a canvas
+ *  cannot be produced (never null — the sprite must still draw).
+ *
+ *  Colour is quantised to 5 bits/channel (the glow cache's rule) so hundreds of
+ *  distinct agent colours collapse to a handful of canvases — but the quantiser and
+ *  the dequantiser are a MATCHED PAIR here, and both differ from the glow cache's:
+ *  `round(v·31/255)` down, `(q<<3) | (q>>2)` (≈ q·255/31) back up, rather than
+ *  `v>>3` and the midpoint `(q<<3)|4`. The pair is EXACT at 0 and 255 — so white
+ *  art under a pure-red agent tints to exactly #ff0000, the first thing anyone
+ *  checks — with a worst case of 4/255 in between. ⚠ MISMATCHING them is the easy
+ *  mistake: `v>>3` against this expansion reaches an error of 11 (and would still
+ *  pass a naive "white stays white" check), which is why the harness pins the bound
+ *  AND proves the bound is not vacuous. */
+function tintedSpriteFrame(
+  spriteId: string, frame: number, bmp: ImageBitmap, r: number, g: number, b: number,
+): CanvasImageSource {
+  const q5 = (v: number) => Math.round(v * 31 / 255);
+  const qr = q5(r), qg = q5(g), qb = q5(b);
+  const key = `${spriteId}|${frame}|${(qr << 10) | (qg << 5) | qb}`;
+  const hit = SPRITE_TINTS.get(key);
+  if (hit) return hit;
+  const w = Math.max(1, bmp.width), h = Math.max(1, bmp.height);
+  const cv = document.createElement('canvas');
+  cv.width = w; cv.height = h;
+  const ctx = cv.getContext('2d', { willReadFrequently: true });
+  if (!ctx) return bmp;
+  ctx.drawImage(bmp, 0, 0);
+  let img: ImageData;
+  try { img = ctx.getImageData(0, 0, w, h); } catch { return bmp; }  // tainted canvas
+  const d = img.data;
+  const tr = ((qr << 3) | (qr >> 2)) / 255, tg = ((qg << 3) | (qg >> 2)) / 255, tb = ((qb << 3) | (qb >> 2)) / 255;
+  for (let i = 0; i < d.length; i += 4) {
+    d[i] = d[i]! * tr;
+    d[i + 1] = d[i + 1]! * tg;
+    d[i + 2] = d[i + 2]! * tb;
+    // d[i+3] (alpha) is deliberately untouched — the silhouette never changes.
+  }
+  ctx.putImageData(img, 0, 0);
+  const px = w * h;
+  while (SPRITE_TINTS.size >= SPRITE_TINT_MAX_ENTRIES || (spriteTintPixels + px > SPRITE_TINT_MAX_PIXELS && SPRITE_TINTS.size > 0)) {
+    const oldest = SPRITE_TINTS.keys().next();
+    if (oldest.done) break;
+    const ev = SPRITE_TINTS.get(oldest.value)!;
+    spriteTintPixels -= ev.width * ev.height;
+    SPRITE_TINTS.delete(oldest.value);
+  }
+  SPRITE_TINTS.set(key, cv);
+  spriteTintPixels += px;
+  return cv;
+}
+
 /** One entry of `spriteMetaRef` — the per-sprite render meta the 2D overlay, the
  *  gl3d atlas and (now) the worker atlas all read. */
 interface SpriteRenderMeta {
   id: string; scale: number; loop: boolean;
+  /** `SpriteAsset.colorize` — multiply the art by the agent's colour (alpha kept). */
+  colorize: boolean;
   /** `sizeMode === 'absolute'` — `scale` (and a per-agent Set Agent Sprite
    *  override) is the drawn size in WORLD UNITS, not a multiple of the agent
    *  diameter. Absent/false = the historical radius-relative multiplier. */
@@ -797,12 +886,15 @@ const MIN_SPRITE_SPAN_PX = 2.4;
 /** One agent's resolved 2D sprite draw — everything `drawImage` needs, in SCREEN
  *  units, with the CENTRE supplied by the caller (each path has its own transform). */
 interface ResolvedSpriteDraw {
-  bmp: ImageBitmap;
+  /** The frame to blit — the decoded `ImageBitmap`, or (when the asset COLORIZES)
+   *  the cached canvas holding it multiplied by this agent's colour. */
+  bmp: CanvasImageSource;
   /** Destination size, aspect-shaped so the LONGEST side is `spanPx`. */
   dw: number; dh: number;
   /** Clockwise screen rotation in DEGREES (0 = draw axis-aligned). */
   rotDeg: number;
-  /** The agent colour's alpha, 0..1 (a sprite is never tinted — only faded). */
+  /** The agent colour's alpha, 0..1. (The agent colour's RGB reaches the sprite
+   *  only through `bmp` above, and only when the asset colorizes.) */
   alpha: number;
 }
 
@@ -856,7 +948,14 @@ function resolveAgentSpriteDraw(
     if (vX * vX + vY * vY > 1e-9) facingDeg = Math.atan2(vX, -vY) * 180 / Math.PI;
   }
   const rotDeg = (facingDeg - meta.defaultDirection) + meta.rotationOffset;
-  return { spanPx, draw: { bmp, dw, dh, rotDeg, alpha: (snap.colors[i * 4 + 3] ?? 255) / 255 } };
+  // COLORIZE — swap the raw frame for the cached copy multiplied by this agent's
+  // colour. The size/aspect above came from the ORIGINAL bitmap and the tinted
+  // canvas is the same size, so nothing downstream changes.
+  const c0 = i * 4;
+  const src: CanvasImageSource = meta.colorize
+    ? tintedSpriteFrame(meta.id, frame, bmp, snap.colors[c0] ?? 255, snap.colors[c0 + 1] ?? 255, snap.colors[c0 + 2] ?? 255)
+    : bmp;
+  return { spanPx, draw: { bmp: src, dw, dh, rotDeg, alpha: (snap.colors[c0 + 3] ?? 255) / 255 } };
 }
 
 /** Blit one resolved sprite centred on (cx, cy). The other half of the shared
@@ -929,7 +1028,7 @@ async function buildAgentSpriteAtlasPayload(
       slot: p.slot, baseLayer: layer, frameCount: p.frames.length,
       aspect: f0.width / Math.max(1, f0.height),
       loop: p.m.loop, orientToVelocity: p.m.orientToVelocity,
-      scale: p.m.scale > 0 ? p.m.scale : 1, absoluteSize: p.m.absoluteSize,
+      scale: p.m.scale > 0 ? p.m.scale : 1, absoluteSize: p.m.absoluteSize, colorize: p.m.colorize,
       defaultDirection: p.m.defaultDirection, rotationOffset: p.m.rotationOffset,
     });
     for (const f of p.frames) {
@@ -6248,7 +6347,7 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
               const m = metas[si]!;
               const dec = reg.get(m.id);
               if (dec && dec.frames.length > 0) {
-                atlas.push({ slot: si + 1, frames: dec.frames, loop: m.loop, defaultDirection: m.defaultDirection, rotationOffset: m.rotationOffset, orientToVelocity: m.orientToVelocity, scale: m.scale, absoluteSize: m.absoluteSize });
+                atlas.push({ slot: si + 1, frames: dec.frames, loop: m.loop, defaultDirection: m.defaultDirection, rotationOffset: m.rotationOffset, orientToVelocity: m.orientToVelocity, scale: m.scale, absoluteSize: m.absoluteSize, colorize: m.colorize });
               }
             }
           }
@@ -7169,8 +7268,12 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
   // (ImageDecoder); onReady redraws so a freshly-imported sprite appears.
   useEffect(() => {
     const sprites = model.sprites ?? [];
-    spriteMetaRef.current = sprites.map(s => ({ id: s.id, scale: s.scale ?? 1, loop: s.loop !== false, absoluteSize: s.sizeMode === 'absolute', defaultDirection: s.defaultDirection ?? 0, orientToVelocity: !!s.orientToVelocity, rotationOffset: s.rotationOffset ?? 0 }));
+    spriteMetaRef.current = sprites.map(s => ({ id: s.id, scale: s.scale ?? 1, loop: s.loop !== false, colorize: !!s.colorize, absoluteSize: s.sizeMode === 'absolute', defaultDirection: s.defaultDirection ?? 0, orientToVelocity: !!s.orientToVelocity, rotationOffset: s.rotationOffset ?? 0 }));
     spriteAtlasDirtyRef.current = true; // sprite set changed → rebuild the 3D atlas
+    // Any sprite-set edit can invalidate a baked tint (a crop/chroma edit re-decodes
+    // the very bitmaps the cache was baked from, and turning colorize off must not
+    // leave tinted canvases behind).
+    clearSpriteTintCache();
     if (sprites.length === 0) {
       spriteRegistryRef.current?.dispose();
       spriteRegistryRef.current = null;
@@ -7181,15 +7284,28 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
       // and re-ships the worker's 2D atlas (which needs the decoded bitmaps).
       spriteRegistryRef.current = new SpriteRegistry(() => {
         spriteAtlasDirtyRef.current = true;
+        // A re-decode CLOSES the bitmaps every baked tint was made from — drop them
+        // or the overlay keeps painting the pre-crop / pre-key art.
+        clearSpriteTintCache();
         shipSpriteAtlasRef.current();
-        drawRef.current();
+        // ⚠ ONLY while the simulator is on screen. SimulatorView is ALWAYS MOUNTED
+        // (hidden behind display:none on the other tabs), so its canvas area is
+        // 0x0 there — and drawing into that throws from the metaball goo path
+        // ("drawImage … a canvas element with a width or height of 0"), which
+        // unmounts React. A decode / sprite edit made from the MODELER is exactly
+        // that case, and it needs no redraw anyway: becoming visible redraws.
+        if (visibleRef.current) drawRef.current();
       });
     }
     spriteRegistryRef.current.sync(sprites);
     // An UNCHANGED decode key is not re-decoded, so onReady would never fire for a
-    // set that is already decoded (a sprite meta edit — scale / rotation / loop —
-    // is exactly that case). Ship here too; the token drops whichever build loses.
+    // set that is already decoded (a sprite meta edit — scale / rotation / loop /
+    // colorize — is exactly that case). Ship here too; the token drops whichever
+    // build loses. Redraw for the same reason: a pure meta edit produces no worker
+    // step, so nothing else would repaint a PAUSED sim — but only when the
+    // simulator is actually on screen (see the guard's note above).
     shipSpriteAtlasRef.current();
+    if (visibleRef.current) drawRef.current();
   }, [model.sprites]);
 
   // Dispose the registry (free decoded ImageBitmaps) on unmount.

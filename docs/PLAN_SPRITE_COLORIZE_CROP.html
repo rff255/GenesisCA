@@ -1,0 +1,271 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Sprite Colorize + Crop — illustrated plan</title>
+<style>
+  :root { --bg:#0c0d10; --panel:#14161c; --border:#2a3a50; --text:#cdd6e0; --muted:#8090a0; --accent:#4cc9f0; --amber:#f0a020; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font:14px/1.55 system-ui,-apple-system,Segoe UI,sans-serif; padding:28px 20px 60px; }
+  .wrap { max-width: 1080px; margin: 0 auto; }
+  h1 { font-size:22px; margin:0 0 4px; }
+  h2 { font-size:16px; margin:34px 0 10px; padding-bottom:6px; border-bottom:1px solid var(--border); color:#e8eef5; }
+  h3 { font-size:13px; margin:20px 0 8px; color:var(--accent); text-transform:uppercase; letter-spacing:.06em; }
+  p, li { color:var(--text); }
+  .sub { color:var(--muted); margin:0 0 18px; }
+  code { background:#1c2028; border:1px solid var(--border); border-radius:3px; padding:1px 5px; font-size:12px; }
+  .card { background:var(--panel); border:1px solid var(--border); border-radius:8px; padding:14px 16px; margin:12px 0; }
+  .row { display:flex; gap:16px; flex-wrap:wrap; align-items:flex-start; }
+  .col { flex:1 1 320px; min-width:300px; }
+  table { border-collapse:collapse; width:100%; font-size:12.5px; margin:8px 0; }
+  th, td { border:1px solid var(--border); padding:6px 8px; text-align:left; vertical-align:top; }
+  th { background:#1a1d24; color:#e8eef5; font-weight:600; }
+  .tag { display:inline-block; font-size:10.5px; padding:1px 6px; border-radius:3px; border:1px solid var(--border); background:#1c2028; color:var(--muted); }
+  .ok { color:#6ec46e; } .warn { color:var(--amber); }
+  .note { border-left:3px solid var(--amber); padding:8px 12px; background:#1a1710; border-radius:0 4px 4px 0; margin:12px 0; font-size:13px; }
+  .mock { background:var(--panel); border:1px solid var(--border); border-radius:6px; padding:10px 12px; font-size:12px; }
+  .lbl { color:var(--muted); font-size:11px; display:block; margin-bottom:2px; }
+  .fld { background:#1c2028; border:1px solid var(--border); border-radius:3px; padding:3px 6px; font-size:12px; }
+  .btn { background:#1c2028; border:1px solid var(--border); border-radius:4px; padding:3px 9px; font-size:12px; color:var(--text); }
+  .btnP { background:var(--accent); color:#08121a; border:none; border-radius:4px; padding:5px 13px; font-weight:600; font-size:12px; }
+  .chk { display:flex; align-items:center; gap:6px; margin:7px 0; font-size:12.5px; }
+  .chk i { width:12px; height:12px; border:1px solid #5a6a7a; border-radius:2px; display:inline-block; background:#0c0d10; flex:0 0 auto; }
+  .chk i.on { background:var(--accent); border-color:var(--accent); position:relative; }
+  .chk i.on::after { content:"✓"; position:absolute; inset:-4px 0 0 1px; color:#08121a; font-size:11px; font-weight:900; }
+  .hint { color:var(--muted); font-size:11px; margin-top:3px; }
+  .flow { display:flex; align-items:center; gap:8px; flex-wrap:wrap; font-size:12px; }
+  .box { border:1px solid var(--border); background:#1a1d24; border-radius:4px; padding:5px 9px; }
+  .box.hi { border-color:var(--amber); color:var(--amber); }
+  .arr { color:var(--muted); }
+</style>
+</head>
+<body><div class="wrap">
+
+<h1>Sprite <span style="color:var(--accent)">Colorize</span> + <span style="color:var(--amber)">Crop</span></h1>
+<p class="sub">Two additive <code>SpriteAsset</code> options. Render/decode layer only — no compiler surface.</p>
+
+<!-- ─────────────────────────── COLORIZE ─────────────────────────── -->
+<h2>1 · Colorize — <code>texel.rgb × agentColour.rgb</code>, alpha untouched</h2>
+
+<div class="row">
+  <div class="col">
+    <h3>Before</h3>
+    <svg viewBox="0 0 320 132" width="100%" role="img" aria-label="Before: one white sprite drawn identically for every agent">
+      <rect width="320" height="132" fill="#0c0d10"/>
+      <text x="8" y="16" fill="#8090a0" font-size="11" font-family="system-ui">one white sprite asset · 4 agents, 4 colours</text>
+      <g>
+        <!-- the asset -->
+        <rect x="10" y="30" width="52" height="52" fill="#1a1d24" stroke="#2a3a50"/>
+        <path d="M36 40 L52 72 L20 72 Z" fill="#ffffff"/>
+        <text x="10" y="96" fill="#8090a0" font-size="10" font-family="system-ui">asset</text>
+      </g>
+      <text x="70" y="60" fill="#8090a0" font-size="16">→</text>
+      <!-- 4 identical white -->
+      <g>
+        <circle cx="112" cy="56" r="21" fill="#e05050" opacity=".22"/><path d="M112 42 L124 68 L100 68 Z" fill="#fff"/>
+        <circle cx="164" cy="56" r="21" fill="#4cc9f0" opacity=".22"/><path d="M164 42 L176 68 L152 68 Z" fill="#fff"/>
+        <circle cx="216" cy="56" r="21" fill="#6ec46e" opacity=".22"/><path d="M216 42 L228 68 L204 68 Z" fill="#fff"/>
+        <circle cx="268" cy="56" r="21" fill="#f0a020" opacity=".22"/><path d="M268 42 L280 68 L256 68 Z" fill="#fff"/>
+      </g>
+      <text x="96" y="96" fill="#8090a0" font-size="10" font-family="system-ui">all identical — the agent colour is lost</text>
+    </svg>
+  </div>
+  <div class="col">
+    <h3>After <span class="tag">colorize ✓</span></h3>
+    <svg viewBox="0 0 320 132" width="100%" role="img" aria-label="After: the same sprite tinted by each agent's colour">
+      <rect width="320" height="132" fill="#0c0d10"/>
+      <text x="8" y="16" fill="#8090a0" font-size="11" font-family="system-ui">the SAME asset, multiplied by each agent's colour</text>
+      <g>
+        <rect x="10" y="30" width="52" height="52" fill="#1a1d24" stroke="#2a3a50"/>
+        <path d="M36 40 L52 72 L20 72 Z" fill="#ffffff"/>
+        <text x="10" y="96" fill="#8090a0" font-size="10" font-family="system-ui">asset</text>
+      </g>
+      <text x="70" y="60" fill="#8090a0" font-size="16">→</text>
+      <g>
+        <path d="M112 42 L124 68 L100 68 Z" fill="#e05050"/>
+        <path d="M164 42 L176 68 L152 68 Z" fill="#4cc9f0"/>
+        <path d="M216 42 L228 68 L204 68 Z" fill="#6ec46e"/>
+        <path d="M268 42 L280 68 L256 68 Z" fill="#f0a020"/>
+      </g>
+      <text x="96" y="96" fill="#8090a0" font-size="10" font-family="system-ui">one asset serves a whole species palette</text>
+    </svg>
+  </div>
+</div>
+
+<h3>The multiply, per texel</h3>
+<svg viewBox="0 0 700 96" width="100%" role="img" aria-label="Multiply semantics: white becomes the agent colour, black stays black, mid grey shades">
+  <rect width="700" height="96" fill="#0c0d10"/>
+  <g font-family="system-ui" font-size="11" fill="#8090a0">
+    <text x="10" y="16">texel</text><text x="120" y="16">× tint</text><text x="240" y="16">= out</text>
+    <text x="380" y="16">alpha is NEVER touched — the silhouette is unchanged</text>
+  </g>
+  <!-- white -->
+  <rect x="10" y="24" width="40" height="18" fill="#ffffff" stroke="#2a3a50"/><text x="56" y="37" fill="#8090a0" font-size="10" font-family="monospace">255,255,255</text>
+  <rect x="150" y="24" width="40" height="18" fill="#4cc9f0" stroke="#2a3a50"/>
+  <rect x="240" y="24" width="40" height="18" fill="#4cc9f0" stroke="#2a3a50"/><text x="286" y="37" fill="#6ec46e" font-size="10" font-family="monospace">= the agent colour EXACTLY</text>
+  <!-- mid -->
+  <rect x="10" y="46" width="40" height="18" fill="#808080" stroke="#2a3a50"/><text x="56" y="59" fill="#8090a0" font-size="10" font-family="monospace">128,128,128</text>
+  <rect x="150" y="46" width="40" height="18" fill="#4cc9f0" stroke="#2a3a50"/>
+  <rect x="240" y="46" width="40" height="18" fill="#266478" stroke="#2a3a50"/><text x="286" y="59" fill="#8090a0" font-size="10" font-family="monospace">= half the agent colour (shading survives)</text>
+  <!-- black -->
+  <rect x="10" y="68" width="40" height="18" fill="#000000" stroke="#2a3a50"/><text x="56" y="81" fill="#8090a0" font-size="10" font-family="monospace">0,0,0</text>
+  <rect x="150" y="68" width="40" height="18" fill="#4cc9f0" stroke="#2a3a50"/>
+  <rect x="240" y="68" width="40" height="18" fill="#000000" stroke="#2a3a50"/><text x="286" y="81" fill="#8090a0" font-size="10" font-family="monospace">= black (outlines stay outlines)</text>
+</svg>
+
+<h3>Three render paths, one semantic</h3>
+<table>
+  <tr><th>path</th><th>where</th><th>mechanism</th><th>OFF is identical because…</th></tr>
+  <tr><td>2D CPU overlay<br>+ simulation capture</td><td><code>resolveAgentSpriteDraw</code></td><td>a <b>cached tinted canvas</b> per (sprite, frame, quantised colour)</td><td>the tint lookup is skipped entirely — the raw <code>ImageBitmap</code> is drawn</td></tr>
+  <tr><td>2D worker billboard<br><span class="tag">A1 / A2 / E2</span></td><td><code>agentSpriteWGSL</code></td><td><code>SPRITE_FLAG_COLORIZE = 8</code> + a <code>tint</code> varying</td><td><code>t.rgb * vec3(1.0)</code> is bit-identical to <code>t.rgb</code></td></tr>
+  <tr><td>3D billboard</td><td>gl3d <code>SPRITE_VS/FS</code></td><td>per-instance <code>aTint</code>, stride 9 → 12 floats</td><td>the tint is written <code>(1,1,1)</code> — same multiply-by-one</td></tr>
+</table>
+
+<div class="note">
+<b>The CPU tint is per-pixel, not a blend mode.</b> The usual
+<code>'multiply'</code> + <code>'destination-in'</code> recipe leaves an
+anti-aliased edge pixel at <code>(1−a)·Cs + a·Cb·Cs</code> — lightened toward the
+tint instead of multiplied. The result is <b>cached</b>, so an exact
+<code>getImageData</code> pass (the same shape <code>applyChromaKey</code> already
+uses) is affordable and matches both GPU paths exactly.
+</div>
+
+<h3>The cache</h3>
+<div class="flow" style="margin:10px 0 4px">
+  <span class="box">agent colour</span><span class="arr">→</span>
+  <span class="box hi">quantise 5 bits/ch</span><span class="arr">→</span>
+  <span class="box">key <code>id|frame|q</code></span><span class="arr">→</span>
+  <span class="box">hit? draw it</span><span class="arr">→</span>
+  <span class="box">miss? bake once, evict oldest</span>
+</div>
+<p class="hint">Bounded on entries (512) <b>and</b> total pixels (16 M ≈ 64 MB RGBA). Cleared on every re-decode
+(<code>SpriteRegistry.onReady</code>) and sprite-set edit, because the cached canvases are derived from
+<code>ImageBitmap</code>s the registry closes. Dequantised <code>(q&lt;&lt;3)|(q&gt;&gt;2)</code> — exact at 0 and 255,
+so white art under a pure-red agent is exactly <code>#ff0000</code>.</p>
+
+<!-- ─────────────────────────── CROP ─────────────────────────── -->
+<h2>2 · Crop — for plain images, GIFs and frame sequences</h2>
+
+<div class="row">
+  <div class="col">
+    <h3>The gap</h3>
+    <svg viewBox="0 0 320 150" width="100%" role="img" aria-label="A padded source image renders with its padding">
+      <rect width="320" height="150" fill="#0c0d10"/>
+      <rect x="16" y="20" width="120" height="120" fill="#1a1d24" stroke="#2a3a50" stroke-dasharray="3 3"/>
+      <path d="M76 62 L96 100 L56 100 Z" fill="#4cc9f0"/>
+      <text x="16" y="16" fill="#8090a0" font-size="10" font-family="system-ui">source (lots of padding)</text>
+      <text x="150" y="84" fill="#8090a0" font-size="16">→</text>
+      <circle cx="240" cy="80" r="46" fill="none" stroke="#2a3a50" stroke-dasharray="2 3"/>
+      <path d="M240 68 L248 90 L232 90 Z" fill="#4cc9f0"/>
+      <text x="176" y="140" fill="#e05050" font-size="10.5" font-family="system-ui">the art is tiny — the padding sets the size</text>
+    </svg>
+  </div>
+  <div class="col">
+    <h3>With a crop</h3>
+    <svg viewBox="0 0 320 150" width="100%" role="img" aria-label="Cropping to the art makes it fill the agent">
+      <rect width="320" height="150" fill="#0c0d10"/>
+      <rect x="16" y="20" width="120" height="120" fill="#1a1d24" stroke="#2a3a50" stroke-dasharray="3 3"/>
+      <rect x="16" y="20" width="120" height="120" fill="#000" opacity=".55"/>
+      <rect x="50" y="56" width="52" height="50" fill="#1a1d24"/>
+      <path d="M76 62 L96 100 L56 100 Z" fill="#4cc9f0"/>
+      <rect x="50" y="56" width="52" height="50" fill="none" stroke="#f0a020" stroke-width="2"/>
+      <rect x="97" y="101" width="10" height="10" fill="#f0a020"/>
+      <text x="16" y="16" fill="#8090a0" font-size="10" font-family="system-ui">crop box (drag body / corner)</text>
+      <text x="150" y="84" fill="#8090a0" font-size="16">→</text>
+      <circle cx="240" cy="80" r="46" fill="none" stroke="#2a3a50" stroke-dasharray="2 3"/>
+      <path d="M240 44 L264 112 L216 112 Z" fill="#4cc9f0"/>
+      <text x="184" y="140" fill="#6ec46e" font-size="10.5" font-family="system-ui">the art fills the agent</text>
+    </svg>
+  </div>
+</div>
+
+<h3>Where the crop happens</h3>
+<div class="flow" style="margin:8px 0">
+  <span class="box">sequence · sheet · image</span><span class="arr">→</span>
+  <span class="box">frames[]</span><span class="arr">→</span>
+  <span class="box hi">CROP (per frame, clamped)</span><span class="arr">→</span>
+  <span class="box">chroma key</span><span class="arr">→</span>
+  <span class="box">ImageBitmap[]</span>
+</div>
+<p class="hint">Decode time, exactly like the chroma key — so ONE change flows to the CPU overlay, the gl3d atlas and the
+worker atlas through the registry's existing <code>onReady</code>. <code>spriteDecodeKey</code> gains <code>crop</code>,
+so an edit re-decodes; colorize deliberately does <b>not</b> (it is render-time).</p>
+
+<h3>The dialog <span class="tag">SpriteCropDialog.tsx</span></h3>
+<div class="card">
+  <div class="row" style="gap:14px">
+    <div style="flex:0 0 auto">
+      <div class="hint" style="margin:0 0 4px">Image (256×256) · crop 34,36 52×50 &nbsp; <span class="btn">−</span> <span class="hint">100%</span> <span class="btn">+</span> <span class="btn">Fit</span></div>
+      <svg width="300" height="210" role="img" aria-label="Fixed-size letterboxed viewport with the crop box">
+        <rect width="300" height="210" fill="#0a0b0e" stroke="#2a3a50"/>
+        <rect x="60" y="15" width="180" height="180" fill="#1a1d24"/>
+        <path d="M150 70 L186 150 L114 150 Z" fill="#4cc9f0"/>
+        <rect x="60" y="15" width="180" height="180" fill="#000" opacity=".5"/>
+        <g><rect x="104" y="60" width="92" height="100" fill="#1a1d24"/><path d="M150 70 L186 150 L114 150 Z" fill="#4cc9f0"/></g>
+        <rect x="104" y="60" width="92" height="100" fill="none" stroke="#f0a020" stroke-width="2"/>
+        <rect x="191" y="155" width="10" height="10" fill="#f0a020"/>
+        <text x="66" y="206" fill="#8090a0" font-size="10" font-family="system-ui">FIXED viewport — never sized to the image (the drag feedback-loop rule)</text>
+      </svg>
+    </div>
+    <div style="flex:1 1 240px; min-width:230px">
+      <div class="hint" style="margin-bottom:6px">Crop rectangle (source px)</div>
+      <div style="display:flex; gap:8px; flex-wrap:wrap">
+        <label><span class="lbl">x</span><span class="fld">34</span></label>
+        <label><span class="lbl">y</span><span class="fld">36</span></label>
+        <label><span class="lbl">width</span><span class="fld">52</span></label>
+        <label><span class="lbl">height</span><span class="fld">50</span></label>
+      </div>
+      <div style="margin-top:10px"><span class="btn">Full image</span></div>
+      <div class="hint" style="margin-top:10px">Frame <span class="btn">◂</span> 1 / 6 <span class="btn">▸</span> — judge the box against any frame; the SAME rect applies to all.</div>
+      <div class="hint" style="margin-top:10px">Drag inside to move · the corner to resize · outside to draw a new one.<br>Middle/right-drag pans, wheel zooms.</div>
+      <div style="margin-top:14px; text-align:right"><span class="btn">Cancel</span> <span class="btnP">Apply</span></div>
+    </div>
+  </div>
+</div>
+
+<!-- ─────────────────────────── PANEL ─────────────────────────── -->
+<h2>3 · The sprite detail editor</h2>
+<div class="row">
+  <div class="col" style="flex:0 0 300px">
+    <div class="mock">
+      <div style="color:#e8eef5; font-size:12.5px; margin-bottom:8px">Edit: bird</div>
+      <span class="lbl">Size mode</span><div class="fld" style="margin-bottom:8px">Relative to agent diameter (×)</div>
+      <span class="lbl">Size ×</span><div class="fld" style="width:70px; margin-bottom:6px">1</div>
+      <div class="chk"><i class="on"></i> Loop frames</div>
+      <div class="chk"><i class="on"></i> <span style="color:var(--accent)">Colorize by agent colour</span></div>
+      <div class="hint" style="margin:-2px 0 8px 18px">Multiplies each pixel by the agent's colour (alpha unchanged) — white art becomes the agent colour, black stays black.</div>
+      <span class="lbl">Crop</span>
+      <div style="display:flex; gap:6px; align-items:center; margin-bottom:8px">
+        <span class="hint" style="flex:1">34,36 · 52×50 of 256×256</span>
+        <span class="btn">Crop…</span><span class="btn">Clear</span>
+      </div>
+      <span class="lbl">Rotation</span><div class="hint">Art faces 0° · Orient to velocity · Offset °</div>
+      <div class="chk" style="margin-top:8px"><i></i> Remove background color</div>
+    </div>
+  </div>
+  <div class="col">
+    <h3>Visibility rules <span class="tag">an enabled control must do something</span></h3>
+    <table>
+      <tr><th>control</th><th>shown when</th><th>why</th></tr>
+      <tr><td><b>Colorize</b></td><td>always</td><td>meaningful for every sprite source</td></tr>
+      <tr><td><b>Crop…</b></td><td>the asset has NO <code>sheet</code></td><td>a sheet already crops through its grid — its dialog is <i>Edit sheet grid…</i></td></tr>
+      <tr><td><b>Clear</b></td><td>a crop is set</td><td>nothing to clear otherwise</td></tr>
+    </table>
+    <h3>Previews</h3>
+    <p style="font-size:12.5px; margin:4px 0"><code>useSpriteFrameSrc</code> is the ONE preview source (list thumbnail,
+    detail image, chroma-key picker). It applies the sheet rect and <b>then</b> the crop — the decode order — so the
+    chroma-key picker samples inside the cropped region, which is what the user is looking at.</p>
+  </div>
+</div>
+
+<h2>4 · Gates</h2>
+<table>
+  <tr><th>gate</th><th>expectation</th></tr>
+  <tr><td><code>check-compile-identity</code></td><td class="ok">29 models, all surfaces unchanged (no compiler surface touched)</td></tr>
+  <tr><td><code>verify-agent-render</code></td><td class="ok">green — the B18 sprite-pass invariants are unaffected (a flag bit + a varying)</td></tr>
+  <tr><td><code>test-sprite-sheet</code> · <code>test-agent-sprite-webgpu</code></td><td class="ok">green — the sheet geometry and the SoA layout are untouched</td></tr>
+  <tr><td><code>test-sprite-crop</code> <span class="tag">new</span></td><td>the crop resolution rules + the fold + the decode signature</td></tr>
+  <tr><td><code>tsc</code> · <code>npm run build</code></td><td class="ok">clean (both builds)</td></tr>
+</table>
+
+</div></body></html>

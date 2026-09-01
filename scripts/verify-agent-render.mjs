@@ -1240,8 +1240,26 @@ section('B18 — 2D agent sprite billboard pass');
     && /let sy: f32 = py \+ lx \* sn \+ ly \* cs;/.test(spriteWgsl));
   check('UVs come from the UNROTATED corner, v = (y+1)/2 in y-down space [sprite]',
     /out\.uv = vec2<f32>\(\(corner\.x \+ 1\.0\) \* 0\.5, \(corner\.y \+ 1\.0\) \* 0\.5\);/.test(spriteWgsl));
-  check('the sprite is untinted — only the agent ALPHA scales it [sprite]',
-    /return t \* in\.alpha;/.test(spriteWgsl) && /if \(a < 0\.02\) \{ discard; \}/.test(spriteWgsl));
+  // COLORIZE (SpriteAsset.colorize) is the ONE thing that may tint a sprite, and it
+  // multiplies the RGB ONLY — the alpha, and therefore the silhouette, is never
+  // touched by it (the agent alpha still scales the whole texel, as it always did).
+  // With the flag clear the tint is an exact vec3(1.0), so the historical
+  // `t * in.alpha` is reproduced bit for bit; the FLAG BIT is what keeps
+  // SPRITE_META_BYTES from moving.
+  check('the sprite is tinted ONLY by colorize, and only its RGB [sprite]',
+    /return vec4<f32>\(t\.rgb \* in\.tint, t\.a\) \* in\.alpha;/.test(spriteWgsl)
+    && /if \(a < 0\.02\) \{ discard; \}/.test(spriteWgsl)
+    && /let a: f32 = t\.a \* in\.alpha;/.test(spriteWgsl),
+    'alpha must stay t.a * in.alpha — a tint that scaled alpha would eat the silhouette');
+  check('the tint is an exact identity unless the COLORIZE flag is set [sprite]',
+    /var tint: vec3<f32> = vec3<f32>\(1\.0, 1\.0, 1\.0\);/.test(spriteWgsl)
+    // NB `spriteWgsl` is the SOURCE template, so the flag reads as its interpolation.
+    && /if \(\(m\.flags & \$\{SPRITE_FLAG_COLORIZE\}u\) != 0u\) \{/.test(spriteWgsl)
+    && /o\.tint = vec3<f32>\(1\.0, 1\.0, 1\.0\);/.test(spriteWgsl),
+    'including the cull path — an unset varying is undefined');
+  check('colorize rides a FLAG BIT, so the meta record never moves [sprite]',
+    /const SPRITE_FLAG_COLORIZE = 8;/.test(rt) && /const SPRITE_META_BYTES = 32;/.test(rt)
+    && /\(s\.colorize \? SPRITE_FLAG_COLORIZE : 0\)/.test(rt));
 
   // --- lifecycle: pipeline/bindings/buffers gated, atlas torn down ---
   const build = blockAfter(rt, /async function buildAgentDiscPipelines\(/);

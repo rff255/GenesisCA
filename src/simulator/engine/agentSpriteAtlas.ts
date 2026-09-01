@@ -39,6 +39,9 @@ export interface AgentSpriteSlot {
    *  Sprite override) is the drawn size in WORLD UNITS, so the agent radius is not
    *  consulted. Absent/false = the historical diameter multiplier. */
   absoluteSize?: boolean;
+  /** `SpriteAsset.colorize` — multiply each texel's rgb by the AGENT's colour
+   *  (alpha untouched). Absent/false = the historical untinted blit. */
+  colorize?: boolean;
   defaultDirection: number;
   rotationOffset: number;
 }

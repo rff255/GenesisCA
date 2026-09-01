@@ -17,7 +17,9 @@ import styles from './PanelContent.module.css';
 import { ColorField } from '../vpl/widgets/ColorField';
 import { hexToRgba, rgbaToHex, isOpaque, OPAQUE } from '../../model/colorHex';
 import { SpriteSheetDialog } from '../../components/SpriteSheetDialog';
+import { SpriteCropDialog } from '../../components/SpriteCropDialog';
 import { sheetCellCount, sheetFrameIndices, sheetFrameRects } from '../../model/spriteSheet';
+import { resolveSpriteCrop, spriteCropPatch } from '../../model/spriteCrop';
 
 // (The local 6-digit-only rgbToHex/hexToRgb pair that used to live here is gone —
 //  ColorSwatch now routes through the shared alpha-aware helpers in colorHex.ts.
@@ -75,42 +77,58 @@ function CompassDial({ value, onChange }: { value: number; onChange: (deg: numbe
  *  A frame SEQUENCE is already `frames[0]`; a plain image (an animated GIF/WebP
  *  included, which keeps animating in an `<img>`) is itself.
  *
+ *  A CROP (`SpriteAsset.crop`) is then applied on top, in the DECODER'S OWN ORDER
+ *  (sheet cell first, then the crop), so every preview — including the chroma-key
+ *  picker, which therefore samples inside the cropped region — shows exactly the
+ *  pixels that reach the screen.
+ *
  *  Chroma-key removal is deliberately NOT applied — the picker must show the raw
  *  key colour, and the other two sites want the artwork as imported.
  *
- *  Returns `''` while a sheet crop is in flight, so a caller renders a blank box
- *  rather than flashing the whole sheet for a frame. */
+ *  Returns `''` while a crop is in flight, so a caller renders a blank box rather
+ *  than flashing the whole sheet (or the untrimmed image) for a frame. */
 function useSpriteFrameSrc(sprite: SpriteAsset): string {
-  const { dataUrl, sheet } = sprite;
+  const { dataUrl, sheet, crop } = sprite;
   const [cropped, setCropped] = useState<string | null>(null);
-  // The spec is compared by VALUE: a grid or selection edit must re-crop, while an
-  // unrelated re-render (a rename, a scale tweak) must not.
+  // The source frame BEFORE any rect: a sequence's first file, else the image.
+  const base = (sprite.frames && sprite.frames[0]) || dataUrl;
+  // Both specs are compared by VALUE: a grid / selection / crop edit must re-crop,
+  // while an unrelated re-render (a rename, a scale tweak) must not.
   const sheetKey = sheet ? JSON.stringify(sheet) : '';
+  const cropKey = crop ? JSON.stringify(crop) : '';
   useEffect(() => {
-    if (!sheetKey) { setCropped(null); return; }
-    const spec = JSON.parse(sheetKey);
+    if (!sheetKey && !cropKey) { setCropped(null); return; }
+    const spec = sheetKey ? JSON.parse(sheetKey) : null;
+    const cr = cropKey ? JSON.parse(cropKey) : null;
     let cancelled = false;
     const img = new Image();
     img.onload = () => {
       if (cancelled) return;
-      const r = sheetFrameRects(spec, img.naturalWidth, img.naturalHeight)[0];
+      // 1. the sheet cell (whole image when there is no sheet)…
+      const r = spec
+        ? sheetFrameRects(spec, img.naturalWidth, img.naturalHeight)[0]
+        : { x: 0, y: 0, w: img.naturalWidth, h: img.naturalHeight };
       const cv = document.createElement('canvas');
       const ctx = r ? cv.getContext('2d') : null;
       if (!r || !ctx) { setCropped(''); return; }
-      cv.width = Math.max(1, Math.round(r.w));
-      cv.height = Math.max(1, Math.round(r.h));
+      // 2. …then the crop, clamped inside that cell by the SHARED rule.
+      const c = cr ? resolveSpriteCrop(cr, r.w, r.h) : null;
+      const sx = r.x + (c?.x ?? 0), sy = r.y + (c?.y ?? 0);
+      const sw = c?.w ?? r.w, sh = c?.h ?? r.h;
+      cv.width = Math.max(1, Math.round(sw));
+      cv.height = Math.max(1, Math.round(sh));
       ctx.imageSmoothingEnabled = false;
       // A cell may hang off the image once the size is explicit — drawImage crops
       // with transparent padding, which is the honest result.
-      ctx.drawImage(img, r.x, r.y, r.w, r.h, 0, 0, cv.width, cv.height);
+      ctx.drawImage(img, sx, sy, sw, sh, 0, 0, cv.width, cv.height);
       try { setCropped(cv.toDataURL()); } catch { setCropped(''); }
     };
     img.onerror = () => { if (!cancelled) setCropped(''); };
-    img.src = dataUrl;
+    img.src = base;
     return () => { cancelled = true; };
-  }, [dataUrl, sheetKey]);
-  if (sheetKey) return cropped ?? '';
-  return (sprite.frames && sprite.frames[0]) || dataUrl;
+  }, [base, sheetKey, cropKey]);
+  if (sheetKey || cropKey) return cropped ?? '';
+  return base;
 }
 
 /** The ONE sprite preview image — every site renders the first frame through this
@@ -721,6 +739,10 @@ export function MappingsPanelContent({ mode = 'list' }: PanelContentProps = {}) 
   const sheetInputRef = useRef<HTMLInputElement>(null);
   const [pendingSheet, setPendingSheet] = useState<{ name: string; dataUrl: string; mimeType: string } | null>(null);
   const [sheetEditId, setSheetEditId] = useState<string | null>(null);
+  /** The sprite whose CROP is being edited (null when the dialog is shut). Unlike a
+   *  sheet the crop dialog is NOT an import step — an image is perfectly usable
+   *  uncropped, so it stays one fewer modal in the common path. */
+  const [cropEditId, setCropEditId] = useState<string | null>(null);
   const handleSheetPick = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     e.target.value = '';
@@ -818,6 +840,9 @@ export function MappingsPanelContent({ mode = 'list' }: PanelContentProps = {}) 
   /** The sprite whose sheet grid is being edited (null when the dialog is shut).
    *  Resolved live, so deleting the sprite mid-dialog simply closes it. */
   const sheetEditSprite = sheetEditId ? sprites.find(s => s.id === sheetEditId) ?? null : null;
+  /** Same live resolution for the crop dialog — deleting the sprite mid-dialog
+   *  simply closes it. */
+  const cropEditSprite = cropEditId ? sprites.find(s => s.id === cropEditId) ?? null : null;
 
   const handleDelete = () => {
     if (selectedCellId) {
@@ -1306,6 +1331,40 @@ export function MappingsPanelContent({ mode = 'list' }: PanelContentProps = {}) 
                   onChange={e => updateSprite(s.id, { loop: e.target.checked })} />
                 Loop frames
               </label>
+              {/* COLORIZE — tint the art by the agent's own colour. Render-time on
+                  every path (CPU overlay, the worker billboard, gl3d), so it costs
+                  no re-decode; it is what lets ONE grayscale asset serve a whole
+                  coloured population. */}
+              <label
+                style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, cursor: 'pointer', marginTop: 4 }}
+                title="Multiply every pixel by the agent's colour, leaving alpha alone: white art becomes exactly the agent's colour, black stays black and shading survives. One white/grayscale sprite then serves a whole coloured population (a species tag, an Output Mapping colour ramp)."
+              >
+                <input type="checkbox" checked={!!s.colorize}
+                  onChange={e => updateSprite(s.id, { colorize: e.target.checked })} />
+                Colorize by agent colour
+              </label>
+              {/* CROP — non-sheet assets only: a sheet is trimmed through its grid,
+                  so offering both would be two ways to say one thing. */}
+              {!s.sheet && (
+                <div className={styles.field}>
+                  <label className={styles.fieldLabel}>Crop</label>
+                  <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                    <span style={{ color: '#7a8a9a', fontSize: '0.66rem', flex: 1 }}>
+                      {s.crop
+                        ? `${s.crop.x},${s.crop.y} · ${s.crop.width}×${s.crop.height} px`
+                        : 'whole image'}
+                    </span>
+                    <button className={styles.addButton} onClick={() => setCropEditId(s.id)}
+                      title="Trim every frame to a rectangle of the source image (applied when the sprite is decoded, before the background-colour removal)">
+                      Crop…
+                    </button>
+                    {s.crop && (
+                      <button className={styles.addButton} onClick={() => updateSprite(s.id, { crop: undefined })}
+                        title="Use the whole image again">Clear</button>
+                    )}
+                  </div>
+                </div>
+              )}
               {/* Sprite sheet (only for a sheet-sourced sprite). The GRIDDING —
                   cols/rows/margins/gaps AND which cells, in which order, are the
                   animation — lives in its own dialog: a sheet needs the image on
@@ -1520,6 +1579,29 @@ export function MappingsPanelContent({ mode = 'list' }: PanelContentProps = {}) 
           title={`Sprite sheet — ${sheetEditSprite.name}`}
           onCancel={() => setSheetEditId(null)}
           onApply={sheet => { updateSprite(sheetEditSprite.id, { sheet }); setSheetEditId(null); }}
+        />
+      )}
+      {/* CROP — for a plain image / animated GIF / frame sequence (a sheet crops
+          through its grid instead). The rect is FOLDED by `spriteCropPatch`, so
+          picking the whole image clears the crop rather than storing an identity
+          rectangle nothing downstream would act on. */}
+      {cropEditSprite && (
+        <SpriteCropDialog
+          frameUrls={cropEditSprite.frames?.length ? cropEditSprite.frames : [cropEditSprite.dataUrl]}
+          initial={cropEditSprite.crop ?? null}
+          title={`Crop — ${cropEditSprite.name}`}
+          onCancel={() => setCropEditId(null)}
+          onApply={c => {
+            const first = new Image();
+            first.onload = () => {
+              updateSprite(cropEditSprite.id, spriteCropPatch(c, first.naturalWidth, first.naturalHeight));
+              setCropEditId(null);
+            };
+            // Could not measure it — store the (already clamped) rect as given rather
+            // than silently dropping the user's edit; the decoder clamps per frame.
+            first.onerror = () => { updateSprite(cropEditSprite.id, { crop: c ?? undefined }); setCropEditId(null); };
+            first.src = cropEditSprite.frames?.[0] ?? cropEditSprite.dataUrl;
+          }}
         />
       )}
     </>
