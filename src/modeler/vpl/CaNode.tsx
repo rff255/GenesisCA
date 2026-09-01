@@ -4,6 +4,7 @@ import type { NodeProps } from '@xyflow/react';
 import { getNodeDef } from './nodes/registry';
 import { CURRENT_VIEWER_SENTINEL } from './nodes/SetCellLooksNode';
 import { ARITHMETIC_UNARY_OPS } from './nodes/ArithmeticOperatorNode';
+import { VECTOR_OP_COLLAPSED_LABELS } from './nodes/VectorOpNode';
 import { detectMissingConfig, detectCapabilityRequirements, detectWebGPUIncompatibilities, detectWasmIncompatibilities, countMacroSubgraphIssues, detectAgentInitContextIssue } from './nodes/nodeValidation';
 import { resolveEngines } from '../../model/engineResolution';
 import { INTERPOLATION_METHODS, INTERPOLATION_SHORT_LABELS, DEFAULT_INTERPOLATION_METHOD } from './nodes/interpolationMethods';
@@ -176,6 +177,12 @@ interface CaNodeData {
  *  node on the canvas, and a formula that wide is better split into two nodes. */
 const EXPR_MIN_W = 150;
 const EXPR_MAX_W = 720;
+
+/** Longest formula shown as a COLLAPSED formula node's title before it is
+ *  ellipsised. The collapsed strip is a single unwrapped line, so this is what
+ *  keeps a long equation from stretching the node across the canvas — wide
+ *  enough that a typical rule (`n == 3 || (alive && n == 2)`) reads whole. */
+const COLLAPSED_FORMULA_MAX = 28;
 
 /** Gradient-editor UI for the Color Scale node — a thin wrapper mapping the
  *  node's flat config (`stopCount` + `stop_<i>_(position|r|g|b|a)`) to/from the
@@ -1776,9 +1783,20 @@ function CaNodeComponent({ id, data, selected }: NodeProps) {
       const unary = ARITHMETIC_UNARY_OPS.has(op);
       collapsedLabel = unary ? `${op}(${xVal})` : `${xVal} ${op} ${yVal}`;
     } else if (FORMULA_NODE_TYPES.has(nodeData.nodeType)) {
+      // The FORMULA is the node's identity, so a collapsed, un-renamed formula
+      // node shows the source text (the collapsed strip is plain text — the
+      // rendered maths/logic view only exists in the expanded body). An empty
+      // formula falls back to the node's own label, which is what carries the
+      // UI rename ("Math Expression") rather than a hardcoded string here.
       const expr = ((nodeData.config.expression as string) ?? '').trim();
-      const fallback = nodeData.nodeType === 'expression' ? 'Expression' : 'Logic formula';
-      collapsedLabel = expr ? (expr.length > 18 ? `${expr.slice(0, 18)}…` : expr) : fallback;
+      collapsedLabel = expr
+        ? (expr.length > COLLAPSED_FORMULA_MAX ? `${expr.slice(0, COLLAPSED_FORMULA_MAX)}…` : expr)
+        : displayNodeLabel(def);
+    } else if (nodeData.nodeType === 'vectorOp') {
+      // Summarise the OPERATION (the Math node's convention) — a collapsed
+      // "Vector Op" says nothing about what the node does.
+      const op = (nodeData.config.op as string) || 'add';
+      collapsedLabel = VECTOR_OP_COLLAPSED_LABELS[op] ?? displayNodeLabel(def);
     } else if (nodeData.nodeType === 'logicOperator') {
       collapsedLabel = (nodeData.config.operation as string) || 'OR';
     } else if (nodeData.nodeType === 'groupStatement') {

@@ -50,14 +50,16 @@ export const LogicalExpressionNode: NodeTypeDef = {
     + 'parentheses, numbers, and the literals true/false. '
     + 'Precedence: comparisons > NOT > AND > XOR > OR, so NOT n > 2 reads as NOT (n > 2). '
     + 'A bare input is truthy-tested; in a comparison it is its raw number. '
-    + 'No arithmetic (not even negation) — compute a value in an Expression node and wire it in.',
+    + 'No arithmetic (not even negation) — compute a value in a Math Expression node and wire it in.',
   category: 'logic',
   color: '#1a237e',
   ports: [
     ...INPUT_PORTS,
     { id: 'result', label: 'Result', kind: 'output', category: 'value', dataType: 'bool' },
   ],
-  defaultConfig: { expression: '', visibleCount: 3 },
+  // A NEW node opens with TWO inputs, matching its Math Expression sibling (see
+  // that node for why this is not `DEFAULT_VISIBLE_COUNT`).
+  defaultConfig: { expression: '', visibleCount: 2 },
   compile: (nodeId, config, inputVars) => {
     const visibleCount = clampVisibleCount(config.visibleCount);
     const { map, errors } = buildLogicVarMap(config, visibleCount);

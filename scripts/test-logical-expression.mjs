@@ -822,8 +822,11 @@ console.log('== registration ==');
       JSON.stringify(cmpDef.ports.map(p => `${p.id}:${p.dataType}`)));
     check('inputs keep the bool inline widget (an UNWIRED operand is True/False)',
       ins.every(p => p.inlineWidget === 'bool' && p.defaultValue === 'false'));
-    check('defaults to 3 visible inputs + an empty formula',
-      def.defaultConfig.visibleCount === 3 && def.defaultConfig.expression === '');
+    // A NEW node opens with TWO inputs (the `a AND b` shape), matching its Math
+    // Expression sibling. Distinct from parser.DEFAULT_VISIBLE_COUNT (3), which
+    // is only the fallback for a config that never declared the key at all.
+    check('defaults to 2 visible inputs + an empty formula',
+      def.defaultConfig.visibleCount === 2 && def.defaultConfig.expression === '');
   }
   check('in the Overseer allowlist', M.OVERSEER_UNIVERSAL_TYPES.has('logicalExpression'));
   // Validation badge.

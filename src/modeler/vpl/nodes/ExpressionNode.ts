@@ -32,17 +32,26 @@ const INPUT_PORTS: PortDef[] = VISIBLE_PORT_IDS.map(id => ({
 
 export const ExpressionNode: NodeTypeDef = {
   type: 'expression',
-  label: 'Expression',
+  // UI LABEL ONLY — the type id stays `expression` (schema / config / compilers
+  // never rename ids). "Math" pairs it with its boolean sibling, Logical
+  // Expression, and makes the quick-add search find it by either word.
+  label: 'Math Expression',
   description:
-    'Type a math formula (e.g. a + b*c - pow(d,2)). Variables come from the input ports. '
-    + 'Supports + - * / % ^ and sqrt abs floor ceil round min max pow mod exp log sin cos tan tanh.',
+    'Type a math formula (e.g. a + b*c - pow(d,2)) instead of wiring up many Math nodes. '
+    + 'Variables come from the input ports. '
+    + 'Supports + - * / % ^ and sqrt abs floor ceil round min max pow mod exp log sin cos tan tanh. '
+    + 'The boolean sibling is Logical Expression.',
   category: 'logic',
   color: '#b8860b',
   ports: [
     ...INPUT_PORTS,
     { id: 'result', label: 'Result', kind: 'output', category: 'value', dataType: 'any' },
   ],
-  defaultConfig: { expression: '', visibleCount: 3 },
+  // A NEW node opens with TWO inputs (`a + b` is the commonest shape; the +/−
+  // stepper grows it to 8). Deliberately NOT `DEFAULT_VISIBLE_COUNT`, which is
+  // the back-compat fallback for a config that never declared the key at all —
+  // changing that would retro-resize a hand-edited or legacy node.
+  defaultConfig: { expression: '', visibleCount: 2 },
   compile: (nodeId, config, inputVars) => {
     const visibleCount = clampVisibleCount(config.visibleCount);
     const { map, errors } = buildVarMap(config, visibleCount);

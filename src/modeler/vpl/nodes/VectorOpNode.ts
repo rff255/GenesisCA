@@ -31,6 +31,28 @@ const SCALAR_OUT = new Set(['dot', 'length', 'distance']);
 /** Degrees → radians, shared by the node's reference compile() and the lowering. */
 export const DEG_TO_RAD = Math.PI / 180;
 
+/** COLLAPSED-node titles, one per op — the Math node's convention applied here:
+ *  a collapsed, un-renamed node summarises the OPERATION it performs instead of
+ *  reading a generic "Vector Op". Deliberately SHORTER than the op dropdown's
+ *  own option text ("Add (A + B)"), which is written to disambiguate the ports
+ *  while a collapsed strip only has room for the verb. Lives next to the op set
+ *  it names (the `ARITHMETIC_UNARY_OPS` precedent) so a new op cannot ship with
+ *  a stale title; an unknown op falls back to the node's label. */
+export const VECTOR_OP_COLLAPSED_LABELS: Readonly<Record<string, string>> = {
+  add: 'Vec Add',
+  subtract: 'Vec Subtract',
+  scale: 'Vec Scale',
+  dot: 'Vec Dot',
+  cross: 'Vec Cross',
+  length: 'Vec Length',
+  normalize: 'Vec Normalize',
+  distance: 'Vec Distance',
+  negate: 'Vec Negate',
+  lerp: 'Vec Lerp',
+  rotate2d: 'Rotate 2D',
+  rotateAxis: 'Rotate Axis',
+};
+
 export const VectorOpNode: NodeTypeDef = {
   type: 'vectorOp',
   label: 'Vector Op',
