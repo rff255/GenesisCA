@@ -8,7 +8,7 @@ export const GetAgentAttributeNode: NodeTypeDef = {
   type: 'getAgentAttribute',
   label: 'Get Agent Attribute',
   agentLabel: 'Get Attribute (by ID)',
-  description: "Read a specific agent's attribute by id (the partner from Get Nearby Agents / For Each Bond). Extra attribute slots (+ Attribute) read several of that agent's attributes through one shared Agent input.",
+  description: "Read a specific agent's attribute by id (the partner from Get Nearby Agents / For Each Bond). The Agent input is REQUIRED — left unwired this reads 0, so use Get Self Attribute to read THIS agent. Extra attribute slots (+ Attribute) read several of that agent's attributes through one shared Agent input.",
   category: 'data',
   color: '#5e35b1',
   requirements: { bondGraph: true },
