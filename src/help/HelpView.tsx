@@ -1088,17 +1088,40 @@ export function HelpView() {
             swatch in the top-right corner to change its background color.
           </p>
 
+          <h3 className={styles.h3}>Insert a Node Into a Wire (press and hold)</h3>
+          <p className={styles.p}>
+            <strong>Press and hold</strong> the left mouse button on a wire for about half
+            a second and the <strong>Add Node</strong> menu opens right there, listing only
+            the nodes that are <strong>compatible with that wire&rsquo;s source</strong>
+            (plus <em>Reroute</em>). Pick one and it is <strong>spliced into the
+            link</strong>: the source connects to the new node&rsquo;s first matching
+            input, the original wire is removed, and &mdash; if the new node has an output
+            the old consumer can accept &mdash; that output is wired straight on to it.
+          </p>
+          <p className={styles.p}>
+            So a <em>Get Constant &rarr; Set Attribute</em> wire, held and given a
+            <strong> Math</strong> node, becomes <em>Get Constant &rarr; Math &rarr; Set
+            Attribute</em> in one gesture. On a <strong>flow</strong> wire the new
+            node&rsquo;s <em>NEXT / DONE</em> continuation takes over the old target, so
+            holding a flow link and picking <em>If / Then / Else</em> gives
+            <em> Step &rarr; If &rarr; (DONE) &rarr; the old node</em>. If the chosen node
+            has no output the old consumer can take, it is still inserted on the input side
+            and the consumer is simply left unconnected. The whole splice is
+            <strong> one undo step</strong>. A quick click still selects the wire, and
+            moving the mouse before the half second is up cancels the hold.
+          </p>
+
           <h3 className={styles.h3}>Reroute Points</h3>
           <p className={styles.p}>
             A <strong>reroute</strong> is a small movable dot you place on a wire to
             bend it around other nodes &mdash; and to fan one output out to many places
             without long crossing wires. To create one, <strong>press and hold</strong>
-            the left mouse button on a wire for about half a second: a reroute appears and
-            then follows your cursor until you release. Once placed, a reroute is an
-            ordinary node &mdash; <strong>drag it to move it</strong>, and it moves along
-            with a multi-selection just like any other node. You can also drag a wire off
-            an output port, release on empty canvas, and pick
-            <strong>&quot;Reroute&quot;</strong> from the menu.
+            a wire and pick <strong>&quot;Reroute&quot;</strong> (the first entry in the
+            menu): the dot is dropped where you held, splitting the wire. Once placed, a
+            reroute is an ordinary node &mdash; <strong>drag it to move it</strong>, and it
+            moves along with a multi-selection just like any other node. You can also drag a
+            wire off an output port, release on empty canvas, and pick
+            <strong>&quot;Reroute&quot;</strong> from that menu.
           </p>
           <p className={styles.p}>
             A reroute always carries an <strong>output</strong>, so it has one input
