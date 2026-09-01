@@ -2542,6 +2542,23 @@ export function HelpView() {
             impure, so it cannot share the own-read&rsquo;s caching/hoisting classification).
           </p>
           <p className={styles.p}>
+            <strong>A by-id node&rsquo;s <code>Agent</code> input is REQUIRED.</strong> On the Agents
+            graph <em>Get Attribute (by&nbsp;ID)</em> reads simply as &ldquo;Get Attribute&rdquo;, so
+            it is easy to drop in where <em>Get Self Attribute</em> was meant &mdash; and with the
+            <code> Agent</code> input left empty it <strong>reads 0</strong> (a by-id <em>write</em>
+            with no id writes nothing). That is deliberate: the empty-agent sentinel is guarded so
+            it can never read past the end of the array. But 0 is a plausible-looking number, so it
+            propagates silently &mdash; a scale expression that always evaluates to 0, a direction
+            vector that is always (0,&nbsp;0). The modeler therefore <strong>badges</strong> an
+            unwired <code>Agent</code> on <em>Get Attribute (by&nbsp;ID)</em>,{' '}
+            <em>Get Position (by&nbsp;ID)</em>, <em>Get Agent Radius</em>, <em>Get Agent Offset</em>,{' '}
+            <em>Set Agent Position</em> and <em>Set Agent Radius</em>, naming the self-reading node
+            to use instead. (<em>Get Velocity</em>, <em>Set Velocity</em>, <em>Set Attribute</em>,{' '}
+            <em>Set Target Radius</em>, <em>Kill Agent</em> and <em>Set Agent Sprite</em> are not
+            badged &mdash; for those an empty <code>Agent</code> means <em>this</em> agent, which is
+            a documented, useful default.)
+          </p>
+          <p className={styles.p}>
             Agents sit <strong>above</strong> the CA: they can read and write grid cells (the field
             bridge below), but grid cells can <strong>never</strong> read agent state. To let agents
             touch a cell attribute, set its <strong>Agent access</strong> (in the cell attribute&rsquo;s
@@ -3326,7 +3343,7 @@ export function HelpView() {
             first frame of your <em>selection</em>, not necessarily the sheet&rsquo;s first cell,
             and
             <strong> clicking a row opens its editor in the second panel</strong>. There you
-            set the size, whether the frames <strong>loop</strong>, the sheet grid + frame
+            set the <strong>size mode</strong> and size, whether the frames <strong>loop</strong>, the sheet grid + frame
             selection (via <strong>Edit sheet grid&hellip;</strong>), the
             <strong> rotation</strong> &mdash; the art&rsquo;s default facing on the compass dial,
             plus <strong>Orient to velocity</strong> so it auto-points along the agent&rsquo;s
@@ -3338,6 +3355,20 @@ export function HelpView() {
             handle to reorder the library. You can also <strong>drag a sprite row onto the Agents
             canvas</strong> to drop a <strong>Set Agent Sprite</strong> node already pointed at
             it.
+          </p>
+          <p className={styles.p}>
+            <strong>How big is a sprite? Its <em>Size mode</em> decides.</strong> By default
+            (<em>Relative to agent diameter</em>) the size is a <strong>multiplier of the
+            agent&rsquo;s diameter</strong>, so the art tracks the body &mdash; the right thing for
+            a boid whose sprite <em>is</em> the agent. Switch a sprite to
+            <strong> Absolute (world units)</strong> and the size is a <strong>world-unit
+            measurement and the agent&rsquo;s radius stops mattering entirely</strong> &mdash; the
+            right thing when a rule drives the size through <strong>Set Agent Sprite &rarr;
+            Scale</strong> and you want that number, and nothing else, to decide how big the
+            picture is. Either way the number is the sprite&rsquo;s <strong>longest side</strong>
+            (the other is shortened by the frame&rsquo;s aspect), and the mode is a property of the
+            <em> sprite</em>, so the library&rsquo;s Size field and the node&rsquo;s Scale port always
+            mean the same thing.
           </p>
           <p className={styles.p}>
             To actually show a sprite, use that <strong>Set Agent Sprite</strong> node in an
@@ -3358,8 +3389,11 @@ export function HelpView() {
               (Dir&nbsp;X / Dir&nbsp;Y) the art aligns to. A vector lets even a <em>stationary</em>
               agent &ldquo;look at&rdquo; a target (feed it the offset toward the target). This is
               separate from the sprite&rsquo;s per-sprite <em>Orient to velocity</em> option.</li>
-            <li><strong>Set scale</strong> &mdash; a per-agent size multiplier (overrides the
-              sprite&rsquo;s default size &times;).</li>
+            <li><strong>Set scale</strong> &mdash; the per-agent size, overriding the sprite&rsquo;s
+              own size (<code>0</code> = keep the sprite&rsquo;s). It is read through the sprite&rsquo;s
+              <strong> Size mode</strong> (below), so it is either a multiple of the agent&rsquo;s
+              diameter or an absolute world size &mdash; and either way it sets the sprite&rsquo;s
+              longest side.</li>
             <li><strong>Set alpha</strong> &mdash; the agent colour&rsquo;s alpha byte (0&ndash;255);
               the sprite blit is multiplied by it, so this fades or hides the sprite per agent.
               It is the same alpha a colour pass writes &mdash; an Agent Output Mapping that sets

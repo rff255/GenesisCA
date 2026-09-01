@@ -245,6 +245,10 @@ export interface SpriteAtlasInput {
   rotationOffset: number;
   orientToVelocity: boolean;
   scale: number;
+  /** `SpriteAsset.sizeMode === 'absolute'` — `scale` (and a per-agent Set Agent
+   *  Sprite override) is the drawn size in WORLD UNITS, so the agent radius is not
+   *  consulted. Absent/false = the historical agent-diameter multiplier. */
+  absoluteSize?: boolean;
 }
 
 /** gl3d-internal per-slot sprite render meta (built by setSpriteAtlas). */
@@ -257,6 +261,7 @@ interface SpriteSlotMeta {
   rotationOffset: number;
   orientToVelocity: boolean;
   scale: number;
+  absoluteSize: boolean;  // scale IS the world-unit size (radius not consulted)
 }
 
 /** 3D scene lighting. One directional key light + ambient fill (+ an optional
@@ -1837,7 +1842,7 @@ export class Gl3DRenderer {
         aspect: f0.width / Math.max(1, f0.height),
         loop: s.loop, defaultDirection: s.defaultDirection,
         rotationOffset: s.rotationOffset, orientToVelocity: s.orientToVelocity,
-        scale: s.scale > 0 ? s.scale : 1,
+        scale: s.scale > 0 ? s.scale : 1, absoluteSize: !!s.absoluteSize,
       });
       for (const f of s.frames) {
         sctx.clearRect(0, 0, CELL, CELL);
@@ -2277,8 +2282,14 @@ export class Gl3DRenderer {
           const fc = meta.frameCount;
           const raw = Math.floor(sfr[i]!);
           const frame = fc <= 1 ? 0 : meta.loop ? (((raw % fc) + fc) % fc) : (raw < 0 ? 0 : raw >= fc ? fc - 1 : raw);
-          const perScale = (sscl.length === hw && sscl[i]! > 0) ? sscl[i]! : meta.scale;
-          const diameter = snap.radius[i]! * 2 * perScale;
+          // SIZE — mirrors the 2D `spriteSpan` rule term for term: a per-agent Set
+          // Agent Sprite override > 0 wins over the asset's scale, and the asset's
+          // sizeMode decides whether that number multiplies the agent DIAMETER or
+          // IS the size in world units (the radius then never enters). No pixel
+          // floor here — gl3d does not floor its sphere radii either.
+          const ps = (sscl.length === hw) ? sscl[i]! : 0;
+          const eff = ps > 0 ? ps : meta.scale;
+          const diameter = meta.absoluteSize ? eff : snap.radius[i]! * 2 * eff;
           const aspect = meta.aspect;
           let halfW = diameter / 2, halfH = diameter / 2;
           if (aspect >= 1) halfH = diameter / (2 * aspect); else halfW = (diameter * aspect) / 2;

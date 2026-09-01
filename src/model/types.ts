@@ -351,7 +351,17 @@ export interface SpriteAsset {
   /** Original image file as a `data:<mime>;base64,…` URL (PNG/JPEG/GIF/WebP). */
   dataUrl: string;
   mimeType: string;
-  /** Size multiplier vs the agent diameter when drawn (default 1). */
+  /** SIZE — what `scale` (and a per-agent Set Agent Sprite `Scale` override) MEANS:
+   *  - `'radius'` (default, and the reading every pre-sizeMode file keeps): a
+   *    MULTIPLIER of the agent's diameter, so the art tracks the agent's body.
+   *  - `'absolute'`: the drawn size in WORLD UNITS — the agent's radius is not
+   *    consulted at all, so the sprite is exactly as big as the rule asks for.
+   *  Either way the number is the sprite's LONGEST side; the other is shortened by
+   *  the frame aspect. One reading per ASSET, so the Sprite Library field and the
+   *  Set Agent Sprite `Scale` port can never mean two different things. */
+  sizeMode?: 'radius' | 'absolute';
+  /** Size — a multiplier of the agent diameter (`sizeMode` absent / `'radius'`) or
+   *  the drawn size in world units (`'absolute'`). Default 1. */
   scale?: number;
   /** Render wrap mode: true (default) loops the frame index, false clamps it to
    *  the last frame so the animation holds at its end ("play once"). */

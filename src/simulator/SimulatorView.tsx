@@ -766,8 +766,33 @@ function agentRenderModelTermsOk(
  *  gl3d atlas and (now) the worker atlas all read. */
 interface SpriteRenderMeta {
   id: string; scale: number; loop: boolean;
+  /** `sizeMode === 'absolute'` — `scale` (and a per-agent Set Agent Sprite
+   *  override) is the drawn size in WORLD UNITS, not a multiple of the agent
+   *  diameter. Absent/false = the historical radius-relative multiplier. */
+  absoluteSize: boolean;
   defaultDirection: number; orientToVelocity: boolean; rotationOffset: number;
 }
+
+/** SPRITE SIZE — the ONE rule every render path applies, so the CPU overlay, the
+ *  worker billboard pass and gl3d can never disagree about how big a sprite is.
+ *  Returns the LONGEST side, in the same units as `diameter`:
+ *  - `absolute` (SpriteAsset.sizeMode): the effective scale IS the size, and the
+ *    agent's radius is not consulted at all — what "the Scale input dictates the
+ *    sprite size" means, and why a big agent no longer drags its art with it.
+ *  - otherwise: the historical `diameter × scale` multiplier.
+ *  The effective scale is the per-agent Set Agent Sprite override when > 0, else
+ *  the asset's own `scale` (0 = "use the asset default", the documented sentinel). */
+export function spriteSpan(diameter: number, assetScale: number, perAgentScale: number, absoluteSize: boolean): number {
+  const eff = perAgentScale > 0 ? perAgentScale : (assetScale || 1);
+  return absoluteSize ? eff : diameter * eff;
+}
+
+/** 2D-only floor on the drawn sprite span, in SCREEN px. The radius-relative path
+ *  floors the RADIUS at 1.2 px (so a zoomed-out agent stays visible), bottoming its
+ *  span out at 2.4 px for scale 1; absolute mode has no radius to floor, so it
+ *  floors the resulting SPAN at the same number for the same reason. 3D floors
+ *  neither (its discs are unfloored world-unit spheres). */
+const MIN_SPRITE_SPAN_PX = 2.4;
 
 /** Build the worker's 2D sprite atlas: every decoded (sprite, frame) drawn
  *  STRETCHED into one CELL x CELL tile of a single grid image, plus the per-slot
@@ -822,7 +847,7 @@ async function buildAgentSpriteAtlasPayload(
       slot: p.slot, baseLayer: layer, frameCount: p.frames.length,
       aspect: f0.width / Math.max(1, f0.height),
       loop: p.m.loop, orientToVelocity: p.m.orientToVelocity,
-      scale: p.m.scale > 0 ? p.m.scale : 1,
+      scale: p.m.scale > 0 ? p.m.scale : 1, absoluteSize: p.m.absoluteSize,
       defaultDirection: p.m.defaultDirection, rotationOffset: p.m.rotationOffset,
     });
     for (const f of p.frames) {
@@ -3534,7 +3559,7 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
   // advances the frame per step) — there is NO simulator transport here. The
   // render just reads the per-agent frame from the snapshot.
   const spriteRegistryRef = useRef<SpriteRegistry | null>(null);
-  const spriteMetaRef = useRef<Array<{ id: string; scale: number; loop: boolean; defaultDirection: number; orientToVelocity: boolean; rotationOffset: number }>>([]);
+  const spriteMetaRef = useRef<SpriteRenderMeta[]>([]);
   // 3D sprites: the gl3d sprite ATLAS is (re)built lazily in the 3D draw path (the
   // only place the renderer exists) whenever this flag is set — by a sprite-set
   // change, a decode completing (registry onReady), or a fresh renderer. The 2D
@@ -5980,7 +6005,7 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
               const m = metas[si]!;
               const dec = reg.get(m.id);
               if (dec && dec.frames.length > 0) {
-                atlas.push({ slot: si + 1, frames: dec.frames, loop: m.loop, defaultDirection: m.defaultDirection, rotationOffset: m.rotationOffset, orientToVelocity: m.orientToVelocity, scale: m.scale });
+                atlas.push({ slot: si + 1, frames: dec.frames, loop: m.loop, defaultDirection: m.defaultDirection, rotationOffset: m.rotationOffset, orientToVelocity: m.orientToVelocity, scale: m.scale, absoluteSize: m.absoluteSize });
               }
             }
           }
@@ -6277,12 +6302,30 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
           const cx = tileOx + ax[i]! * scale;
           const cy = tileOy + ay[i]! * scale;
           const rad = Math.max(1.2, ar[i]! * scale);
-          if (cx + rad < 0 || cx - rad > parentW || cy + rad < 0 || cy - rad > parentH) continue;
+          // A sprite's drawn span can far exceed the agent's disc (a 3x asset scale,
+          // or an ABSOLUTE size on a tiny agent), so the viewport cull has to use
+          // the SPRITE's half-span or a large sprite pops off at the edges while
+          // most of it is still on screen. Resolved once here and reused below.
+          const slot = spritesActive ? sids[i]! : 0;  // 1-based into model.sprites (0 = none)
+          const meta = slot > 0 ? spriteMeta[slot - 1] : undefined;
+          let spriteSpanPx = 0;
+          if (meta) {
+            // SIZE — the shared `spriteSpan` rule (a per-agent Set Agent Sprite
+            // override > 0 wins over the asset's scale; the asset's sizeMode decides
+            // whether that number multiplies the agent DIAMETER or IS the size in
+            // world units). `rad` is already the 1.2 px-floored screen radius, so
+            // the relative arm keeps its historical floor; the absolute arm has no
+            // radius to floor and floors the SPAN instead.
+            const ps = sscl.length === hw ? sscl[i]! : 0;
+            spriteSpanPx = meta.absoluteSize
+              ? Math.max(spriteSpan(0, meta.scale, ps, true) * scale, MIN_SPRITE_SPAN_PX)
+              : spriteSpan(rad * 2, meta.scale, ps, false);
+          }
+          const cullR = Math.max(rad, spriteSpanPx * 0.5);
+          if (cx + cullR < 0 || cx - cullR > parentW || cy + cullR < 0 || cy - cullR > parentH) continue;
           const c = i * 4;
           // --- sprite branch ---
           if (spritesActive) {
-            const slot = sids[i]!; // 1-based index into model.sprites (0 = none)
-            const meta = slot > 0 ? spriteMeta[slot - 1] : undefined;
             const dec = meta ? reg!.get(meta.id) : undefined;
             if (dec && dec.frames.length > 0) {
               if (pass === 'goo') continue; // sprite-agents are excluded from the goo field
@@ -6294,10 +6337,7 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
                 : meta!.loop ? (((raw % fc) + fc) % fc)
                 : (raw < 0 ? 0 : raw >= fc ? fc - 1 : raw);
               const bmp = dec.frames[frame]!;
-              // Per-agent size override (Set Agent Sprite → Set scale) wins over
-              // the sprite asset's default scale; 0 = use the default.
-              const perAgentScale = sscl.length === hw && sscl[i]! > 0 ? sscl[i]! : (meta!.scale || 1);
-              const target = rad * 2 * perAgentScale;
+              const target = spriteSpanPx;  // resolved with the cull, above
               const aspect = bmp.width / Math.max(1, bmp.height);
               let dw = target, dh = target;
               if (aspect >= 1) dh = target / aspect; else dw = target * aspect;
@@ -6931,7 +6971,7 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
   // (ImageDecoder); onReady redraws so a freshly-imported sprite appears.
   useEffect(() => {
     const sprites = model.sprites ?? [];
-    spriteMetaRef.current = sprites.map(s => ({ id: s.id, scale: s.scale ?? 1, loop: s.loop !== false, defaultDirection: s.defaultDirection ?? 0, orientToVelocity: !!s.orientToVelocity, rotationOffset: s.rotationOffset ?? 0 }));
+    spriteMetaRef.current = sprites.map(s => ({ id: s.id, scale: s.scale ?? 1, loop: s.loop !== false, absoluteSize: s.sizeMode === 'absolute', defaultDirection: s.defaultDirection ?? 0, orientToVelocity: !!s.orientToVelocity, rotationOffset: s.rotationOffset ?? 0 }));
     spriteAtlasDirtyRef.current = true; // sprite set changed → rebuild the 3D atlas
     if (sprites.length === 0) {
       spriteRegistryRef.current?.dispose();

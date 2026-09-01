@@ -35,6 +35,10 @@ export interface AgentSpriteSlot {
   loop: boolean;
   orientToVelocity: boolean;
   scale: number;
+  /** `SpriteAsset.sizeMode === 'absolute'` — `scale` (and a per-agent Set Agent
+   *  Sprite override) is the drawn size in WORLD UNITS, so the agent radius is not
+   *  consulted. Absent/false = the historical diameter multiplier. */
+  absoluteSize?: boolean;
   defaultDirection: number;
   rotationOffset: number;
 }

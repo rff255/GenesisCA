@@ -322,11 +322,23 @@ console.log('\nG — runtime source invariants');
     /rt\.usesSpriteWrite && rt\.layout\.spritesReserved/.test(src));
   check('the read PLAN covers the sprite runs under that predicate',
     /if \(spriteRunsActive\(rt\)\) for \(const field of AGENT_GPU_SPRITE_FIELDS\) add\(/.test(src));
+  // The UPLOAD half widened when the 2D worker billboard pass landed: the runs are
+  // also seeded when the RENDER reads them even though the shader never writes them
+  // (`spriteRunsUploaded = spriteRunsActive || (spritesReserved && spriteRenderActive)`),
+  // while the READ half — the plan and both readbacks — must stay on the narrow
+  // `spriteRunsActive`, or a run the shader never wrote is read back as zeros and
+  // clobbers the CPU sprite state. So count the two predicates SEPARATELY rather
+  // than one total (the old single count of 6 silently went stale at that split).
+  check('the upload half is gated by the WIDER predicate (2 sites)',
+    /function spriteRunsUploaded\(/.test(src)
+    && /return spriteRunsActive\(rt\) \|\| \(rt\.layout\.spritesReserved && spriteRenderActive\(rt\)\);/.test(src)
+    && (src.match(/if \(spriteRunsUploaded\(rt\)\) \{/g) ?? []).length === 2,
+    `found ${(src.match(/if \(spriteRunsUploaded\(rt\)\) \{/g) ?? []).length}`);
+  // plan + readbackAgentStep + newborn overlay + readbackAgentFrame = 4 narrow
+  // sites (+1 inside spriteRunsUploaded itself). Fewer means one half of the pair
+  // went missing, which is exactly the failure that clobbers the CPU sprite ids.
   const seeds = (src.match(/spriteRunsActive\(rt\)/g) ?? []).length;
-  // plan + upload fill + upload writeBuffer + readbackAgentStep + newborn overlay +
-  // readbackAgentFrame = 6. Fewer means one half of the pair went missing, which is
-  // exactly the failure that clobbers the CPU sprite ids with zeros.
-  check('every seed/readback site is gated by it (6 sites)', seeds === 6, `found ${seeds}`);
+  check('every readback site is gated by the NARROW predicate (5 uses)', seeds === 5, `found ${seeds}`);
   check('the upload seeds from the CPU store', /spriteSrc: Record<string, ArrayLike<number>>/.test(src));
   check('the runtime records the compile flag', /usesSpriteWrite: !!usage\.usesSpriteWrite && layout\.spritesReserved/.test(src));
 }
