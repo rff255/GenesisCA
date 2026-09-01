@@ -111,6 +111,15 @@
   line-height: 1.35;
 }
 
+/* A consequence the user should see before confirming (e.g. presets that would
+   be dropped). Not an error: the save still proceeds. */
+.warnHint {
+  margin-top: var(--space-2);
+  color: var(--color-warning);
+  font-size: var(--font-xs);
+  line-height: 1.35;
+}
+
 .actions {
   display: flex;
   justify-content: flex-end;

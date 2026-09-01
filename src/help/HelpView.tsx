@@ -4738,11 +4738,14 @@ export function HelpView() {
           </p>
           <ul className={styles.list}>
             <li><strong>Everything travels in one file</strong> &mdash; the model graph,
-              attributes, neighborhoods, mappings, presets, sprites, thumbnail, and (optionally)
-              the current board are all embedded. No sidecar folder.</li>
+              attributes, neighborhoods, mappings, sprites, thumbnail, and (optionally) the
+              current board and the model&rsquo;s presets are all embedded. No sidecar folder.</li>
             <li><strong>Options</strong> &mdash; choose whether to include the current board
-              state and simulator controls (like Save Project). Large grids default to
-              board-state-off to keep the file small.</li>
+              state, the simulator controls, and the <strong>model presets</strong> (like Save
+              Project). Large grids default to board-state-off to keep the file small; presets
+              default on when the model has any, and the row is hidden when it has none. Leave
+              presets off for a presentation of one fixed configuration &mdash; note that the
+              recovered <code>.gcaproj</code> then carries none either.</li>
             <li><strong>Model info is shown</strong> &mdash; the standalone page has an
               <strong>ⓘ About</strong> panel displaying the name, rule author, project author,
               summary, rule description, tags, and thumbnail.</li>
@@ -4841,6 +4844,15 @@ export function HelpView() {
             <kbd className={styles.kbd}>F</kbd> (or the <strong>&#x26F6;</strong>
             button on the canvas) to maximize the canvas by hiding the side panels.
           </p>
+
+          <h3 className={styles.h3}>Global</h3>
+          <table className={styles.table}>
+            <thead><tr><th>Shortcut</th><th>Action</th></tr></thead>
+            <tbody>
+              <tr><td><kbd className={styles.kbd}>Ctrl</kbd>+<kbd className={styles.kbd}>S</kbd> (<kbd className={styles.kbd}>&#8984;</kbd>+<kbd className={styles.kbd}>S</kbd>)</td><td>Save project &mdash; opens the same Save dialog as <strong>File &#9662; &rarr; Save</strong>. Works from anywhere, including while typing in a field; the browser&rsquo;s own &ldquo;save page&rdquo; dialog is always suppressed. Does nothing extra if a File dialog is already open.</td></tr>
+              <tr><td><kbd className={styles.kbd}>?</kbd></td><td>Show / hide the keyboard-shortcuts cheat sheet (not while typing in a field)</td></tr>
+            </tbody>
+          </table>
 
           <h3 className={styles.h3}>Graph Editor (Modeler)</h3>
           <table className={styles.table}>
