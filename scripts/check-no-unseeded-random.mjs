@@ -31,6 +31,8 @@ const ALLOWED_FILES = [
   // --- identity, not simulation -------------------------------------------
   ['src/model/ModelContext.tsx', 'id generation (genId) — identity, never read by the engine'],
   ['src/model/macroImport.ts', 'id regeneration for macro imports'],
+  ['src/model/macroImportPlan.ts', 'id generation for imported macro elements (the M2 apply mints fresh ids)'],
+  ['src/modeler/vpl/macroMoveScope.ts', 'node-id regeneration on a cross-scope move collision'],
   ['src/model/fileOperations.ts', 'preset id generation'],
   ['src/model/agentAttributeSplitMigration.ts', 'id generation in a load-time migration'],
   ['src/model/variableScopeMigration.ts', 'id generation in a load-time migration'],
