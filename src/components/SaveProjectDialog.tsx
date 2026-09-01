@@ -27,25 +27,29 @@ interface Props {
   /** Live model presentation values, read fresh every time the dialog opens
    *  (the parent mounts it conditionally, so the useState seeds are never stale). */
   initialMeta: SaveMetadata;
+  /** How many presets the model carries — drives the "these would be dropped"
+   *  warning when the presets box is unticked. */
+  presetCount?: number;
   onConfirm: (opts: SaveOptions, meta: SaveMetadata) => void;
   onCancel: () => void;
   /** Uncontrolled local state is fine for a tiny dialog. Parent re-mounts it each time. */
 }
 
-export function SaveProjectDialog({ initial, initialMeta, onConfirm, onCancel }: Props) {
+export function SaveProjectDialog({ initial, initialMeta, presetCount, onConfirm, onCancel }: Props) {
   // Track choices in local state via refs on the checkboxes directly (minimal state).
   // We rely on a small piece of controlled state via a wrapper.
   return (
     <SaveProjectDialogInner
       initial={initial}
       initialMeta={initialMeta}
+      presetCount={presetCount}
       onConfirm={onConfirm}
       onCancel={onCancel}
     />
   );
 }
 
-function SaveProjectDialogInner({ initial, initialMeta, onConfirm, onCancel }: Props) {
+function SaveProjectDialogInner({ initial, initialMeta, presetCount = 0, onConfirm, onCancel }: Props) {
   const [name, setName] = useState(initialMeta.name);
   const [author, setAuthor] = useState(initialMeta.author);
   const [modelAuthor, setModelAuthor] = useState(initialMeta.modelAuthor);
@@ -54,6 +58,9 @@ function SaveProjectDialogInner({ initial, initialMeta, onConfirm, onCancel }: P
   // has to re-render when this box is ticked.
   const [grid, setGrid] = useState(initial.includeGrid);
   const [initialState, setInitialState] = useState(initialMeta.resetRestoresBoard === true);
+  // "Include model presets" is CONTROLLED for the same reason: the warning below
+  // it only renders while the box is unticked on a model that HAS presets.
+  const [presets, setPresets] = useState(initial.includePresets);
   // An empty name would strip the navbar title AND collapse the derived filename
   // to `model.gcaproj`, so Save is barred until the field carries something.
   const canSave = name.trim().length > 0;
@@ -61,7 +68,7 @@ function SaveProjectDialogInner({ initial, initialMeta, onConfirm, onCancel }: P
   const readOpts = (): SaveOptions => ({
     includeControls: (document.getElementById('save-opt-controls') as HTMLInputElement | null)?.checked ?? initial.includeControls,
     includeGrid: grid,
-    includePresets: (document.getElementById('save-opt-presets') as HTMLInputElement | null)?.checked ?? initial.includePresets,
+    includePresets: presets,
   });
   const readMeta = (): SaveMetadata => ({
     name: name.trim(),
@@ -168,10 +175,25 @@ function SaveProjectDialogInner({ initial, initialMeta, onConfirm, onCancel }: P
             </label>
           )}
           <label className={styles.row}>
-            <input id="save-opt-presets" type="checkbox" defaultChecked={initial.includePresets} />
+            <input
+              id="save-opt-presets"
+              type="checkbox"
+              checked={presets}
+              onChange={e => setPresets(e.target.checked)}
+            />
             <div>
               <div className={styles.rowLabel}>Include model presets</div>
               <div className={styles.rowHint}>Saved parameter (and optional grid) snapshots users can switch between in the Simulator.</div>
+              {/* The box defaults to "checked iff the model HAS presets", so this
+                  only fires when the user (or a remembered lastSaveOptions choice)
+                  unticks it — which silently drops them from the written file.
+                  Visible, never blocking: omitting them is a legitimate choice. */}
+              {presetCount > 0 && !presets && (
+                <div className={styles.warnHint}>
+                  This model has {presetCount} preset{presetCount === 1 ? '' : 's'} — saving without
+                  them removes them from the file.
+                </div>
+              )}
             </div>
           </label>
         </div>

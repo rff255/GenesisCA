@@ -17,6 +17,13 @@ type Row = [keys: string, action: string];
  *  instead of sharing a column (see the module CSS's layout rule). */
 const GROUPS: { title: string; rows: Row[]; wide?: boolean }[] = [
   {
+    title: 'Global',
+    rows: [
+      ['Ctrl + S', 'Save project (opens the Save dialog)'],
+      ['?', 'Show / hide this cheat sheet'],
+    ],
+  },
+  {
     title: 'Modeler — graph',
     rows: [
       ['Space', 'Add node at cursor'],

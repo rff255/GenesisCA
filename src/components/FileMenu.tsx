@@ -131,6 +131,33 @@ export function FileMenu({ onNew, onLoaded }: {
     setSaveDialogOpen(true);
   };
 
+  /** Ctrl/Cmd+S opens the Save dialog — the same path as File ▾ → Save.
+   *
+   *  It lives HERE, not in App, for two reasons: FileMenu owns `saveDialogOpen`
+   *  (so "already open" is answerable without lifting state), and FileMenu is
+   *  rendered only by the main app — the standalone viewer bundle never mounts
+   *  it, so the shortcut cannot leak into an exported presentation.
+   *
+   *  CAPTURE phase on `window`: that is the very first listener in the capture
+   *  path, so `preventDefault` always runs and the browser's own Save-page
+   *  dialog can never appear — including while focus sits in a text field (no
+   *  input does anything with Ctrl+S, and suppressing the browser dialog there
+   *  matters most). When a FileMenu dialog is already up we still preventDefault
+   *  but do nothing else, rather than stacking a second modal on top. */
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!(e.ctrlKey || e.metaKey) || e.altKey) return;
+      if (e.key.toLowerCase() !== 's') return;
+      e.preventDefault();
+      if (e.repeat) return;
+      if (saveDialogOpen || exportDialogOpen || newDialogOpen || pendingConfirm) return;
+      setOpen(false);
+      setSaveDialogOpen(true);
+    };
+    window.addEventListener('keydown', onKey, true);
+    return () => window.removeEventListener('keydown', onKey, true);
+  }, [saveDialogOpen, exportDialogOpen, newDialogOpen, pendingConfirm]);
+
   const doSave = async (opts: SaveOptions, meta: SaveMetadata) => {
     setSaveDialogOpen(false);
 
@@ -138,10 +165,11 @@ export function FileMenu({ onNew, onLoaded }: {
     // properties (the same three the Info panel owns), so a change made on the
     // way out must land in the app state too — not only in the written file.
     // `updateProperties` is a dispatch (async React state), so reading `model`
-    // back here would still see the pre-edit values: build the edits ONCE, hand
-    // them to the reducer AND fold them into the object we serialize, so the
-    // file and the app can never disagree. An empty name is barred by the
-    // dialog, so `metaEdits.name` is only ever a real replacement.
+    // back here would still see the pre-edit values: build the edits ONCE, fold
+    // them into the object we serialize, and hand the SAME edits to the reducer
+    // once the file is actually written (below) — so the file and the app can
+    // never disagree, and a cancelled Save As changes neither. An empty name is
+    // barred by the dialog, so `metaEdits.name` is only ever a real replacement.
     const metaEdits: Partial<ModelProperties> = {};
     {
       const p = modelRef.current.properties;
@@ -156,7 +184,6 @@ export function FileMenu({ onNew, onLoaded }: {
       }
     }
     const hasMetaEdits = Object.keys(metaEdits).length > 0;
-    if (hasMetaEdits) updateProperties(metaEdits);
 
     // Ask simulator to capture the requested pieces into model context and wait.
     // The simulator passes the captured SimulationState back through the resolve
@@ -197,11 +224,21 @@ export function FileMenu({ onNew, onLoaded }: {
     // Native (Tauri) shows a Save As dialog; only mark saved if the user picked
     // a path (didn't cancel). Browser download always resolves true.
     const saved = await downloadJSON(json, filename);
+    if (!saved) return; // Save As cancelled — leave the model exactly as it was.
+    // Only NOW does the metadata edit land in the app state. Deferring it past
+    // the write is what makes a cancelled Save As a true no-op: dispatching it
+    // up front (as this used to) renamed the model even when no file was ever
+    // written. The FILE is unaffected either way — `toSerialize` carries the
+    // same edits locally, and that local merge is the file's authority.
+    // Order matters and is safe: UPDATE_PROPERTIES sets isDirty, MARK_SAVED
+    // clears it, and the reducer applies dispatches in order — so a completed
+    // save still ends NOT dirty.
+    if (hasMetaEdits) updateProperties(metaEdits);
     // Remember the confirmed include-choices for THIS loaded model so the next
     // save re-opens with them (repeated saves keep the user's choice — e.g. all
     // boxes off STAYS all off, instead of the content-derived defaults
     // re-checking grid+controls every time). Reset on New/Load.
-    if (saved) markSaved(filename, opts);
+    markSaved(filename, opts);
   };
 
   const handleExport = () => {
@@ -210,8 +247,9 @@ export function FileMenu({ onNew, onLoaded }: {
 
   const doExport = async (opts: ExportPresentationOptions) => {
     setExportDialogOpen(false);
-    // Capture the requested live state (same seam as Save). Presets + the full
-    // model graph + sprites + metadata are always embedded by serializeModel.
+    // Capture the requested live state (same seam as Save). The full model graph
+    // + sprites + metadata are always embedded by serializeModel; presets are
+    // the one further opt-out (stripped below, exactly like Save does it).
     const captured = await new Promise<SimulationState | null | undefined>(resolve => {
       const timeout = setTimeout(() => resolve(undefined), 5000);
       window.dispatchEvent(new CustomEvent('genesis-capture-sim-state', {
@@ -224,7 +262,12 @@ export function FileMenu({ onNew, onLoaded }: {
     const latest = modelRef.current;
     const wantsAny = opts.includeGrid || opts.includeControls;
     const stateForFile = wantsAny ? (captured ?? latest.simulationState) : undefined;
-    const modelForExport = { ...latest, simulationState: stateForFile };
+    // `stringifyCompact` drops undefined properties, so this really removes the
+    // presets from the embedded model (the same mechanism doSave uses).
+    let modelForExport: CAModel = { ...latest, simulationState: stateForFile };
+    if (!opts.includePresets) {
+      modelForExport = { ...modelForExport, presets: undefined };
+    }
     try {
       const html = await buildPresentationHtml(modelForExport);
       await downloadHTML(html, presentationFilename(latest));
@@ -294,6 +337,7 @@ export function FileMenu({ onNew, onLoaded }: {
       {saveDialogOpen && (
         <SaveProjectDialog
           initial={lastSaveOptions ?? deriveSaveOptions(model)}
+          presetCount={model.presets?.length ?? 0}
           initialMeta={{
             name: model.properties.name ?? '',
             author: model.properties.author ?? '',
@@ -313,9 +357,15 @@ export function FileMenu({ onNew, onLoaded }: {
         const derived = deriveSaveOptions(model);
         return (
           <ExportPresentationDialog
-            initial={{ includeGrid: bigGrid ? false : derived.includeGrid, includeControls: derived.includeControls }}
+            initial={{
+              includeGrid: bigGrid ? false : derived.includeGrid,
+              includeControls: derived.includeControls,
+              // Same derive rule as Save: on iff the model actually HAS presets.
+              includePresets: derived.includePresets,
+            }}
             modelName={p.name}
             cellCount={cellCount}
+            presetCount={model.presets?.length ?? 0}
             onConfirm={doExport}
             onCancel={() => setExportDialogOpen(false)}
           />

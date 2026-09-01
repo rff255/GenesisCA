@@ -4,6 +4,7 @@ import styles from './SaveProjectDialog.module.css';
 export interface ExportPresentationOptions {
   includeGrid: boolean;
   includeControls: boolean;
+  includePresets: boolean;
 }
 
 interface Props {
@@ -11,36 +12,40 @@ interface Props {
   modelName: string;
   /** Grid cell count (W*H*D) — drives the large-board hint. */
   cellCount?: number;
+  /** How many presets the model carries. 0 hides the presets row entirely —
+   *  a checkbox that could not change the exported file either way. */
+  presetCount?: number;
   onConfirm: (opts: ExportPresentationOptions) => void;
   onCancel: () => void;
 }
 
 /**
  * Options for exporting a standalone presentation `.html`. Mirrors the Save
- * dialog's board-state / controls semantics; presets + the full model graph +
- * sprites + metadata are ALWAYS embedded (they are the model — a presentation
- * carries everything, in one file).
+ * dialog's board-state / controls / presets semantics; the full model graph +
+ * sprites + metadata are ALWAYS embedded (they ARE the model — a presentation
+ * carries everything, in one file). Presets are the one further opt-out: they
+ * are the model's, but a presentation is often a single fixed configuration.
  */
-export function ExportPresentationDialog({ initial, modelName, cellCount = 0, onConfirm, onCancel }: Props) {
+export function ExportPresentationDialog({ initial, modelName, cellCount = 0, presetCount = 0, onConfirm, onCancel }: Props) {
   const bigGrid = cellCount > 250_000;
+  const readOpts = (): ExportPresentationOptions => ({
+    includeGrid: (document.getElementById('exp-opt-grid') as HTMLInputElement | null)?.checked ?? initial.includeGrid,
+    includeControls: (document.getElementById('exp-opt-controls') as HTMLInputElement | null)?.checked ?? initial.includeControls,
+    // No row rendered when the model has no presets — there is nothing to strip.
+    includePresets: presetCount === 0
+      ? false
+      : ((document.getElementById('exp-opt-presets') as HTMLInputElement | null)?.checked ?? initial.includePresets),
+  });
   useEffect(() => {
     const h = (e: KeyboardEvent) => {
       if (e.key === 'Escape') onCancel();
-      if (e.key === 'Enter') {
-        const g = (document.getElementById('exp-opt-grid') as HTMLInputElement | null)?.checked ?? initial.includeGrid;
-        const c = (document.getElementById('exp-opt-controls') as HTMLInputElement | null)?.checked ?? initial.includeControls;
-        onConfirm({ includeGrid: g, includeControls: c });
-      }
+      if (e.key === 'Enter') onConfirm(readOpts());
     };
     window.addEventListener('keydown', h);
     return () => window.removeEventListener('keydown', h);
   }, [initial, onConfirm, onCancel]);
 
-  const handleExport = () => {
-    const g = (document.getElementById('exp-opt-grid') as HTMLInputElement).checked;
-    const c = (document.getElementById('exp-opt-controls') as HTMLInputElement).checked;
-    onConfirm({ includeGrid: g, includeControls: c });
-  };
+  const handleExport = () => onConfirm(readOpts());
 
   return (
     <div className={styles.backdrop} onClick={onCancel}>
@@ -73,6 +78,20 @@ export function ExportPresentationDialog({ initial, modelName, cellCount = 0, on
               <div className={styles.rowHint}>Playback speed, brush, the selected viewer, and runtime model-attribute values.</div>
             </div>
           </label>
+          {/* Hidden when the model has no presets: the checkbox could not change
+              the exported file either way (the enabled-control rule). */}
+          {presetCount > 0 && (
+            <label className={styles.row}>
+              <input id="exp-opt-presets" type="checkbox" defaultChecked={initial.includePresets} />
+              <div>
+                <div className={styles.rowLabel}>Include model presets</div>
+                <div className={styles.rowHint}>
+                  The {presetCount} saved parameter (and optional grid) snapshot{presetCount === 1 ? '' : 's'} viewers
+                  can switch between. Leave off for a presentation of one fixed configuration.
+                </div>
+              </div>
+            </label>
+          )}
         </div>
         <div className={styles.actions}>
           <button className={styles.btnSecondary} onClick={onCancel}>Cancel</button>
