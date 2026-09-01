@@ -1,0 +1,205 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Link Splice — press-and-hold a wire to insert a node</title>
+<style>
+  :root{
+    --bg:#0c0d10; --panel:#14161b; --panel2:#1a1d24; --line:#2a2f3a;
+    --ink:#e6e9ef; --dim:#8f9bb0; --accent:#e8a13a; --val:#4cc9f0; --flow:#66bb6a;
+    --bad:#e05252; --ok:#4caf50;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font:14px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;}
+  .wrap{max-width:1080px;margin:0 auto;padding:40px 28px 80px}
+  h1{font-size:1.7rem;margin:0 0 6px;letter-spacing:-.01em}
+  h2{font-size:1.05rem;margin:44px 0 14px;padding-bottom:7px;border-bottom:1px solid var(--line);
+     color:var(--accent);letter-spacing:.02em;text-transform:uppercase;font-weight:600}
+  .sub{color:var(--dim);margin:0 0 8px}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:18px 20px;margin:16px 0}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+  @media (max-width:820px){.grid2{grid-template-columns:1fr}}
+  .tag{display:inline-block;font-size:.68rem;letter-spacing:.06em;text-transform:uppercase;
+       padding:2px 8px;border-radius:999px;border:1px solid var(--line);color:var(--dim);margin-bottom:10px}
+  .tag.before{border-color:#4a3a3a;color:#c98a8a}
+  .tag.after{border-color:#3a4a3a;color:#8ac98a}
+  code{background:#0a0b0e;border:1px solid var(--line);border-radius:4px;padding:1px 5px;font-size:.86em;color:#cfe3ee}
+  ul{margin:8px 0 0;padding-left:20px} li{margin:5px 0}
+  table{width:100%;border-collapse:collapse;margin-top:10px;font-size:.87rem}
+  th,td{text-align:left;padding:7px 10px;border-bottom:1px solid var(--line);vertical-align:top}
+  th{color:var(--dim);font-weight:600;font-size:.74rem;text-transform:uppercase;letter-spacing:.05em}
+  .note{border-left:3px solid var(--accent);background:#1a160d;padding:10px 14px;border-radius:0 6px 6px 0;margin:14px 0}
+  .note b{color:var(--accent)}
+  svg{display:block;max-width:100%}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>Press-and-hold a link → splice a node into it</h1>
+<p class="sub">Editor layer only. The existing hold-a-wire gesture now opens the searchable
+add-node menu; picking a node wires it <em>into</em> the link. Reroute stays as the first entry.</p>
+
+<h2>1 · The gesture</h2>
+<div class="card">
+<svg viewBox="0 0 1000 210" role="img" aria-label="Gesture timeline: press, then release early, move early, or hold to open the splice menu">
+  <defs>
+    <marker id="ar" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto">
+      <path d="M0,0 L7,3 L0,6 z" fill="#8f9bb0"/>
+    </marker>
+    <marker id="arA" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto">
+      <path d="M0,0 L7,3 L0,6 z" fill="#e8a13a"/>
+    </marker>
+  </defs>
+
+  <!-- timeline -->
+  <line x1="60" y1="45" x2="470" y2="45" stroke="#2a2f3a" stroke-width="2"/>
+  <circle cx="60" cy="45" r="7" fill="#e8a13a"/>
+  <text x="46" y="26" fill="#e6e9ef" font-size="13">LMB down on a wire</text>
+  <text x="300" y="36" fill="#8f9bb0" font-size="12">550 ms</text>
+  <line x1="470" y1="30" x2="470" y2="60" stroke="#e8a13a" stroke-width="2" stroke-dasharray="3 3"/>
+
+  <!-- branches -->
+  <path d="M200 52 C 240 52, 250 92, 300 92" stroke="#8f9bb0" stroke-width="2" fill="none" marker-end="url(#ar)"/>
+  <text x="310" y="96" fill="#8f9bb0" font-size="12.5">release early → edge <tspan fill="#e6e9ef">selects</tspan> (unchanged)</text>
+
+  <path d="M150 52 C 190 52, 200 142, 300 142" stroke="#8f9bb0" stroke-width="2" fill="none" marker-end="url(#ar)"/>
+  <text x="310" y="146" fill="#8f9bb0" font-size="12.5">move &gt; 6 px → cancel → <tspan fill="#e6e9ef">pan / box-select</tspan> (unchanged)</text>
+
+  <path d="M470 45 C 540 45, 560 45, 610 45" stroke="#e8a13a" stroke-width="2.5" fill="none" marker-end="url(#arA)"/>
+
+  <!-- menu -->
+  <rect x="618" y="8" width="330" height="180" rx="8" fill="#14161b" stroke="#e8a13a"/>
+  <text x="634" y="30" fill="#8f9bb0" font-size="11" letter-spacing="1">INSERT INTO LINK · integer output</text>
+  <rect x="630" y="40" width="306" height="24" rx="4" fill="#0a0b0e" stroke="#2a2f3a"/>
+  <text x="640" y="57" fill="#5e6a7d" font-size="12">Search… (Enter inserts + rewires)</text>
+  <rect x="630" y="70" width="306" height="22" rx="4" fill="#232833"/>
+  <circle cx="642" cy="81" r="4" fill="#4cc9f0"/><text x="654" y="86" fill="#e6e9ef" font-size="12.5">Reroute</text>
+  <text x="634" y="107" fill="#5e6a7d" font-size="10.5" letter-spacing=".8">MATH</text>
+  <rect x="630" y="112" width="306" height="22" rx="4" fill="#1a1d24"/>
+  <circle cx="642" cy="123" r="4" fill="#6a8fd8"/><text x="654" y="128" fill="#e6e9ef" font-size="12.5">Math</text>
+  <rect x="630" y="136" width="306" height="22" rx="4" fill="#1a1d24"/>
+  <circle cx="642" cy="147" r="4" fill="#6a8fd8"/><text x="654" y="152" fill="#e6e9ef" font-size="12.5">Interpolation</text>
+  <text x="634" y="176" fill="#5e6a7d" font-size="11">…compatible with the link's SOURCE port only</text>
+</svg>
+</div>
+
+<h2>2 · Before / after — the headline case</h2>
+<div class="grid2">
+  <div class="card">
+    <span class="tag before">Before · hold on the wire</span>
+    <svg viewBox="0 0 420 150" role="img" aria-label="Get Constant wired straight into Set Attribute">
+      <rect x="16" y="42" width="150" height="52" rx="7" fill="#1a1d24" stroke="#2a2f3a"/>
+      <rect x="16" y="42" width="150" height="17" rx="7" fill="#2f6f4f"/>
+      <text x="26" y="55" fill="#e6e9ef" font-size="11">Get Constant</text>
+      <text x="26" y="80" fill="#8f9bb0" font-size="11">7</text>
+      <circle cx="166" cy="80" r="5" fill="#4cc9f0"/>
+
+      <rect x="256" y="42" width="150" height="52" rx="7" fill="#1a1d24" stroke="#2a2f3a"/>
+      <rect x="256" y="42" width="150" height="17" rx="7" fill="#8a4a2f"/>
+      <text x="266" y="55" fill="#e6e9ef" font-size="11">Set Attribute</text>
+      <text x="286" y="82" fill="#8f9bb0" font-size="11">Value</text>
+      <circle cx="256" cy="80" r="5" fill="#4cc9f0"/>
+
+      <path d="M166 80 C 205 80, 215 80, 256 80" stroke="#4cc9f0" stroke-width="2.5" fill="none"/>
+      <circle cx="211" cy="80" r="13" fill="none" stroke="#e8a13a" stroke-width="2" stroke-dasharray="3 3"/>
+      <text x="186" y="124" fill="#e8a13a" font-size="11.5">press &amp; hold here</text>
+    </svg>
+  </div>
+  <div class="card">
+    <span class="tag after">After · picked “Math”</span>
+    <svg viewBox="0 0 420 150" role="img" aria-label="A Math node spliced between Get Constant and Set Attribute">
+      <rect x="6" y="42" width="118" height="52" rx="7" fill="#1a1d24" stroke="#2a2f3a"/>
+      <rect x="6" y="42" width="118" height="17" rx="7" fill="#2f6f4f"/>
+      <text x="14" y="55" fill="#e6e9ef" font-size="10.5">Get Constant</text>
+      <circle cx="124" cy="80" r="5" fill="#4cc9f0"/>
+
+      <rect x="160" y="34" width="96" height="68" rx="7" fill="#1a1d24" stroke="#e8a13a" stroke-width="1.6"/>
+      <rect x="160" y="34" width="96" height="17" rx="7" fill="#3f5fa8"/>
+      <text x="168" y="47" fill="#e6e9ef" font-size="10.5">Math</text>
+      <circle cx="160" cy="68" r="5" fill="#4cc9f0"/><text x="170" y="72" fill="#8f9bb0" font-size="10">X</text>
+      <circle cx="160" cy="90" r="5" fill="#4cc9f0"/><text x="170" y="94" fill="#5e6a7d" font-size="10">Y</text>
+      <circle cx="256" cy="68" r="5" fill="#4cc9f0"/>
+
+      <rect x="292" y="42" width="122" height="52" rx="7" fill="#1a1d24" stroke="#2a2f3a"/>
+      <rect x="292" y="42" width="122" height="17" rx="7" fill="#8a4a2f"/>
+      <text x="300" y="55" fill="#e6e9ef" font-size="10.5">Set Attribute</text>
+      <text x="316" y="82" fill="#8f9bb0" font-size="10">Value</text>
+      <circle cx="292" cy="80" r="5" fill="#4cc9f0"/>
+
+      <path d="M124 80 C 142 80, 144 68, 160 68" stroke="#4cc9f0" stroke-width="2.5" fill="none"/>
+      <path d="M256 68 C 274 68, 276 80, 292 80" stroke="#4cc9f0" stroke-width="2.5" fill="none"/>
+      <text x="120" y="128" fill="#8ac98a" font-size="11">① source → first compatible input ② output → old consumer</text>
+    </svg>
+  </div>
+</div>
+
+<div class="note">
+<b>Step ③ is the removal.</b> The original <code>Get Constant → Set Attribute</code> edge is
+deleted in the same update. All three edge changes + the node creation sit under
+<b>one</b> undo snapshot, so Ctrl+Z restores the original wire and removes the node in a single step.
+</div>
+
+<h2>3 · Flow edges — the pass-through rule falls out</h2>
+<div class="card">
+<svg viewBox="0 0 900 130" role="img" aria-label="A Conditional spliced into a flow edge: DO into CHECK, DONE out to the old target">
+  <rect x="20" y="40" width="96" height="42" rx="7" fill="#1a1d24" stroke="#2a2f3a"/>
+  <rect x="20" y="40" width="96" height="17" rx="7" fill="#e8e8e8"/>
+  <text x="28" y="53" fill="#1e2a3a" font-size="11">Step</text>
+  <path d="M116 70 l10 -6 v12 z" fill="#66bb6a"/>
+
+  <rect x="330" y="28" width="126" height="70" rx="7" fill="#1a1d24" stroke="#e8a13a" stroke-width="1.6"/>
+  <rect x="330" y="28" width="126" height="17" rx="7" fill="#8a5a2f"/>
+  <text x="338" y="41" fill="#e6e9ef" font-size="11">Conditional</text>
+  <path d="M326 60 l10 -6 v12 z" fill="#66bb6a"/><text x="344" y="64" fill="#8f9bb0" font-size="10">CHECK</text>
+  <path d="M452 60 l10 -6 v12 z" fill="#66bb6a"/><text x="410" y="64" fill="#8f9bb0" font-size="10" text-anchor="end">DONE</text>
+  <path d="M452 82 l10 -6 v12 z" fill="#66bb6a"/><text x="410" y="86" fill="#5e6a7d" font-size="10" text-anchor="end">THEN</text>
+
+  <rect x="640" y="40" width="126" height="42" rx="7" fill="#1a1d24" stroke="#2a2f3a"/>
+  <rect x="640" y="40" width="126" height="17" rx="7" fill="#8a4a2f"/>
+  <text x="648" y="53" fill="#e6e9ef" font-size="11">Set Attribute</text>
+  <path d="M636 70 l10 -6 v12 z" fill="#66bb6a"/>
+
+  <path d="M128 70 C 240 70, 230 60, 322 60" stroke="#66bb6a" stroke-width="2.5" fill="none"/>
+  <path d="M464 60 C 560 60, 550 70, 632 70" stroke="#66bb6a" stroke-width="2.5" fill="none"/>
+  <text x="330" y="122" fill="#8f9bb0" font-size="11.5">
+    <tspan fill="#e6e9ef">next</tspan> (DONE) is listed FIRST among a node's flow outputs, so “first compatible output” picks it.
+  </text>
+</svg>
+</div>
+
+<h2>4 · Every reuse point</h2>
+<div class="card">
+<table>
+  <tr><th>Concern</th><th>Reused mechanism</th></tr>
+  <tr><td>which nodes are offered</td><td><code>dropMenuItems</code> — accepts the new <code>link-splice</code> target; the origin is the link's SOURCE output, so the Reroute entry + compatibility filter come for free</td></tr>
+  <tr><td>search / ↑↓ / Enter / Esc</td><td><code>renderQuickAddSearch</code>, verbatim</td></tr>
+  <tr><td>which input receives the wire</td><td><code>pickCompatiblePort(def, origin, cfg)</code> — the same call <code>addNodeAndConnect</code> makes</td></tr>
+  <tr><td>which output feeds the old consumer</td><td>the same <code>pickCompatiblePort</code>, called with a <code>ConnectionOrigin</code> built for the CONSUMER (<code>kind: 'input'</code>) — so category / dataType / isArray / composite rules apply in the right orientation</td></tr>
+  <tr><td>menu open + close discipline</td><td>the single <code>contextMenu</code> state; <code>suppressNextEditorClickRef</code> stops the hold's own pointerup from closing it</td></tr>
+  <tr><td>undo</td><td>ONE <code>pushCurrentSnapshot()</code> before the whole splice</td></tr>
+</table>
+</div>
+
+<h2>5 · Degenerate cases (all no-crash)</h2>
+<div class="card">
+<ul>
+  <li><b>No compatible output</b> — the node is spliced on the INPUT side only; the original
+      edge is still removed (as requested). Nothing dangles.</li>
+  <li><b>Composite (vector / color) links</b> — the composite rules live in
+      <code>portsCompatible</code>, so only composite-capable nodes are offered and only a
+      matching composite output auto-wires.</li>
+  <li><b>Source is a reroute</b> — <code>getOriginPortInfo</code> already resolves a
+      reroute's relayed category + dataType.</li>
+  <li><b>Consumer is a macro instance port</b> — no static port def exists, so the consumer
+      origin falls back to the handle's category with <code>dataType: any</code> (the
+      editor's permissive default).</li>
+  <li><b>Edge deleted while the menu is open</b> — the commit is a no-op that just closes
+      the menu; no snapshot is pushed.</li>
+</ul>
+</div>
+
+</div>
+</body>
+</html>

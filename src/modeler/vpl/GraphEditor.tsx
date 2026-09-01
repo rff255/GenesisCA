@@ -670,6 +670,12 @@ interface ContextMenuState {
     | { type: 'node'; nodeId: string; nodeType: string; isMacro: boolean; isGroup: boolean }
     | { type: 'selection'; nodeIds: string[] }
     | { type: 'connection-drop'; origin: ConnectionOrigin }
+    // LINK SPLICE — press-and-hold on a wire. `origin` is the SPLIT edge's own
+    // SOURCE output, so the whole connection-drop machinery (item list, the
+    // Reroute entry, the compatibility filter, the search/keyboard UI) applies
+    // unchanged; `edgeId` is the extra context the commit path consults to also
+    // remove the original wire and re-attach its consumer.
+    | { type: 'link-splice'; origin: ConnectionOrigin; edgeId: string }
     | { type: 'model-element-drop'; element: ModelElementDragPayload; snapToPort?: ConnectionOrigin };
 }
 
@@ -2405,11 +2411,6 @@ export function GraphEditorInner() {
   const edgeStrokeFor = (category: 'flow' | 'value') =>
     category === 'flow' ? '#66bb6a' : '#4cc9f0';
 
-  /** Move a reroute node to a flow-space position (used during the hold-drag). */
-  const moveRerouteTo = useCallback((id: string, pos: { x: number; y: number }) => {
-    setNodes(nds => nds.map(n => (n.id === id ? { ...n, position: { x: pos.x, y: pos.y } } : n)));
-  }, [setNodes]);
-
   /** Build a fresh reroute RF node typed for the given wire category. */
   const makeRerouteNode = useCallback(
     (category: 'flow' | 'value', dataType: string | undefined, pos: { x: number; y: number }, label?: string): Node => ({
@@ -2498,6 +2499,137 @@ export function GraphEditorInner() {
       scheduleSync();
     },
     [makeRerouteNode, pushCurrentSnapshot, scheduleSync, setNodes, setEdges],
+  );
+
+  /** The `ConnectionOrigin` describing an edge's CONSUMER side (the port the wire
+   *  lands on). The link-splice commit asks it whether the freshly inserted node
+   *  has an OUTPUT that can take over the downstream connection — building it as
+   *  a `kind: 'input'` origin is what makes `portsCompatible` apply its
+   *  category / dataType / isArray / composite rules in the right orientation.
+   *
+   *  `getOriginPortInfo` answers null for a port with no static def (a macro
+   *  instance's dynamic ports); fall back to the HANDLE's own category with an
+   *  `any` dataType — the editor's permissive default — rather than refusing to
+   *  reconnect at all. */
+  const consumerOriginOf = useCallback((edge: Edge): ConnectionOrigin | null => {
+    const th = edge.targetHandle ? parseHandleId(edge.targetHandle) : null;
+    if (!th) return null;
+    const tgtNode = nodesRef.current.find(n => n.id === edge.target);
+    const info = tgtNode ? getOriginPortInfo(tgtNode, th.portId, modelRef.current) : null;
+    return {
+      nodeId: edge.target,
+      portId: th.portId,
+      kind: 'input',
+      category: info?.category ?? th.category,
+      dataType: info?.dataType,
+      isArray: info?.isArray,
+      arrayCapable: info?.arrayCapable,
+      compositeCapable: info?.compositeCapable,
+    };
+  }, []);
+
+  /** LINK SPLICE — insert a new node INTO an existing wire `S.out → T.in`
+   *  (press-and-hold the wire, pick a node). Three edge changes + one node, under
+   *  ONE undo snapshot, so Ctrl+Z restores the original wire AND removes the node
+   *  in a single step:
+   *    1. `S.out → N.<in>`  — `<in>` chosen by `pickCompatiblePort`, the SAME rule
+   *       `addNodeAndConnect` uses for the connection-drop menu.
+   *    2. the ORIGINAL edge is removed. It goes even when step 3 finds nothing —
+   *       "splice in" means the old consumer is detached either way.
+   *    3. `N.<out> → T.in` when N has an output compatible with the consumer's
+   *       port. For a FLOW link that lands on `next` (DONE/NEXT), which every def
+   *       lists BEFORE its branch ports — i.e. the documented pass-through
+   *       semantics (`do → N`, `N.next → old target`) falls out of the same rule.
+   *
+   *  No cycle / duplicate check is needed: N is brand new, so neither new edge can
+   *  duplicate an existing one, and `N → T` can only close a cycle if T could
+   *  already reach S — which the pre-existing `S → T` edge rules out. The value
+   *  input at T is single-occupancy again because the original edge is dropped in
+   *  the same updater. A stale `edgeId` (the wire was deleted while the menu was
+   *  open) is a no-op that pushes no snapshot. */
+  const spliceNodeIntoEdge = useCallback(
+    (edgeId: string, nodeType: string, pos: { x: number; y: number }) => {
+      const def = getNodeDef(nodeType);
+      if (!def) return;
+      const edge = edgesRef.current.find(e => e.id === edgeId);
+      if (!edge || !edge.sourceHandle || !edge.targetHandle) return;
+      const sh = parseHandleId(edge.sourceHandle);
+      if (!sh) return;
+      if (SINGLETON_NODE_TYPES.has(nodeType)
+        && nodesRef.current.some(n => (n.data as Record<string, unknown>)?.nodeType === nodeType)) return;
+
+      const srcNode = nodesRef.current.find(n => n.id === edge.source);
+      const srcInfo = srcNode ? getOriginPortInfo(srcNode, sh.portId, modelRef.current) : null;
+      const origin: ConnectionOrigin = {
+        nodeId: edge.source,
+        portId: sh.portId,
+        kind: 'output',
+        category: srcInfo?.category ?? sh.category,
+        dataType: srcInfo?.dataType,
+        isArray: srcInfo?.isArray,
+        arrayCapable: srcInfo?.arrayCapable,
+        compositeCapable: srcInfo?.compositeCapable,
+      };
+      // Resolved config drives effective ports for nodes whose port set depends on
+      // config (hiddenPorts, GetModelAttribute's r/g/b, …) — same as addNodeAndConnect.
+      const resolvedCfg: Record<string, unknown> = { ...def.defaultConfig };
+      const inPort = pickCompatiblePort(def, origin, resolvedCfg);
+      const consumer = consumerOriginOf(edge);
+      const outPort = consumer ? pickCompatiblePort(def, consumer, resolvedCfg) : null;
+
+      pushCurrentSnapshot();
+      const newId = generateNodeId(nodesRef.current);
+      const seededConfig: Record<string, string | number | boolean> = { ...def.defaultConfig };
+      for (const port of def.ports) {
+        if (port.inlineWidget && port.defaultValue !== undefined) {
+          const key = `_port_${port.id}`;
+          if (seededConfig[key] === undefined) seededConfig[key] = port.defaultValue;
+        }
+      }
+      // Drop the node so its INCOMING port lands on the held point, keeping the
+      // wire visually continuous through the splice.
+      const nodeY = inPort ? pos.y - estimateNewNodePortY(def, inPort) : pos.y;
+      const newNode: Node = {
+        id: newId,
+        type: 'caNode',
+        position: { x: pos.x, y: nodeY },
+        data: { nodeType: def.type, config: seededConfig },
+        // Sole selection, like a freshly inserted reroute: the node the user just
+        // asked for is what a drag right afterwards moves.
+        selected: true,
+      };
+      setNodes(nds => [...nds.map(n => (n.selected ? { ...n, selected: false } : n)), newNode]);
+
+      const ts = Date.now().toString(36);
+      const rnd = () => Math.random().toString(36).slice(2, 5);
+      const added: Edge[] = [];
+      if (inPort) {
+        added.push({
+          id: `e_${ts}_si_${rnd()}`,
+          source: edge.source,
+          target: newId,
+          sourceHandle: edge.sourceHandle,
+          targetHandle: handleId({ id: inPort.id, kind: 'input', category: origin.category }),
+          style: { stroke: edgeStrokeFor(origin.category), strokeWidth: 2 },
+        });
+      }
+      if (outPort && consumer) {
+        added.push({
+          id: `e_${ts}_so_${rnd()}`,
+          source: newId,
+          target: edge.target,
+          sourceHandle: handleId({ id: outPort.id, kind: 'output', category: consumer.category }),
+          targetHandle: edge.targetHandle,
+          style: { stroke: edgeStrokeFor(consumer.category), strokeWidth: 2 },
+        });
+      }
+      setEdges(eds => [
+        ...eds.filter(e => e.id !== edgeId).map(e => (e.selected ? { ...e, selected: false } : e)),
+        ...added,
+      ]);
+      scheduleSync();
+    },
+    [consumerOriginOf, pushCurrentSnapshot, scheduleSync, setNodes, setEdges],
   );
 
   /** DISSOLVE reroutes — remove the dots but KEEP the wiring (Blender's term for
@@ -2617,13 +2749,22 @@ export function GraphEditorInner() {
     dissolveReroutes([nodeId]);
   }, [dissolveReroutes]);
 
-  // Press-and-hold gesture to CREATE a reroute on a wire: LMB-press on a wire and
-  // hold ~0.55s to drop a reroute that then follows the cursor until release
-  // (splitting the wire). A quick click / drag below the hold threshold is left
-  // untouched, so wire double-click-delete, edge selection, and RMB-pan all keep
-  // working. Repositioning an EXISTING reroute is just a normal node drag (the
-  // node is draggable), so it also moves as part of a multi-selection — the
-  // gesture deliberately only targets edges, never reroute nodes. Mirrors the
+  /** Latest-ref for the link-splice menu opener. The press-and-hold listener is
+   *  registered ONCE (empty dep array, so a gesture can never be interrupted by a
+   *  re-registration mid-hold) and must not close over a stale opener; the real
+   *  implementation is installed next to the context-menu machinery below and
+   *  returns whether the menu actually opened. */
+  const openLinkSpliceMenuRef = useRef<(edgeId: string, x: number, y: number) => boolean>(() => false);
+
+  // Press-and-hold gesture to SPLICE a node into a wire: LMB-press on a wire and
+  // hold ~0.55s to open the searchable add-node menu, filtered to the nodes
+  // compatible with that wire's SOURCE (plus the Reroute entry). Picking one
+  // wires it INTO the link; picking Reroute is the historical split-with-a-dot.
+  // A quick click / drag below the hold threshold is left untouched, so wire
+  // double-click-delete, edge selection, and RMB-pan all keep working.
+  // Repositioning an EXISTING reroute is just a normal node drag (the node is
+  // draggable), so it also moves as part of a multi-selection — the gesture
+  // deliberately only targets edges, never reroute nodes. Mirrors the
   // capture-phase pattern of the RMB-through-edges handler above.
   useEffect(() => {
     const wrapper = editorWrapperRef.current;
@@ -2632,15 +2773,11 @@ export function GraphEditorInner() {
     const MOVE_TOL = 6; // px; movement beyond this before the hold fires cancels
 
     type Gesture = {
-      phase: 'holding' | 'dragging';
       edgeId: string;           // the wire being split
-      rerouteId: string | null; // the reroute created once the hold fires
       startX: number; startY: number;
       timer: number;
     };
     let g: Gesture | null = null;
-
-    const toFlow = (cx: number, cy: number) => rfInstance.current?.screenToFlowPosition({ x: cx, y: cy }) ?? null;
 
     function teardownListeners() {
       window.removeEventListener('pointermove', onMove, true);
@@ -2654,51 +2791,35 @@ export function GraphEditorInner() {
     }
     function fire(cx: number, cy: number) {
       if (!g) return;
-      const flow = toFlow(cx, cy);
-      if (!flow) { cancel(); return; }
-      pushCurrentSnapshot(); // so undo restores the un-split wire
-      const newId = insertRerouteOnEdge(g.edgeId, flow);
-      if (!newId) { cancel(); return; }
-      g.rerouteId = newId;
-      g.phase = 'dragging';
-      moveRerouteTo(newId, flow);
+      const edgeId = g.edgeId;
+      // The gesture is done the moment the menu opens — the pointer is still
+      // down, but everything from here is menu interaction. Its pointerup would
+      // otherwise reach the wrapper's onClick and close the menu we just opened,
+      // hence the suppression flag (same as the connection-drop menu).
+      cancel();
+      if (!openLinkSpliceMenuRef.current(edgeId, cx, cy)) return;
+      suppressNextEditorClickRef.current = true;
     }
     function onMove(e: PointerEvent) {
       if (!g) return;
-      if (g.phase === 'holding') {
-        const dx = e.clientX - g.startX, dy = e.clientY - g.startY;
-        if (dx * dx + dy * dy > MOVE_TOL * MOVE_TOL) cancel();
-        return;
-      }
-      // dragging — isolate from React Flow and move the reroute
-      e.preventDefault();
-      e.stopPropagation();
-      const flow = toFlow(e.clientX, e.clientY);
-      if (flow && g.rerouteId) moveRerouteTo(g.rerouteId, flow);
+      const dx = e.clientX - g.startX, dy = e.clientY - g.startY;
+      if (dx * dx + dy * dy > MOVE_TOL * MOVE_TOL) cancel();
     }
-    function onUp(e: PointerEvent) {
-      if (!g) return;
-      if (g.phase === 'dragging') {
-        e.preventDefault();
-        e.stopPropagation();
-        scheduleSync();
-      }
+    function onUp() {
       cancel();
     }
     function onDown(e: PointerEvent) {
       if (e.button !== 0 || g) return; // LMB only; ignore re-entrancy
       const target = e.target as Element | null;
       if (!target) return;
-      // Only wires trigger create-on-hold. Existing reroutes use normal node drag,
-      // so we never intercept them here (that's what lets a selection carry them).
+      // Only wires trigger the hold. Existing reroutes use normal node drag, so
+      // we never intercept them here (that's what lets a selection carry them).
       const edgeEl = target.closest('.react-flow__edge');
       if (!edgeEl) return;
       const edgeId = edgeEl.getAttribute('data-id');
       if (!edgeId) return;
       g = {
-        phase: 'holding',
         edgeId,
-        rerouteId: null,
         startX: e.clientX,
         startY: e.clientY,
         timer: window.setTimeout(() => fire(e.clientX, e.clientY), HOLD_MS),
@@ -2710,7 +2831,7 @@ export function GraphEditorInner() {
     }
     wrapper.addEventListener('pointerdown', onDown, true);
     return () => { wrapper.removeEventListener('pointerdown', onDown, true); cancel(); };
-  }, [pushCurrentSnapshot, scheduleSync, moveRerouteTo, insertRerouteOnEdge]);
+  }, []);
 
   /** After a snap-to-port node has been added, schedule a one-shot
    *  `requestAnimationFrame` that measures the actual port positions in the
@@ -3945,13 +4066,18 @@ export function GraphEditorInner() {
   const dropSearchRef = useRef<HTMLInputElement>(null);
 
   const dropMenuItems = useMemo<DropMenuItem[]>(() => {
-    // Shared by the connection-drop menu AND the pane quick-add menu (Spacebar /
-    // right-click on blank canvas). The only differences: the pane menu has no
-    // wire origin, so it offers no Reroute and applies no port-compatibility
-    // filter — it lists every node available to the model.
-    const targetType = contextMenu?.target.type;
-    if (targetType !== 'connection-drop' && targetType !== 'pane') return [];
-    const origin = contextMenu?.target.type === 'connection-drop' ? contextMenu.target.origin : null;
+    // Shared by the connection-drop menu, the LINK-SPLICE menu (press-and-hold a
+    // wire) AND the pane quick-add menu (Spacebar / right-click on blank canvas).
+    // The only differences: the pane menu has no wire origin, so it offers no
+    // Reroute and applies no port-compatibility filter — it lists every node
+    // available to the model. A link splice carries the split edge's own SOURCE
+    // output as its origin, so it gets the identical filter + Reroute entry.
+    const target = contextMenu?.target;
+    const targetType = target?.type;
+    if (targetType !== 'connection-drop' && targetType !== 'pane' && targetType !== 'link-splice') return [];
+    const origin = target && (target.type === 'connection-drop' || target.type === 'link-splice')
+      ? target.origin
+      : null;
     const q = dropMenuSearch.trim().toLowerCase();
     const textMatch = (label: string, desc?: string): boolean =>
       !q || label.toLowerCase().includes(q) || (desc ?? '').toLowerCase().includes(q);
@@ -3996,7 +4122,7 @@ export function GraphEditorInner() {
     setDropMenuSearch('');
     setDropMenuSelIdx(0);
     const t = contextMenu?.target.type;
-    if (t === 'connection-drop' || t === 'pane') {
+    if (t === 'connection-drop' || t === 'pane' || t === 'link-splice') {
       const timer = setTimeout(() => dropSearchRef.current?.focus(), 50);
       return () => clearTimeout(timer);
     }
@@ -4026,7 +4152,7 @@ export function GraphEditorInner() {
   // Keep the keyboard selection visible while arrowing through a long menu.
   useEffect(() => {
     const t = contextMenu?.target.type;
-    if (t !== 'connection-drop' && t !== 'pane') return;
+    if (t !== 'connection-drop' && t !== 'pane' && t !== 'link-splice') return;
     const key = dropItemsRef.current[dropMenuSelIdx]?.key;
     if (!key) return;
     contextMenuRef.current?.querySelector(`[data-drop-key="${CSS.escape(key)}"]`)?.scrollIntoView({ block: 'nearest' });
@@ -4039,12 +4165,74 @@ export function GraphEditorInner() {
       const origin = contextMenu.target.origin;
       if (item.kind === 'reroute') addRerouteAndConnect(origin, pos);
       else addNodeAndConnect(item.def.type, pos, origin);
+    } else if (contextMenu.target.type === 'link-splice') {
+      // LINK SPLICE (press-and-hold a wire). Reroute reproduces the historical
+      // gesture exactly — split the wire with a dot at the hold point; any other
+      // node is spliced in (source → node → old consumer).
+      const { edgeId } = contextMenu.target;
+      if (item.kind === 'reroute') {
+        // Pre-check so a stale edge (deleted / undone while the menu was open)
+        // can't push an empty undo snapshot.
+        if (edgesRef.current.some(e => e.id === edgeId)) {
+          pushCurrentSnapshot();
+          insertRerouteOnEdge(edgeId, pos);
+          scheduleSync();
+        }
+      } else {
+        spliceNodeIntoEdge(edgeId, item.def.type, pos);
+      }
     } else if (contextMenu.target.type === 'pane') {
       // Pane quick-add (Spacebar / right-click): plain node creation, no wiring.
       if (item.kind === 'node') addNodeAtPosition(item.def.type, pos);
     }
     setContextMenu(null);
-  }, [contextMenu, addRerouteAndConnect, addNodeAndConnect, addNodeAtPosition]);
+  }, [contextMenu, addRerouteAndConnect, addNodeAndConnect, addNodeAtPosition,
+    insertRerouteOnEdge, spliceNodeIntoEdge, pushCurrentSnapshot, scheduleSync]);
+
+  /** Open the LINK-SPLICE menu for `edgeId` at a client point. Returns false (and
+   *  opens nothing) when the edge or its source port can't be resolved. Shared by
+   *  the press-and-hold gesture and the DEV hook; installed into the latest-ref
+   *  the gesture listener reads. */
+  const openLinkSpliceMenu = useCallback((edgeId: string, x: number, y: number): boolean => {
+    const edge = edgesRef.current.find(e => e.id === edgeId);
+    if (!edge || !edge.sourceHandle) return false;
+    const sh = parseHandleId(edge.sourceHandle);
+    if (!sh) return false;
+    const srcNode = nodesRef.current.find(n => n.id === edge.source);
+    const info = srcNode ? getOriginPortInfo(srcNode, sh.portId, modelRef.current) : null;
+    const origin: ConnectionOrigin = {
+      nodeId: edge.source,
+      portId: sh.portId,
+      kind: 'output',
+      category: info?.category ?? sh.category,
+      dataType: info?.dataType,
+      isArray: info?.isArray,
+      arrayCapable: info?.arrayCapable,
+      compositeCapable: info?.compositeCapable,
+    };
+    const rf = rfInstance.current;
+    const flowPos = rf ? rf.screenToFlowPosition({ x, y }) : { x: 0, y: 0 };
+    const bounds = editorWrapperRef.current?.getBoundingClientRect();
+    setContextMenu({
+      x: x - (bounds?.left ?? 0),
+      y: y - (bounds?.top ?? 0),
+      flowX: flowPos.x,
+      flowY: flowPos.y,
+      target: { type: 'link-splice', origin, edgeId },
+    });
+    return true;
+  }, []);
+  openLinkSpliceMenuRef.current = openLinkSpliceMenu;
+
+  // DEV-only test hook: React Flow edges can't be driven by synthetic pointer
+  // events (the press-and-hold never fires), so browser-eval tests open the
+  // link-splice menu through this. Same precedent as __openConnectionDropMenu.
+  useEffect(() => {
+    if (!import.meta.env.DEV) return undefined;
+    (window as unknown as Record<string, unknown>).__openLinkSpliceMenu =
+      (edgeId: string, x: number, y: number) => openLinkSpliceMenu(edgeId, x, y);
+    return () => { delete (window as unknown as Record<string, unknown>).__openLinkSpliceMenu; };
+  }, [openLinkSpliceMenu]);
 
   // DEV-only test hook: React Flow's connection drag ignores synthetic pointer
   // events (same limitation as box-select / ctrl-click — see CLAUDE.md), so
@@ -4676,7 +4864,8 @@ export function GraphEditorInner() {
   // blank canvas). `dropMenuItems` already encodes the right filter per target
   // (compatible nodes for connection-drop; every available node for pane).
   const renderQuickAddSearch = (placeholder: string, emptyText: string) => {
-    const origin = contextMenu?.target.type === 'connection-drop' ? contextMenu.target.origin : null;
+    const mt = contextMenu?.target;
+    const origin = mt && (mt.type === 'connection-drop' || mt.type === 'link-splice') ? mt.origin : null;
     const effIdx = dropMenuItems.length > 0 ? Math.min(dropMenuSelIdx, dropMenuItems.length - 1) : -1;
     // Flat keyboard-selectable rows with category headers interleaved (the flat
     // index drives ↑/↓).
@@ -4973,6 +5162,23 @@ export function GraphEditorInner() {
               <>
                 <div className={styles.contextTitle}>{titleText}</div>
                 {renderQuickAddSearch('Search… (Enter adds + wires)', `No compatible nodes${dropMenuSearch ? ' match' : ''}`)}
+              </>
+            );
+          })()}
+
+          {/* LINK-SPLICE context menu (press-and-hold a wire → insert a node INTO it) */}
+          {contextMenu.target.type === 'link-splice' && (() => {
+            const origin = contextMenu.target.origin;
+            const titleText = origin.category === 'flow'
+              ? 'Insert into link · flow'
+              : `Insert into link · ${origin.dataType ?? 'value'}`;
+            return (
+              <>
+                <div className={styles.contextTitle}>{titleText}</div>
+                {renderQuickAddSearch(
+                  'Search… (Enter inserts + rewires)',
+                  `No compatible nodes${dropMenuSearch ? ' match' : ''}`,
+                )}
               </>
             );
           })()}
