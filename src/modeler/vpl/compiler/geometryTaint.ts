@@ -293,7 +293,7 @@ const NODE_LABEL: Record<string, string> = {
   addAgentToWorld: 'Add Agent To World', setVariable: 'Set Variable',
   setArrayElement: 'Set Array Element', getVariable: 'Get Variable',
   aggregate: 'Aggregate', groupOperator: 'Group Reduce', statement: 'Compare',
-  logicOperator: 'Logic', arithmeticOperator: 'Math', expression: 'Expression',
+  logicOperator: 'Logic', arithmeticOperator: 'Math', expression: 'Math Expression',
   valueSwitch: 'Value Switch', lookupInteraction: 'Table Lookup',
   conditional: 'If / Then', switch: 'Switch', loop: 'Loop', sequence: 'Sequence',
   applyForce: 'Apply Force', setVelocity: 'Set Velocity',
