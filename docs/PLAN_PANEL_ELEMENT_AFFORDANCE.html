@@ -1,0 +1,272 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>GenesisCA — Panel element affordance</title>
+<style>
+  :root { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+  body { margin: 0; padding: 32px; background: #0c0d10; color: #ecebe6; line-height: 1.55; }
+  .wrap { max-width: 1180px; margin: 0 auto; }
+  h1 { font-size: 1.45rem; margin: 0 0 4px; letter-spacing: -0.01em; }
+  h2 { font-size: 1rem; margin: 38px 0 6px; padding-bottom: 6px; border-bottom: 1px solid #2a2d35;
+       text-transform: uppercase; letter-spacing: 0.07em; color: #e8a13a; font-weight: 700; }
+  h3 { font-size: 0.82rem; margin: 20px 0 8px; text-transform: uppercase; letter-spacing: 0.06em; color: #a8a59b; }
+  p  { font-size: 0.86rem; color: #c4c1b8; max-width: 78ch; }
+  code { font-family: ui-monospace, "SF Mono", Consolas, monospace; font-size: 0.85em;
+         background: rgba(255,255,255,.06); padding: 1px 5px; border-radius: 3px; color: #ecebe6; }
+  .sub { color: #908d83; font-size: 0.82rem; margin: 0 0 8px; }
+
+  /* ---------- theme swatch frames ---------- */
+  .themes { display: flex; gap: 22px; flex-wrap: wrap; }
+  .theme  { flex: 1 1 400px; min-width: 360px; }
+  .theme > .cap { font-size: 0.7rem; text-transform: uppercase; letter-spacing: .09em;
+                  color: #908d83; margin-bottom: 6px; font-weight: 700; }
+
+  /* A faux Modeler panel. Tokens are inlined per theme, exactly as tokens.css defines them. */
+  .panel { border-radius: 6px; padding: 14px 12px 16px; }
+  .panel.nocturne { --bg-panel:#16181d; --overlay-row:rgba(255,255,255,.025); --hover-bg:rgba(255,255,255,.06);
+                    --border:#2a2d35; --widget-border:#262a31; --border-muted:#20232a;
+                    --accent:#e8a13a; --accent-soft:rgba(232,161,58,.16); --accent-strong:rgba(232,161,58,.42);
+                    --text-primary:#ecebe6; --text-secondary:#c4c1b8; --text-tertiary:#908d83;
+                    --text-muted:#6f6c64; --emphasis:#c4c1b8; --heading:#ecebe6; }
+  .panel.blender  { --bg-panel:#3d3d3d; --overlay-row:rgba(255,255,255,.03); --hover-bg:rgba(255,255,255,.07);
+                    --border:#1d1d1d; --widget-border:#3a3a3a; --border-muted:#353535;
+                    --accent:#4772b3; --accent-soft:rgba(71,114,179,.18); --accent-strong:rgba(71,114,179,.45);
+                    --text-primary:#e6e6e6; --text-secondary:#d0d0d0; --text-tertiary:#989898;
+                    --text-muted:#898989; --emphasis:#d0d0d0; --heading:#e6e6e6; }
+  .panel { background: var(--bg-panel); }
+
+  .secTitle { font-size: .64rem; font-weight: 600; text-transform: uppercase; letter-spacing: .06em;
+              color: var(--heading); margin-bottom: 7px; padding-bottom: 4px;
+              border-bottom: 1px solid var(--border-muted); }
+  .list { display: flex; flex-direction: column; gap: 2px; }
+
+  /* ---------- BEFORE: today's row ---------- */
+  .rowOld { display:flex; align-items:center; gap:6px; padding:4px 8px;
+            background: var(--overlay-row); border-radius: 4px;
+            font-size:.78rem; color: var(--text-secondary); cursor: pointer; }
+  .rowOld.hov { background: var(--hover-bg); }
+  .rowOld.sel { background: var(--accent-soft); border:1px solid var(--accent-strong); padding:3px 7px; }
+
+  /* ---------- AFTER: object row ---------- */
+  .rowNew { position:relative; display:flex; align-items:center; gap:6px; padding:4px 8px;
+            background: var(--overlay-row); border:1px solid var(--border); border-radius:4px;
+            font-size:.78rem; color: var(--text-secondary); cursor: pointer; }
+  /* the drag rail — draggable rows only */
+  .rowNew.drag { cursor: grab; }
+  .rowNew.drag::before { content:""; position:absolute; left:0; top:3px; bottom:3px; width:3px;
+                         border-radius:0 2px 2px 0; background: var(--text-muted); }
+  .rowNew.drag.hov { background: var(--hover-bg); border-color: var(--accent-strong); }
+  .rowNew.drag.hov::before { background: var(--accent); }
+  .rowNew.sel { background: var(--accent-soft); border-color: var(--accent); }
+  .rowNew.sel.drag::before { background: var(--accent); }
+
+  .nm  { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-weight:500; }
+  .bdg { font-size:.56rem; font-weight:600; text-transform:uppercase; letter-spacing:.04em;
+         color: var(--emphasis); flex-shrink:0; }
+  .hnd { flex-shrink:0; width:16px; text-align:center; color: var(--text-tertiary);
+         font-size:.8rem; letter-spacing:-.08em; line-height:1; }
+  .thumb { width:18px;height:18px;border-radius:3px;flex:0 0 auto;
+           background:#0a0b0e; display:flex;align-items:center;justify-content:center; }
+
+  .tag { display:inline-block; font-size:.58rem; font-weight:700; letter-spacing:.07em;
+         text-transform:uppercase; padding:1px 6px; border-radius:3px; margin-left:6px; vertical-align:2px; }
+  .tagA { background:rgba(232,161,58,.16); color:#e8a13a; }
+  .tagB { background:rgba(106,190,106,.16); color:#6abe6a; }
+  .tagN { background:rgba(255,255,255,.07); color:#908d83; }
+
+  table { border-collapse:collapse; font-size:.8rem; margin-top:10px; }
+  th,td { border:1px solid #2a2d35; padding:6px 10px; text-align:left; }
+  th { background:rgba(255,255,255,.04); color:#ecebe6; font-weight:600; }
+  td.good { color:#6abe6a; } td.bad { color:#d65a5a; }
+  .note { border-left:3px solid #e8a13a; background:rgba(232,161,58,.07);
+          padding:10px 14px; margin:14px 0; font-size:.84rem; border-radius:0 4px 4px 0; }
+  .note b { color:#e8a13a; }
+  .legend { display:flex; gap:18px; flex-wrap:wrap; font-size:.75rem; color:#908d83; margin:8px 0 14px; }
+  .legend span { display:flex; align-items:center; gap:6px; }
+  .sw { width:22px; height:12px; border-radius:3px; display:inline-block; }
+</style>
+</head>
+<body><div class="wrap">
+
+<h1>Panel element rows — reading as interactable objects</h1>
+<p class="sub">Illustrated plan for <code>docs/PLAN_PANEL_ELEMENT_AFFORDANCE.md</code> · both shipped themes ·
+tokens inlined exactly as <code>src/styles/tokens.css</code> defines them.</p>
+
+<h2>1 · Before — what the user is reporting</h2>
+<p>A model element row is a 2.5–3 % white wash with <b>no border</b>. It reads as a line of text, not as an
+object you can pick up — yet ten of these row kinds are draggable straight onto the graph canvas.
+Nothing on the row says so. Selecting a row also <b>shifts the list by 2 px</b>, because only the
+selected state declares a border.</p>
+
+<div class="themes">
+  <div class="theme"><div class="cap">Nocturne — today</div>
+    <div class="panel nocturne">
+      <div class="secTitle">Cell Attributes</div>
+      <div class="list">
+        <div class="rowOld"><span class="nm">alive</span><span class="bdg">Binary</span><span class="hnd">⋮⋮</span></div>
+        <div class="rowOld hov"><span class="nm">energy</span><span class="bdg">Decimal</span><span class="hnd">⋮⋮</span></div>
+        <div class="rowOld sel"><span class="nm">species</span><span class="bdg">Tag</span><span class="hnd">⋮⋮</span></div>
+        <div class="rowOld"><span class="nm">age</span><span class="bdg">Integer</span><span class="hnd">⋮⋮</span></div>
+      </div>
+    </div>
+  </div>
+  <div class="theme"><div class="cap">Blender — today</div>
+    <div class="panel blender">
+      <div class="secTitle">Cell Attributes</div>
+      <div class="list">
+        <div class="rowOld"><span class="nm">alive</span><span class="bdg">Binary</span><span class="hnd">⋮⋮</span></div>
+        <div class="rowOld hov"><span class="nm">energy</span><span class="bdg">Decimal</span><span class="hnd">⋮⋮</span></div>
+        <div class="rowOld sel"><span class="nm">species</span><span class="bdg">Tag</span><span class="hnd">⋮⋮</span></div>
+        <div class="rowOld"><span class="nm">age</span><span class="bdg">Integer</span><span class="hnd">⋮⋮</span></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<h2>2 · After — object rows + a drag rail</h2>
+<div class="legend">
+  <span><i class="sw" style="background:#2a2d35"></i> row outline <code>--color-border</code></span>
+  <span><i class="sw" style="background:#6f6c64"></i> rail at rest <code>--color-text-muted</code></span>
+  <span><i class="sw" style="background:#e8a13a"></i> rail on hover / selected <code>--color-accent</code></span>
+</div>
+<p>Rows 1–4 are <b>draggable</b> (rail + <code>cursor: grab</code>). Row 5 is a <b>bond attribute</b> —
+not canvas-draggable, so it keeps <code>cursor: pointer</code> and gets <b>no rail</b>. The rail therefore
+means exactly one thing.</p>
+
+<div class="themes">
+  <div class="theme"><div class="cap">Nocturne — proposed</div>
+    <div class="panel nocturne">
+      <div class="secTitle">Cell Attributes</div>
+      <div class="list">
+        <div class="rowNew drag"><span class="nm">alive</span><span class="bdg">Binary</span><span class="hnd">⋮⋮</span></div>
+        <div class="rowNew drag hov"><span class="nm">energy</span><span class="bdg">Decimal</span><span class="hnd">⋮⋮</span></div>
+        <div class="rowNew drag sel"><span class="nm">species</span><span class="bdg">Tag</span><span class="hnd">⋮⋮</span></div>
+        <div class="rowNew drag"><span class="nm">age</span><span class="bdg">Integer</span><span class="hnd">⋮⋮</span></div>
+      </div>
+      <div class="secTitle" style="margin-top:14px">Bond Attributes</div>
+      <div class="list">
+        <div class="rowNew"><span class="nm">strength</span><span class="bdg">Decimal</span><span class="hnd">⋮⋮</span></div>
+      </div>
+    </div>
+  </div>
+  <div class="theme"><div class="cap">Blender — proposed</div>
+    <div class="panel blender">
+      <div class="secTitle">Cell Attributes</div>
+      <div class="list">
+        <div class="rowNew drag"><span class="nm">alive</span><span class="bdg">Binary</span><span class="hnd">⋮⋮</span></div>
+        <div class="rowNew drag hov"><span class="nm">energy</span><span class="bdg">Decimal</span><span class="hnd">⋮⋮</span></div>
+        <div class="rowNew drag sel"><span class="nm">species</span><span class="bdg">Tag</span><span class="hnd">⋮⋮</span></div>
+        <div class="rowNew drag"><span class="nm">age</span><span class="bdg">Integer</span><span class="hnd">⋮⋮</span></div>
+      </div>
+      <div class="secTitle" style="margin-top:14px">Bond Attributes</div>
+      <div class="list">
+        <div class="rowNew"><span class="nm">strength</span><span class="bdg">Decimal</span><span class="hnd">⋮⋮</span></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<h3>Row states, side by side</h3>
+<div class="themes">
+  <div class="theme"><div class="panel nocturne">
+    <div class="list">
+      <div class="rowNew drag"><span class="nm">at rest</span><span class="bdg">draggable</span></div>
+      <div class="rowNew drag hov"><span class="nm">hover</span><span class="bdg">grab</span></div>
+      <div class="rowNew drag sel"><span class="nm">selected</span><span class="bdg">editing</span></div>
+      <div class="rowNew"><span class="nm">at rest</span><span class="bdg">not draggable</span></div>
+      <div class="rowNew hov"><span class="nm">hover</span><span class="bdg">not draggable</span></div>
+    </div>
+  </div></div>
+  <div class="theme"><div class="panel blender">
+    <div class="list">
+      <div class="rowNew drag"><span class="nm">at rest</span><span class="bdg">draggable</span></div>
+      <div class="rowNew drag hov"><span class="nm">hover</span><span class="bdg">grab</span></div>
+      <div class="rowNew drag sel"><span class="nm">selected</span><span class="bdg">editing</span></div>
+      <div class="rowNew"><span class="nm">at rest</span><span class="bdg">not draggable</span></div>
+      <div class="rowNew hov"><span class="nm">hover</span><span class="bdg">not draggable</span></div>
+    </div>
+  </div></div>
+</div>
+
+<h2>3 · The whole surface it lands on</h2>
+<p>All of this rides the shared <code>PanelContent.module.css</code> primitives, so every list inherits it
+at once — no per-panel fork.</p>
+<div class="themes">
+  <div class="theme"><div class="panel nocturne">
+    <div class="secTitle">Attribute → Color</div>
+    <div class="list">
+      <div class="rowNew drag"><span class="nm">default-viz</span><span class="bdg">A→C</span><span class="hnd">⋮⋮</span></div>
+      <div class="rowNew drag"><span class="nm">energy heat</span><span class="bdg">A→C</span><span class="hnd">⋮⋮</span></div>
+    </div>
+    <div class="secTitle" style="margin-top:12px">Sprites</div>
+    <div class="list">
+      <div class="rowNew drag"><span class="thumb">
+        <svg width="12" height="12" viewBox="0 0 12 12"><polygon points="6,1 11,10 1,10" fill="#4f9c9c"/></svg>
+      </span><span class="nm">bird</span><span class="bdg">4f</span><span class="hnd">⋮⋮</span></div>
+    </div>
+  </div></div>
+  <div class="theme"><div class="panel blender">
+    <div class="secTitle">Neighborhoods</div>
+    <div class="list">
+      <div class="rowNew drag"><span class="nm">moore</span><span class="bdg">8 cells</span><span class="hnd">⋮⋮</span></div>
+      <div class="rowNew drag"><span class="nm">von neumann</span><span class="bdg">4 cells</span><span class="hnd">⋮⋮</span></div>
+    </div>
+    <div class="secTitle" style="margin-top:12px">Indicators</div>
+    <div class="list">
+      <div class="rowNew drag"><span class="nm">population</span><span class="bdg">Linked</span><span class="hnd">⋮⋮</span></div>
+    </div>
+  </div></div>
+</div>
+
+<h2>4 · The token trap this had to route around</h2>
+<div class="note">
+<b>The row outline is <code>--color-border</code>, never <code>--color-widget-border</code>.</b>
+The two themes need <em>opposite</em> edges: Nocturne is near-black, so definition comes from a
+<em>lighter</em> line; Blender's own idiom is a <em>darker</em> separator. <code>--color-widget-border</code>
+is the input/button outline, and its own token comment says it is “almost identical to panel bg —
+outlines virtually disappear” on Blender. Using it would fix the bug on Nocturne and leave Blender
+exactly as flat as today.
+</div>
+<table>
+  <tr><th>theme</th><th>panel surface</th><th><code>--color-widget-border</code></th><th><code>--color-border</code></th></tr>
+  <tr><td>Nocturne</td><td><code>#16181d</code></td><td class="good"><code>#262a31</code> — lighter, reads</td><td class="good"><code>#2a2d35</code> — lighter, reads</td></tr>
+  <tr><td>Blender</td><td><code>#3d3d3d</code></td><td class="bad"><code>#3a3a3a</code> — ≈ the surface, invisible</td><td class="good"><code>#1d1d1d</code> — darker, reads</td></tr>
+</table>
+
+<h3>Why the rail is a <code>::before</code>, not a border or a box-shadow</h3>
+<table>
+  <tr><th>technique</th><th>verdict</th></tr>
+  <tr><td><code>box-shadow: inset</code></td><td class="bad"><code>.dropIndicatorBefore/After</code> already own the row's
+    <code>box-shadow</code> during a reorder drag; a second rule would <em>replace</em> theirs, so the drop
+    indicator would vanish on exactly the rows that can be reordered.</td></tr>
+  <tr><td><code>border-left: 3px</code></td><td class="bad">Reflows the row's content by 3 px.</td></tr>
+  <tr><td><code>::before</code>, absolutely positioned</td><td class="good">Zero layout, no collision, inset from the
+    rounded corners.</td></tr>
+</table>
+
+<h2>5 · Which rows get the affordance</h2>
+<table>
+  <tr><th>panel · section</th><th>drag rail + <code>grab</code></th><th>why</th></tr>
+  <tr><td>Attributes — cell / agent</td><td class="good">yes</td><td>drags a Get/Set Attribute node</td></tr>
+  <tr><td>Attributes — model</td><td class="good">yes</td><td>drags Get Model Attribute</td></tr>
+  <tr><td>Attributes — <b>bond</b></td><td class="bad">no</td><td>no drag payload kind</td></tr>
+  <tr><td>Attributes — Local Variables</td><td class="good">yes</td><td>drags Get/Set Variable</td></tr>
+  <tr><td>Neighborhoods</td><td class="good">yes</td><td>drags the neighbour-reading nodes</td></tr>
+  <tr><td>Mappings — cell A→C · C→A</td><td class="good">yes</td><td>drags the Output/Input Mapping root</td></tr>
+  <tr><td>Mappings — agent A→C · C→A</td><td class="good">yes</td><td>drags the agent mapping roots</td></tr>
+  <tr><td>Mappings — Sprites</td><td class="good">yes</td><td>drags Set Agent Sprite</td></tr>
+  <tr><td>Mappings — <b>input-parameter editor row</b></td><td class="bad">no</td><td>a form container, not an element</td></tr>
+  <tr><td>Properties — Indicators</td><td class="good">yes</td><td>drags Get/Set Indicator</td></tr>
+  <tr><td>Variegated — <b>face patterns</b></td><td class="bad">no</td><td>no drag payload kind</td></tr>
+  <tr><td>Simulator — <b>presets</b></td><td class="bad">no</td><td>not canvas-draggable, and does not use this
+      stylesheet at all — untouched by construction</td></tr>
+</table>
+
+<h2>6 · What does not change</h2>
+<p>Click-to-select and the detail panel · the <code>application/genesisca-model-element</code> payloads and the
+drop menu · the <code>⋮⋮</code> reorder handles and their drop indicators · the add/duplicate/delete button rows ·
+auto-scroll on add · every existing <code>title</code> hint. No compiler, worker or engine file is opened.</p>
+
+</div></body>
+</html>

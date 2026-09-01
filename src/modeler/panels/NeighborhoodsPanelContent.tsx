@@ -343,7 +343,7 @@ export function NeighborhoodsPanelContent({ mode = 'list' }: PanelContentProps =
                 key={n.id}
                 id={`nbr-${i}`}
                 data-reorder-row
-                className={`${styles.listItem} ${selectedId === n.id ? styles.listItemSelected : ''} ${isDragging ? styles.draggingRow : ''} ${showBefore ? styles.dropIndicatorBefore : ''} ${showAfter ? styles.dropIndicatorAfter : ''}`}
+                className={`${styles.listItem} ${styles.listItemDraggable} ${selectedId === n.id ? styles.listItemSelected : ''} ${isDragging ? styles.draggingRow : ''} ${showBefore ? styles.dropIndicatorBefore : ''} ${showAfter ? styles.dropIndicatorAfter : ''}`}
                 onClick={() => setSelectedId(n.id)}
                 draggable
                 onDragStart={handleNeighborhoodDragStart(n.id)}

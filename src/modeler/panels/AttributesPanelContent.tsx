@@ -382,7 +382,7 @@ export function AttributesPanelContent({ mode = 'list' }: PanelContentProps = {}
                 key={attr.id}
                 id={`attr-${attr.id}`}
                 data-reorder-row
-                className={`${styles.listItem} ${sel === `attr:${attr.id}` ? styles.listItemSelected : ''} ${isDragging ? styles.draggingRow : ''} ${showBefore ? styles.dropIndicatorBefore : ''} ${showAfter ? styles.dropIndicatorAfter : ''}`}
+                className={`${styles.listItem} ${styles.listItemDraggable} ${sel === `attr:${attr.id}` ? styles.listItemSelected : ''} ${isDragging ? styles.draggingRow : ''} ${showBefore ? styles.dropIndicatorBefore : ''} ${showAfter ? styles.dropIndicatorAfter : ''}`}
                 onClick={() => selectAttr(attr.id)}
                 draggable
                 onDragStart={handleRowDragStart(buildAttrDragPayload(attr))}
@@ -442,7 +442,7 @@ export function AttributesPanelContent({ mode = 'list' }: PanelContentProps = {}
                 key={attr.id}
                 id={`attr-${attr.id}`}
                 data-reorder-row
-                className={`${styles.listItem} ${sel === `attr:${attr.id}` ? styles.listItemSelected : ''} ${isDragging ? styles.draggingRow : ''} ${showBefore ? styles.dropIndicatorBefore : ''} ${showAfter ? styles.dropIndicatorAfter : ''}`}
+                className={`${styles.listItem} ${styles.listItemDraggable} ${sel === `attr:${attr.id}` ? styles.listItemSelected : ''} ${isDragging ? styles.draggingRow : ''} ${showBefore ? styles.dropIndicatorBefore : ''} ${showAfter ? styles.dropIndicatorAfter : ''}`}
                 onClick={() => selectAttr(attr.id)}
                 draggable
                 onDragStart={handleRowDragStart(buildAttrDragPayload(attr))}
