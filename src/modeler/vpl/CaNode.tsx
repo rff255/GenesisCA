@@ -1453,9 +1453,19 @@ function CaNodeComponent({ id, data, selected }: NodeProps) {
   // Linked-copies badge (Blender-style): how many macro instances share this
   // node's MacroDef. Only shown at 2+ (single-user macros show nothing).
   // (`macroDefId` is hoisted above `configIssues` — the control roll-up needs it.)
+  //
+  // ⚠ THE DEPS LIST EVERY GRAPH STORE `countMacroInstances` WALKS, and it must
+  // keep doing so. "Linked" is a MODEL-WIDE property — a duplicate made on the
+  // Agents or Overseer graph is just as linked as one on the Cells graph — so a
+  // dep array that stops at `graphNodes` leaves the badge frozen at its stale
+  // count for every edit made on another graph. (The shipped bug was BOTH
+  // halves at once: the walk skipped those stores AND the memo never re-ran, so
+  // a linked duplicate on the Agents graph counted 1 and no badge ever appeared.
+  // CaNode re-renders on the ModelContext change regardless of its memo
+  // comparator, so the dep array is the only thing gating the recount.)
   const linkCount = useMemo(
     () => (typeof macroDefId === 'string' && macroDefId.length > 0 ? countMacroInstances(model, macroDefId) : 0),
-    [model.graphNodes, model.macroDefs, macroDefId],
+    [model.graphNodes, model.agentGraphNodes, model.overseerGraphNodes, model.macroDefs, macroDefId],
   );
   const [showLinkMenu, setShowLinkMenu] = useState(false);
   /** Break the link for THIS instance only: clone the MacroDef and retarget the node. */

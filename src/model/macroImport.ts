@@ -143,26 +143,51 @@ export function cloneMacroWithFreshIds(rawIn: MacroDef): MacroDef {
 
 /**
  * Count how many macro instances in the model reference a given MacroDef id.
- * Walks the top-level graph AND every macro's subgraph (instances can be nested
- * inside other macros). Used for the "linked copies" count badge on macro nodes
- * and shared with the palette's project-macro reference filter / undoMacro's
- * ref-check — instances sharing one macroDefId are "linked" (editing one's
- * internals changes all).
+ *
+ * THE ONE model-wide macro-instance walk. It visits ALL FOUR stores — the Cells
+ * graph, the Agents graph, the Overseer graph and every macro's subgraph
+ * (instances nest inside other macros) — because "linked" is a MODEL-WIDE
+ * property: instances sharing one macroDefId all change when any one's
+ * internals are edited, wherever they happen to live. Consumers: the
+ * "linked copies" count badge on a macro node (CaNode), `undoMacro`'s
+ * def-removal ref-check, and `countInstancesEverywhere` (macroMoveScope), which
+ * is a thin alias so the move-across-a-boundary gesture and the badge can never
+ * disagree about what "how many instances" means.
+ *
+ * ⚠ IT WALKED ONLY `graphNodes` + `macroDefs` UNTIL 2026-09 — it predated the
+ * Agents and Overseer graphs — so a linked duplicate made on either of those
+ * counted 1 and the badge (shown at 2+) never appeared there. Any NEW top-level
+ * graph store must be added to the `visit` list below, and to the caller's
+ * memo/effect dependency arrays (a right answer that is never recomputed is the
+ * same bug wearing a different hat).
+ *
+ * `excludeNodeId` skips one instance by node id — `undoMacro` needs it because
+ * the model's copy of the live graph can still hold the very node being undone
+ * (the canvas→model sync is debounced).
  */
 export function countMacroInstances(
-  model: { graphNodes: GraphNode[]; macroDefs?: MacroDef[] },
+  model: {
+    graphNodes?: GraphNode[];
+    agentGraphNodes?: GraphNode[];
+    overseerGraphNodes?: GraphNode[];
+    macroDefs?: MacroDef[];
+  },
   macroDefId: string,
+  excludeNodeId?: string,
 ): number {
   if (!macroDefId) return 0;
   let count = 0;
-  const visit = (nodes: GraphNode[]) => {
-    for (const n of nodes) {
+  const visit = (nodes: GraphNode[] | undefined) => {
+    for (const n of nodes ?? []) {
       if (n.data?.nodeType !== 'macro') continue;
+      if (excludeNodeId !== undefined && n.id === excludeNodeId) continue;
       const cfg = n.data.config as Record<string, unknown> | undefined;
       if (cfg?.macroDefId === macroDefId) count++;
     }
   };
   visit(model.graphNodes);
+  visit(model.agentGraphNodes);
+  visit(model.overseerGraphNodes);
   for (const md of model.macroDefs || []) visit(md.nodes);
   return count;
 }

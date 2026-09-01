@@ -41,7 +41,7 @@ import { slotVectorDims } from './compiler/multiAttrExpand';
 import { makeCompositeTypeResolver, editorPortCompositeType, rerouteCompositeType, RELAY_BRANCH_PORTS } from './compiler/compositeRelay';
 import type { GraphNode, GraphEdge, CAModel } from '../../model/types';
 import type { MacroDef, MacroPort } from '../../model/types';
-import { cloneMacroWithFreshIds } from '../../model/macroImport';
+import { cloneMacroWithFreshIds, countMacroInstances } from '../../model/macroImport';
 import {
   collectMacroDefBundle,
   nestedMacroDefIds,
@@ -4302,31 +4302,40 @@ export function GraphEditorInner() {
       ...reconnectedOutputEdges,
     ]);
 
-    // Remove macro definition — but only if no OTHER macro instance still
-    // references it. Duplicating a macro now clones its def (so each instance
-    // has its own), but older saved files or hand-edited JSON could still
-    // share a def across multiple instances. Keeping the def alive when there
-    // are remaining references prevents Undo Macro on one from silently
+    // Remove macro definition, but only if no OTHER macro instance still
+    // references it. Duplicating a macro clones its def by default (so each
+    // instance has its own), but Duplicate LINKED, a Project-Macro palette drop
+    // and older saved files all share a def across instances. Keeping the def
+    // alive while references remain prevents Undo Macro on one from silently
     // breaking the others.
+    //
+    // TWO sources, deliberately. `freshNodes` is the LIVE canvas (the model copy
+    // of the graph being edited can lag by one debounced sync), and
+    // `countMacroInstances` is THE model-wide walk -- Cells + Agents + Overseer +
+    // every macro subgraph. Before it was widened this check saw only the Cells
+    // graph and `macroDefs`, so undoing the last CELLS instance deleted a def a
+    // linked instance on the Agents or Overseer graph was still using.
+    //
+    // `macroNodeId` is excluded because the model may still hold the very node
+    // being undone. Adding the model-wide term can therefore only ever make
+    // `otherInstanceExists` MORE true -- it can only KEEP a def, never delete
+    // one -- so any residual staleness is harmless (an unreferenced def is
+    // hidden from the palette anyway; see the documented Undo asymmetry).
     const otherInstanceExists =
       freshNodes.some(n =>
         n.id !== macroNodeId
         && (n.data as Record<string, unknown>)?.nodeType === 'macro'
         && ((n.data as Record<string, unknown>).config as Record<string, unknown> | undefined)?.macroDefId === macroDefId,
       )
-      || (model.macroDefs || []).some(other =>
-        other.id !== macroDefId
-        && other.nodes.some(n =>
-          (n.data as Record<string, unknown>)?.nodeType === 'macro'
-          && ((n.data as Record<string, unknown>).config as Record<string, unknown> | undefined)?.macroDefId === macroDefId,
-        ),
-      );
+      || countMacroInstances(model, macroDefId, macroNodeId) > 0;
     if (!otherInstanceExists) {
       removeMacro(macroDefId);
     }
     scheduleSync();
     setContextMenu(null);
-  }, [contextMenu, getNodes, edges, model.macroDefs, removeMacro, setNodes, setEdges, scheduleSync]);
+  // `model` (whole) rather than `model.macroDefs`: the ref-check is now the
+  // model-wide `countMacroInstances`, which reads every graph store too.
+  }, [contextMenu, getNodes, edges, model, removeMacro, setNodes, setEdges, scheduleSync]);
 
 
   // =========================================================================

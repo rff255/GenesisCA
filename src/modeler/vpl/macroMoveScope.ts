@@ -69,6 +69,10 @@
 import type { GraphEdge, GraphNode, MacroControl, MacroDef } from '../../model/types';
 import { handleId, parseHandleId } from './types';
 import { applyInterfaceEdit } from './explicitControls';
+// THE one model-wide macro-instance walk (see `countInstancesEverywhere` below).
+// Dependency-light: macroImport's transitive closure is `./types` plus pure,
+// type-only node migrations -- no DOM, no React, nothing this module minds.
+import { countMacroInstances } from '../../model/macroImport';
 
 // ---------------------------------------------------------------------------
 // Small shared helpers
@@ -99,10 +103,14 @@ export function filterMovableIds(nodes: GraphNode[], ids: Iterable<string>): str
 /**
  * How many instances of `defId` exist ANYWHERE in the model.
  *
- * ⚠ Deliberately NOT `macroImport.countMacroInstances`, which walks only
- * `graphNodes` + `macroDefs` — it predates the Agents and Overseer graphs. A
- * move-OUT is refused above 1, so an instance this missed would let the gesture
- * silently strip a computation out of a graph the user was not even looking at.
+ * A thin alias for `macroImport.countMacroInstances`, which is THE one
+ * model-wide macro-instance walk. It kept its own copy until 2026-09, because
+ * the shared one visited only `graphNodes` + `macroDefs` and so predated the
+ * Agents and Overseer graphs -- but two walks is precisely the drift this module
+ * warns about elsewhere, and the split shipped a real bug: the linked-copies
+ * BADGE (which used the narrow one) never appeared for a duplicate made on the
+ * Agents or Overseer graph. One walk now, so a move-OUT refusal and the badge
+ * can never disagree about how many instances exist.
  */
 export function countInstancesEverywhere(
   model: {
@@ -113,19 +121,7 @@ export function countInstancesEverywhere(
   },
   defId: string,
 ): number {
-  if (!defId) return 0;
-  let n = 0;
-  const visit = (nodes: GraphNode[] | undefined) => {
-    for (const node of nodes ?? []) {
-      if (node.data?.nodeType !== 'macro') continue;
-      if ((node.data.config as Record<string, unknown> | undefined)?.macroDefId === defId) n++;
-    }
-  };
-  visit(model.graphNodes);
-  visit(model.agentGraphNodes);
-  visit(model.overseerGraphNodes);
-  for (const m of model.macroDefs ?? []) visit(m.nodes);
-  return n;
+  return countMacroInstances(model, defId);
 }
 
 /** Where a def's single instance lives, and the store to write back. */
