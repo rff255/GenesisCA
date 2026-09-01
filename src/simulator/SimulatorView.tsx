@@ -41,7 +41,7 @@ import { emitAgentForcePassWGSL } from '../modeler/vpl/compiler/agentWebgpu/forc
 import type { AgentRenderSnapshot } from './engine/agentEngine';
 import type { AgentRenderView, AgentRenderView3D } from './engine/agentWebgpuRuntime';
 import { AGENT_SPRITE_ATLAS_CELL, AGENT_SPRITE_MAX_LAYERS, type AgentSpriteAtlasPayload, type AgentSpriteSlot } from './engine/agentSpriteAtlas';
-import { SpriteRegistry } from './spriteRegistry';
+import { SpriteRegistry, type DecodedSprite } from './spriteRegistry';
 import { glowEncodeScale, glowTransferTable } from './glowTone';
 import { ImageMappingDialog, type ImageMappingConfig } from './ImageMappingDialog';
 import { CsvImportDialog, type CsvImportResult } from './CsvImportDialog';
@@ -793,6 +793,88 @@ export function spriteSpan(diameter: number, assetScale: number, perAgentScale: 
  *  floors the resulting SPAN at the same number for the same reason. 3D floors
  *  neither (its discs are unfloored world-unit spheres). */
 const MIN_SPRITE_SPAN_PX = 2.4;
+
+/** One agent's resolved 2D sprite draw — everything `drawImage` needs, in SCREEN
+ *  units, with the CENTRE supplied by the caller (each path has its own transform). */
+interface ResolvedSpriteDraw {
+  bmp: ImageBitmap;
+  /** Destination size, aspect-shaped so the LONGEST side is `spanPx`. */
+  dw: number; dh: number;
+  /** Clockwise screen rotation in DEGREES (0 = draw axis-aligned). */
+  rotDeg: number;
+  /** The agent colour's alpha, 0..1 (a sprite is never tinted — only faded). */
+  alpha: number;
+}
+
+/** THE 2D SPRITE RESOLUTION — size, frame, facing and alpha for ONE agent, shared
+ *  by every 2D path that draws sprites: the display overlay AND the
+ *  simulation-scope capture (`renderSimulationFrame`). Extracted rather than
+ *  duplicated precisely because a recording that disagreed with the screen about
+ *  a sprite's size or heading would be a silent, plausible-looking lie.
+ *
+ *  `spanPx` is returned even when the sprite has NO decoded frames yet, because
+ *  the caller's viewport cull needs the sprite's half-span before it knows
+ *  whether there is a bitmap to draw (a 3x asset scale — or an ABSOLUTE size on a
+ *  tiny agent — can far exceed the disc, so culling on the radius pops large
+ *  sprites off at the edges). `draw` is null there and the caller falls back to
+ *  the plain disc, exactly as an undecoded / deleted slot always has.
+ *
+ *  @param radPx  the agent's ALREADY-FLOORED screen radius (Math.max(1.2, r*scale)) */
+function resolveAgentSpriteDraw(
+  snap: AgentRenderSnapshot, i: number, hw: number,
+  meta: SpriteRenderMeta, dec: DecodedSprite | undefined,
+  radPx: number, scale: number,
+): { spanPx: number; draw: ResolvedSpriteDraw | null } {
+  // SIZE — the shared `spriteSpan` rule (a per-agent Set Agent Sprite override > 0
+  // wins over the asset's scale; the asset's sizeMode decides whether that number
+  // multiplies the agent DIAMETER or IS the size in world units). `radPx` is
+  // already floored, so the relative arm keeps its historical floor; the absolute
+  // arm has no radius to floor and floors the SPAN instead.
+  const ps = snap.spriteScales.length === hw ? snap.spriteScales[i]! : 0;
+  const spanPx = meta.absoluteSize
+    ? Math.max(spriteSpan(0, meta.scale, ps, true) * scale, MIN_SPRITE_SPAN_PX)
+    : spriteSpan(radPx * 2, meta.scale, ps, false);
+  if (!dec || dec.frames.length === 0) return { spanPx, draw: null };
+  // The per-agent frame is persistent + engine-advanced (Set Agent Sprite drove
+  // the speed). Floor + wrap (loop) or clamp (once).
+  const fc = dec.frames.length;
+  const raw = Math.floor(snap.spriteFrames[i]!);
+  const frame = fc <= 1 ? 0
+    : meta.loop ? (((raw % fc) + fc) % fc)
+    : (raw < 0 ? 0 : raw >= fc ? fc - 1 : raw);
+  const bmp = dec.frames[frame]!;
+  const aspect = bmp.width / Math.max(1, bmp.height);
+  let dw = spanPx, dh = spanPx;
+  if (aspect >= 1) dh = spanPx / aspect; else dw = spanPx * aspect;
+  // Facing angle (compass degrees, 0 = up, clockwise): the agent's velocity
+  // heading when orientToVelocity is on AND it's moving, otherwise the per-agent
+  // rotation the node set (default 0 = up). Aligned to the art's default
+  // direction + a fixed offset. ctx.rotate is clockwise in screen coords (y down).
+  let facingDeg = snap.spriteRotations.length === hw ? snap.spriteRotations[i]! : 0;
+  if (meta.orientToVelocity) {
+    const vX = snap.vx[i] ?? 0, vY = snap.vy[i] ?? 0;
+    if (vX * vX + vY * vY > 1e-9) facingDeg = Math.atan2(vX, -vY) * 180 / Math.PI;
+  }
+  const rotDeg = (facingDeg - meta.defaultDirection) + meta.rotationOffset;
+  return { spanPx, draw: { bmp, dw, dh, rotDeg, alpha: (snap.colors[i * 4 + 3] ?? 255) / 255 } };
+}
+
+/** Blit one resolved sprite centred on (cx, cy). The other half of the shared
+ *  rule above — so the two 2D paths cannot drift on the rotate/alpha handling
+ *  either. Restores `globalAlpha` (the callers draw plain discs around it). */
+function paintAgentSprite(ctx: CanvasRenderingContext2D, d: ResolvedSpriteDraw, cx: number, cy: number): void {
+  ctx.globalAlpha = d.alpha;
+  if (d.rotDeg !== 0) {
+    ctx.save();
+    ctx.translate(cx, cy);
+    ctx.rotate(d.rotDeg * Math.PI / 180);
+    ctx.drawImage(d.bmp, -d.dw / 2, -d.dh / 2, d.dw, d.dh);
+    ctx.restore();
+  } else {
+    ctx.drawImage(d.bmp, cx - d.dw / 2, cy - d.dh / 2, d.dw, d.dh);
+  }
+  ctx.globalAlpha = 1;
+}
 
 /** Build the worker's 2D sprite atlas: every decoded (sprite, frame) drawn
  *  STRETCHED into one CELL x CELL tile of a single grid image, plus the per-slot
@@ -4022,9 +4104,12 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
    *  agent snapshot (circles + bonds). So it works on every compile target incl. WebGPU
    *  direct render / composite (which otherwise only expose the current-view framing).
    *  Output is grid-aspect (W:H) → no letterbox margins by construction. Reads only refs.
-   *  NB agent SPRITES / METABALLS are drawn as plain circles here — use the "current
-   *  view" scope for a WYSIWYG capture of those. Glow IS reproduced (it shares the
-   *  display overlay's drawAgentGlow). Reuses `target` if given. */
+   *  Agent SPRITES and GLOW are reproduced — both share the display overlay's own
+   *  code (resolveAgentSpriteDraw / drawAgentGlow), so a simulation-scope capture
+   *  cannot disagree with the screen about them. METABALLS are the one remaining
+   *  exception (the goo blob is an SVG-filter composite over the whole display
+   *  surface, not a per-agent draw) — use the "current view" scope for those.
+   *  Reuses `target` if given. */
   const renderSimulationFrame = useCallback((
     maxSize: number,
     target?: HTMLCanvasElement,
@@ -4134,10 +4219,29 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
         // Same negative-Core body shrink the display overlay applies, so a
         // simulation-scope capture matches what the user sees (1 for Core >= 0).
         const bodyScale = glowBodyScale(agentGlowRef.current);
+        // Sprites — the SAME shared resolution the display overlay uses
+        // (resolveAgentSpriteDraw), so a simulation-scope recording carries the
+        // sprite art at the same size / frame / facing / alpha instead of the bare
+        // disc underneath it. `spriteIds` is length-0 for a non-sprite model, so
+        // `spritesActive` is false and this whole branch costs nothing.
+        const spriteMeta = spriteMetaRef.current;
+        const reg = spriteRegistryRef.current;
+        const sids = snap.spriteIds;
+        const spritesActive = !!reg && spriteMeta.length > 0 && sids.length === hw;
         for (let i = 0; i < hw; i++) {
           if (!aal[i]) continue;
           const c = i * 4;
-          const cx = ax[i]! * scale, cy = ay[i]! * scale, rad = Math.max(1.2, ar[i]! * scale) * bodyScale;
+          // The UNSCALED screen radius drives the sprite span (the display's
+          // `rad`); the negative-Core shrink applies to the DISC only.
+          const radPx = Math.max(1.2, ar[i]! * scale);
+          const cx = ax[i]! * scale, cy = ay[i]! * scale;
+          if (spritesActive) {
+            const meta = sids[i]! > 0 ? spriteMeta[sids[i]! - 1] : undefined;
+            const sprite = meta ? resolveAgentSpriteDraw(snap, i, hw, meta, reg!.get(meta.id), radPx, scale) : null;
+            if (sprite?.draw) { paintAgentSprite(ctx, sprite.draw, cx, cy); continue; }
+            // slot set but not yet decoded (or deleted) → fall through to the circle
+          }
+          const rad = radPx * bodyScale;
           if (rad <= 0) continue;
           ctx.beginPath();
           ctx.arc(cx, cy, rad, 0, Math.PI * 2);
@@ -6221,7 +6325,7 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
       if (!isAgentModelRef.current) return;
       const snap = agentsRef.current;
       if (!snap || snap.highWater === 0) return;
-      const { x: ax, y: ay, radius: ar, alive: aal, colors: acol, highWater: hw, bonds, vx: avx, vy: avy } = snap;
+      const { x: ax, y: ay, radius: ar, alive: aal, colors: acol, highWater: hw, bonds } = snap;
       // Bond layer — drawn UNDER the agent circles (one batched stroke path).
       if (showBondsRef.current && bonds && bonds.length > 0) {
         const torusB = boundaryTreatmentRef.current === 'torus';
@@ -6271,10 +6375,9 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
       // Sprites (optional exhibition layer): when the active agent OM pass wrote a
       // per-agent sprite slot, draw the sprite's current frame instead of a circle.
       // spriteIds is length-0 for non-sprite models (then everyone draws a circle).
-      const sids = snap.spriteIds, sfr = snap.spriteFrames;
-      // Per-agent facing angle + size override (Set Agent Sprite). Length-0 on
-      // older snapshots / non-sprite models → treated as absent (default 0).
-      const srot = snap.spriteRotations, sscl = snap.spriteScales;
+      // (The per-agent frame / facing / size-override arrays are read by the shared
+      // resolveAgentSpriteDraw, which also handles the length-0 "absent" case.)
+      const sids = snap.spriteIds;
       const spriteMeta = spriteMetaRef.current;
       const reg = spriteRegistryRef.current;
       const spritesActive = !!reg && spriteMeta.length > 0 && sids.length === hw;
@@ -6308,65 +6411,21 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
           // most of it is still on screen. Resolved once here and reused below.
           const slot = spritesActive ? sids[i]! : 0;  // 1-based into model.sprites (0 = none)
           const meta = slot > 0 ? spriteMeta[slot - 1] : undefined;
-          let spriteSpanPx = 0;
-          if (meta) {
-            // SIZE — the shared `spriteSpan` rule (a per-agent Set Agent Sprite
-            // override > 0 wins over the asset's scale; the asset's sizeMode decides
-            // whether that number multiplies the agent DIAMETER or IS the size in
-            // world units). `rad` is already the 1.2 px-floored screen radius, so
-            // the relative arm keeps its historical floor; the absolute arm has no
-            // radius to floor and floors the SPAN instead.
-            const ps = sscl.length === hw ? sscl[i]! : 0;
-            spriteSpanPx = meta.absoluteSize
-              ? Math.max(spriteSpan(0, meta.scale, ps, true) * scale, MIN_SPRITE_SPAN_PX)
-              : spriteSpan(rad * 2, meta.scale, ps, false);
-          }
-          const cullR = Math.max(rad, spriteSpanPx * 0.5);
+          // Size / frame / facing / alpha all come from the SHARED resolver, so the
+          // simulation-scope capture draws the identical sprite (see
+          // resolveAgentSpriteDraw). `spanPx` is needed for the cull below even when
+          // the slot has no decoded frames yet.
+          const sprite = meta ? resolveAgentSpriteDraw(snap, i, hw, meta, reg!.get(meta.id), rad, scale) : null;
+          const cullR = Math.max(rad, (sprite?.spanPx ?? 0) * 0.5);
           if (cx + cullR < 0 || cx - cullR > parentW || cy + cullR < 0 || cy - cullR > parentH) continue;
           const c = i * 4;
           // --- sprite branch ---
-          if (spritesActive) {
-            const dec = meta ? reg!.get(meta.id) : undefined;
-            if (dec && dec.frames.length > 0) {
-              if (pass === 'goo') continue; // sprite-agents are excluded from the goo field
-              const fc = dec.frames.length;
-              // The per-agent frame is persistent + engine-advanced (Set Agent
-              // Sprite drove the speed). Floor + wrap (loop) or clamp (once).
-              const raw = Math.floor(sfr[i]!);
-              const frame = fc <= 1 ? 0
-                : meta!.loop ? (((raw % fc) + fc) % fc)
-                : (raw < 0 ? 0 : raw >= fc ? fc - 1 : raw);
-              const bmp = dec.frames[frame]!;
-              const target = spriteSpanPx;  // resolved with the cull, above
-              const aspect = bmp.width / Math.max(1, bmp.height);
-              let dw = target, dh = target;
-              if (aspect >= 1) dh = target / aspect; else dw = target * aspect;
-              // Facing angle (compass degrees, 0 = up, clockwise): the agent's
-              // velocity heading when orientToVelocity is on AND it's moving,
-              // otherwise the per-agent rotation the node set (default 0 = up).
-              // Aligned to the art's default direction + a fixed offset. ctx.rotate
-              // is clockwise in screen coords (y down).
-              let facingDeg = srot.length === hw ? srot[i]! : 0;
-              if (meta!.orientToVelocity) {
-                const vX = avx[i]!, vY = avy[i]!;
-                if (vX * vX + vY * vY > 1e-9) facingDeg = Math.atan2(vX, -vY) * 180 / Math.PI;
-              }
-              const rotDeg = (facingDeg - meta!.defaultDirection) + meta!.rotationOffset;
-              ctx.globalAlpha = (acol[c + 3] ?? 255) / 255;
-              if (rotDeg !== 0) {
-                ctx.save();
-                ctx.translate(cx, cy);
-                ctx.rotate(rotDeg * Math.PI / 180);
-                ctx.drawImage(bmp, -dw / 2, -dh / 2, dw, dh);
-                ctx.restore();
-              } else {
-                ctx.drawImage(bmp, cx - dw / 2, cy - dh / 2, dw, dh);
-              }
-              ctx.globalAlpha = 1;
-              continue; // sprite replaces the circle
-            }
-            // slot set but not yet decoded (or deleted) → fall through to the circle
+          if (sprite?.draw) {
+            if (pass === 'goo') continue; // sprite-agents are excluded from the goo field
+            paintAgentSprite(ctx, sprite.draw, cx, cy);
+            continue; // sprite replaces the circle
           }
+          // slot set but not yet decoded (or deleted) → fall through to the circle
           if (pass === 'sprites') continue;  // circles already drawn in the goo pass
           const tc = pass === 'goo' ? gooCtx! : ctx;
           // The goo field keeps the true radius (the blob is not a disc); the
@@ -12839,13 +12898,37 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
   // silently becomes "stop my simulation". Only ever true when WE paused, so a
   // capture taken while already paused stays paused.
   const captureAutoPausedRef = useRef(false);
-  const openCaptureReview = (d: CaptureReviewData) => {
-    captureReviewRef.current = true;
+  /** Is the capture pause currently HELD? The pause is taken at the START of the
+   *  work the user is waiting on — for a recording that is the Stop press (the
+   *  encode itself can run for seconds), for a screenshot the review opening —
+   *  and released when the dialog closes. Latching it keeps `beginCapturePause`
+   *  IDEMPOTENT, which is what stops the review-open call re-reading a
+   *  `playingRef` we ourselves already cleared and concluding, wrongly, that
+   *  there was nothing to resume. */
+  const capturePauseHeldRef = useRef(false);
+  /** Take the capture pause (no-op if already held). */
+  const beginCapturePause = () => {
+    if (capturePauseHeldRef.current) return;
+    capturePauseHeldRef.current = true;
     captureAutoPausedRef.current = playingRef.current;
     // Routed through setPlaying so the single useEffect([playing]) pause seam
     // fires in full — cancelStep to cut the in-flight batch short, the rAF
     // cancel, the lossless-throttle clear. Never bypass it.
     if (playingRef.current) setPlaying(false);
+  };
+  /** Hand the play state back — for every exit from the capture flow that the
+   *  user finished (the dialog closed) or that never reached a dialog at all (an
+   *  empty recording, a failed encode). A capture taken while already paused
+   *  stays paused: `captureAutoPausedRef` is only ever true when WE paused. */
+  const endCapturePause = () => {
+    const resume = captureAutoPausedRef.current;
+    capturePauseHeldRef.current = false;
+    captureAutoPausedRef.current = false;
+    if (resume) setPlaying(true);
+  };
+  const openCaptureReview = (d: CaptureReviewData) => {
+    captureReviewRef.current = true;
+    beginCapturePause();   // no-op when Stop already took it for the encode
     setCaptureReview(d);
   };
   /** Drop the review WITHOUT touching play state — for a model load, where the
@@ -12853,15 +12936,16 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
    *  the freshly-loaded one. */
   const discardCaptureReview = () => {
     captureReviewRef.current = false;
+    capturePauseHeldRef.current = false;
     captureAutoPausedRef.current = false;
     setCaptureReview(null);
   };
   /** The user is done with the dialog (Save / Copy / Cancel / Escape all land
    *  here) — restore the play state the review took. */
   const closeCaptureReview = () => {
-    const resume = captureAutoPausedRef.current;
-    discardCaptureReview();
-    if (resume) setPlaying(true);
+    captureReviewRef.current = false;
+    setCaptureReview(null);
+    endCapturePause();
   };
 
   /** Release the streaming encoder and clear every recording buffer/counter.
@@ -12916,8 +13000,28 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
   /** @param review  Open the capture review dialog with the finished blob
    *  instead of writing it straight out. TRUE for every UI path; FALSE for the
    *  Overseer's `ovStopRecording`, which runs unattended — a modal there would
-   *  stall the whole sweep on a click that is never coming. */
+   *  stall the whole sweep on a click that is never coming.
+   *
+   *  THE PAUSE STARTS HERE, not at the review. Stop begins the PROCESSING the
+   *  user is waiting on — a GIF is encoded whole at this point (seconds for a
+   *  long recording), and a streaming WebM still has a flush — so leaving the
+   *  world running through it burns compute on frames nobody is watching and
+   *  moves the board on past the clip that was just captured. `beginCapturePause`
+   *  is idempotent, so the review opening later does not re-take (or lose) it;
+   *  the `finally` hands the play state back on every exit that never reached a
+   *  dialog (an empty recording, a failed encode, a throw). */
   const stopRecording = async (review = true) => {
+    if (review) beginCapturePause();
+    try {
+      await stopRecordingInner(review);
+    } finally {
+      // A review that OPENED owns the pause from here (closeCaptureReview
+      // releases it). Anything else must not strand a stopped simulation.
+      if (review && !captureReviewRef.current) endCapturePause();
+    }
+  };
+
+  const stopRecordingInner = async (review: boolean) => {
     // Clear the ref synchronously — setRecording is async, and a `stepped`
     // landing in between must not feed a stream encoder we are about to finish.
     recordingRef.current = false;
