@@ -1937,6 +1937,14 @@ const RENDER_VIEW_WGSL = `struct RenderView {
 const SPRITE_META_BYTES = 32;
 const SPRITE_FLAG_LOOP = 1;
 const SPRITE_FLAG_ORIENT = 2;
+/** `SpriteAsset.sizeMode === 'absolute'` — the effective scale IS the drawn size in
+ *  WORLD units (the agent radius is not consulted). Carried as a FLAG bit rather
+ *  than a new struct member so SPRITE_META_BYTES (and the packing) never moves. */
+const SPRITE_FLAG_ABSOLUTE = 4;
+/** 2D-only floor on the drawn sprite span, in SCREEN px — the absolute arm's
+ *  analogue of the relative arm's 1.2 px radius floor (mirrors the CPU overlay's
+ *  MIN_SPRITE_SPAN_PX, which is the span that floor bottoms out at for scale 1). */
+const MIN_SPRITE_SPAN_PX = 2.4;
 
 const SPRITE_META_WGSL = `struct SpriteMeta {
   baseLayer        : u32,
@@ -2018,15 +2026,20 @@ fn vsSprite(@builtin(vertex_index) vi: u32, @builtin(instance_index) inst: u32) 
     if ((m.flags & ${SPRITE_FLAG_LOOP}u) != 0u) { frame = ((raw % fc) + fc) % fc; }
     else { frame = clamp(raw, 0, fc - 1); }
   }
-  // SIZE — the 1.2 px radius floor first (as the overlay applies it), then the
-  // per-agent scale override (0 = use the asset's), then aspect-shape so the
-  // LONGEST side is the scaled diameter.
+  // SIZE — the per-agent scale override (0 = use the asset's), then the asset's
+  // SIZE MODE: relative = the 1.2 px radius floor first (as the overlay applies it)
+  // times the scaled diameter; ABSOLUTE = the scale IS the world size, so the
+  // radius never enters and the SPAN carries the floor instead. Then aspect-shape
+  // so the LONGEST side is that span.
   let radPx: f32 = max(agentF32[${rB}] * rv.scalePx, 1.2);
   let ps: f32 = agentF32[${sclB}];
   let perScale: f32 = select(m.scale, ps, ps > 0.0);
   // NB \`span\`, not \`target\` — \`target\` is a WGSL RESERVED KEYWORD, and the whole
   // module fails to parse (the same trap \`ref\` sprang in the voxel line shader).
-  let span: f32 = radPx * 2.0 * perScale;
+  var span: f32 = radPx * 2.0 * perScale;
+  if ((m.flags & ${SPRITE_FLAG_ABSOLUTE}u) != 0u) {
+    span = max(perScale * rv.scalePx, ${MIN_SPRITE_SPAN_PX.toFixed(4)});
+  }
   var dw: f32 = span;
   var dh: f32 = span;
   if (m.aspect >= 1.0) { dh = span / m.aspect; } else { dw = span * m.aspect; }
@@ -3412,7 +3425,8 @@ export function setAgentSpriteAtlas(rt: AgentRenderSurface, p: AgentSpriteAtlasP
         const o = idx * 8;
         mu[o] = s.baseLayer >>> 0;
         mu[o + 1] = s.frameCount >>> 0;
-        mu[o + 2] = ((s.loop ? SPRITE_FLAG_LOOP : 0) | (s.orientToVelocity ? SPRITE_FLAG_ORIENT : 0)) >>> 0;
+        mu[o + 2] = ((s.loop ? SPRITE_FLAG_LOOP : 0) | (s.orientToVelocity ? SPRITE_FLAG_ORIENT : 0)
+          | (s.absoluteSize ? SPRITE_FLAG_ABSOLUTE : 0)) >>> 0;
         mf[o + 4] = s.aspect > 0 ? s.aspect : 1;
         mf[o + 5] = s.scale > 0 ? s.scale : 1;
         mf[o + 6] = s.defaultDirection;

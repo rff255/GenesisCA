@@ -1270,10 +1270,33 @@ export function MappingsPanelContent({ mode = 'list' }: PanelContentProps = {}) 
                   />
                 </div>
               </div>
+              {/* SIZE — one reading per ASSET, so this field and the Set Agent
+                  Sprite `Scale` port can never mean two different things. Relative
+                  (the default, and what every pre-sizeMode file keeps) multiplies
+                  the agent's diameter; Absolute is a world-unit size and the agent
+                  radius is not consulted at all. */}
               <div className={styles.field}>
-                <label className={styles.fieldLabel}>Size × (relative to agent diameter)</label>
+                <label className={styles.fieldLabel}>Size mode</label>
+                <select
+                  className={styles.textInput}
+                  value={s.sizeMode === 'absolute' ? 'absolute' : 'radius'}
+                  onChange={e => updateSprite(s.id, { sizeMode: e.target.value === 'absolute' ? 'absolute' : 'radius' })}
+                  title="Relative to agent — the size is a multiple of the agent's diameter, so the art tracks the body. Absolute — the size is in world units and the agent's radius is ignored (what you want when a rule drives the size through Set Sprite → Scale)."
+                >
+                  <option value="radius">Relative to agent diameter (×)</option>
+                  <option value="absolute">Absolute (world units)</option>
+                </select>
+              </div>
+              <div className={styles.field}>
+                <label className={styles.fieldLabel}>
+                  {s.sizeMode === 'absolute' ? 'Size (world units)' : 'Size × (relative to agent diameter)'}
+                </label>
                 <NumberField className={styles.textInput} style={{ width: 80 }} value={s.scale ?? 1} step={0.1} min={0.1}
                   onNumber={n => updateSprite(s.id, { scale: n })} />
+                <div className={styles.sectionHelp}>
+                  The sprite&apos;s longest side. A Set Sprite <em>Scale</em> value above 0 overrides
+                  it per agent, with the same meaning.
+                </div>
               </div>
               <label
                 style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, cursor: 'pointer', marginTop: 4 }}

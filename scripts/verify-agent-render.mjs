@@ -1202,8 +1202,21 @@ section('B18 — 2D agent sprite billboard pass');
     && /frame = clamp\(raw, 0, fc - 1\);/.test(spriteWgsl));
   check('the 1.2 px radius floor is applied BEFORE the sprite scale [sprite]',
     /let radPx: f32 = max\(agentF32\[[^\]]+\] \* rv\.scalePx, 1\.2\);/.test(spriteWgsl)
-    && /let span: f32 = radPx \* 2\.0 \* perScale;/.test(spriteWgsl),
+    && /var span: f32 = radPx \* 2\.0 \* perScale;/.test(spriteWgsl),
     'the overlay floors the radius first, so sprites stop shrinking when zoomed out');
+  // SIZE MODE (SpriteAsset.sizeMode === 'absolute'): the effective scale IS the
+  // world-unit size, so the RADIUS must not enter the span at all — that is the
+  // whole point of the mode ("the Scale input dictates the sprite size"). It rides
+  // a FLAG bit so SPRITE_META_BYTES never moves, and floors the SPAN instead of the
+  // radius (the absolute arm has no radius to floor).
+  check('absolute size mode drops the radius from the span [sprite]',
+    /if \(\(m\.flags & \$\{SPRITE_FLAG_ABSOLUTE\}u\) != 0u\) \{/.test(spriteWgsl)
+    && /span = max\(perScale \* rv\.scalePx, \$\{MIN_SPRITE_SPAN_PX\.toFixed\(4\)\}\);/.test(spriteWgsl),
+    'absolute mode must size from the scale alone, or the agent radius still drags the art');
+  check('the absolute flag is its own bit and the meta record never grows [sprite]',
+    /const SPRITE_FLAG_ABSOLUTE = 4;/.test(rt) && /const SPRITE_META_BYTES = 32;/.test(rt));
+  check('the meta packing carries the absolute flag [sprite]',
+    /s\.absoluteSize \? SPRITE_FLAG_ABSOLUTE : 0/.test(rt));
   check('a per-agent scale > 0 overrides the asset scale [sprite]',
     /select\(m\.scale, ps, ps > 0\.0\)/.test(spriteWgsl));
   check('aspect shaping keeps the LONGEST side at the scaled diameter [sprite]',

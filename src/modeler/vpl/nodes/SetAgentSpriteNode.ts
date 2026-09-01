@@ -21,8 +21,12 @@ import { agentRootHasSelf, agentRootRelaxesGuard } from '../types';
  *  reset the `Frame` input), `setSpeed` (the `Speed` input, may be negative),
  *  `setRotation` (the facing — either an `Rotation` ANGLE in compass degrees
  *  [0 = up, clockwise], or a `Dir X`/`Dir Y` VECTOR the art aligns to via atan2,
- *  so a static agent can "look at" a target), `setScale` (the `Scale` size
- *  multiplier), `setAlpha` (the agent colour's ALPHA byte, 0–255 — the sprite
+ *  so a static agent can "look at" a target), `setScale` (the `Scale` SIZE — read
+ *  through the sprite asset's own SIZE MODE: a MULTIPLIER of the agent's diameter
+ *  by default, or — with the asset set to Absolute — the size in WORLD UNITS, in
+ *  which case the agent's radius does not enter at all. Either way it is the
+ *  sprite's LONGEST side, and 0 means "use the asset's own size"), `setAlpha`
+ *  (the agent colour's ALPHA byte, 0–255 — the sprite
  *  render multiplies the blit by it, so this fades/hides the sprite; it is the
  *  same alpha a Set Cell Looks / Agent Output Mapping writes, so a colour pass
  *  that writes the agent colour afterwards overrides it). Unticked facets are
@@ -45,7 +49,7 @@ export const SetAgentSpriteNode: NodeTypeDef = {
   type: 'setAgentSprite',
   label: 'Set Agent Sprite',
   agentLabel: 'Set Sprite',
-  description: 'Control the agent’s sprite exhibition: change the sprite, set the frame, playback speed (frames/step; negative = reverse), rotation (an angle or a direction vector to align to), and size scale. Tick only the facets you want to change. Leave Agent unwired for the current agent (Output Mapping / Behaviour graph), or wire a Create Agent handle to target a spawned agent in the Init Event.',
+  description: 'Control the agent’s sprite exhibition: change the sprite, set the frame, playback speed (frames/step; negative = reverse), rotation (an angle or a direction vector to align to), and size. Scale is read through the sprite asset’s Size mode — a multiple of the agent diameter, or (Absolute) a world-unit size that ignores the agent’s radius; 0 = use the asset’s own size. Tick only the facets you want to change. Leave Agent unwired for the current agent (Output Mapping / Behaviour graph), or wire a Create Agent handle to target a spawned agent in the Init Event.',
   category: 'color',
   color: '#8e24aa',
   requirements: { bondGraph: true },
