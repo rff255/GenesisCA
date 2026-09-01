@@ -38,6 +38,7 @@ import type { ModelElementDragPayload } from './modelElementDrag';
 import { getEffectivePorts } from './effectivePorts';
 import { vectorPortDims } from './compiler/vectorAttr';
 import { slotVectorDims } from './compiler/multiAttrExpand';
+import { makeCompositeTypeResolver, editorPortCompositeType, rerouteCompositeType, RELAY_BRANCH_PORTS } from './compiler/compositeRelay';
 import type { GraphNode, GraphEdge, CAModel } from '../../model/types';
 import type { MacroDef, MacroPort } from '../../model/types';
 import { cloneMacroWithFreshIds } from '../../model/macroImport';
@@ -177,6 +178,8 @@ interface ConnectionOrigin {
   isArray?: boolean;
   /** Dual-mode relay port (valueSwitch) — see PortDef.arrayCapable. */
   arrayCapable?: boolean;
+  /** Dual-mode COMPOSITE relay port (valueSwitch) — see PortDef.compositeCapable. */
+  compositeCapable?: boolean;
 }
 
 /** Resolve the static or dynamic port info on the source side of a connection
@@ -185,7 +188,8 @@ interface ConnectionOrigin {
 function getOriginPortInfo(
   node: Node,
   portId: string,
-): { category: 'flow' | 'value'; dataType?: string; isArray?: boolean; arrayCapable?: boolean } | null {
+  model?: CAModel | null,
+): { category: 'flow' | 'value'; dataType?: string; isArray?: boolean; arrayCapable?: boolean; compositeCapable?: boolean } | null {
   const nd = node.data as { nodeType?: string; config?: Record<string, unknown> } | undefined;
   const t = nd?.nodeType;
   if (!t) return null;
@@ -198,7 +202,18 @@ function getOriginPortInfo(
   if (def) {
     const staticPort = def.ports.find(p => p.id === portId);
     if (staticPort) {
-      return { category: staticPort.category, dataType: staticPort.dataType, isArray: staticPort.isArray, arrayCapable: staticPort.arrayCapable };
+      // The config-derived composite retypes (a picked vector attribute /
+      // variable, a vector multi-attr slot) must reach the suggestion layer too,
+      // or dragging from a vector attribute read reports a bare `any` origin and
+      // the menu offers every scalar sink. Same resolver isValidConnection uses.
+      const ct = editorPortCompositeType(t, portId, staticPort.kind, nd?.config, model);
+      return {
+        category: staticPort.category,
+        dataType: ct ?? staticPort.dataType,
+        isArray: staticPort.isArray,
+        arrayCapable: staticPort.arrayCapable,
+        compositeCapable: staticPort.compositeCapable,
+      };
     }
   }
   if (t === 'switch') {
@@ -256,6 +271,7 @@ function portsCompatible(
   srcIsArray: boolean | undefined,
   srcArrayCapable: boolean | undefined,
   dstPort: PortDef,
+  srcCompositeCapable?: boolean,
 ): boolean {
   if (dstPort.category !== srcCategory) return false;
   if (dstPort.kind === srcKind) return false;
@@ -279,6 +295,18 @@ function portsCompatible(
   if (sourceIsArray && !targetIsArray && !targetArrayCapable) return false;
   const a = srcType ?? 'any';
   const b = dstPort.dataType ?? 'any';
+  // COMPOSITE types are NOT covered by the permissive `any` rule. A `vector` /
+  // `color` has no scalar meaning, so `expandComposites` can only lower it into
+  // the SAME composite type or a `compositeCapable` relay port — offering Math /
+  // Compare / Aggregate / Set Indicator for a vector output (which `any` used to
+  // do) misleads the user into a wire `isValidConnection` then refuses. Mirrors
+  // the composite rule in isValidConnection; see compositeRelay.ts.
+  // (Symmetric, unlike the array rule: a composite has no source/target
+  // asymmetry — whichever side is NOT the composite must be able to relay one.)
+  for (const ct of ['vector', 'color'] as const) {
+    if (a === ct && b !== ct) return !!dstPort.compositeCapable;
+    if (b === ct && a !== ct) return !!srcCompositeCapable;
+  }
   return a === 'any' || b === 'any' || a === b;
 }
 
@@ -334,7 +362,7 @@ function resolveDropCandidates(
       const eff = getEffectivePorts(def.type, newCfg);
       const candidates = [...eff.inputs, ...eff.outputs];
       const compatible = candidates.find(p =>
-        portsCompatible(snap.category, snap.kind, snap.dataType, snap.isArray, snap.arrayCapable, p));
+        portsCompatible(snap.category, snap.kind, snap.dataType, snap.isArray, snap.arrayCapable, p, snap.compositeCapable));
       if (!compatible) continue;
       resolved.push({ entry, def, matchPort: compatible });
     } else {
@@ -427,7 +455,7 @@ function getPortScreenCentre(
  *  match (Switch passes via its `default`/`check`/`value` static ports). */
 function nodeHasCompatiblePort(def: NodeTypeDef, origin: ConnectionOrigin): boolean {
   return def.ports.some(p =>
-    portsCompatible(origin.category, origin.kind, origin.dataType, origin.isArray, origin.arrayCapable, p),
+    portsCompatible(origin.category, origin.kind, origin.dataType, origin.isArray, origin.arrayCapable, p, origin.compositeCapable),
   );
 }
 
@@ -444,11 +472,11 @@ function pickCompatiblePort(
   if (resolvedConfig) {
     const eff = getEffectivePorts(def.type, resolvedConfig);
     candidates = [...eff.inputs, ...eff.outputs].filter(p =>
-      portsCompatible(origin.category, origin.kind, origin.dataType, origin.isArray, origin.arrayCapable, p),
+      portsCompatible(origin.category, origin.kind, origin.dataType, origin.isArray, origin.arrayCapable, p, origin.compositeCapable),
     );
   } else {
     candidates = def.ports.filter(p =>
-      portsCompatible(origin.category, origin.kind, origin.dataType, origin.isArray, origin.arrayCapable, p),
+      portsCompatible(origin.category, origin.kind, origin.dataType, origin.isArray, origin.arrayCapable, p, origin.compositeCapable),
     );
   }
   if (candidates.length === 0) return null;
@@ -778,6 +806,11 @@ export function GraphEditorInner() {
   const nodesRef = useRef(nodes);
   const edgesRef = useRef(edges);
   const syncTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Latest-ref for the model — the connection-drag callbacks resolve a port's
+  // config-derived COMPOSITE type (a picked vector attribute / variable) and must
+  // not close over a stale model. Assigned during render, before any handler runs.
+  const modelRef = useRef(model);
+  modelRef.current = model;
 
   useEffect(() => { nodesRef.current = nodes; }, [nodes]);
   useEffect(() => { edgesRef.current = edges; }, [edges]);
@@ -1568,6 +1601,49 @@ export function GraphEditorInner() {
           || slotVectorDims(targetNodeType ?? '', tgtParsed.portId, tgtCfg, model);
         const srcType = srcIsVec ? 'vector' : sourcePort?.dataType;
         const tgtType = tgtIsVec ? 'vector' : targetPort?.dataType;
+        // COMPOSITE RELAY resolution (valueSwitch): a relay's `result` carries a
+        // composite when BOTH branches do, so the effective source type has to be
+        // resolved through the wiring, not read off the static port. Built here
+        // (per validation call, over the live nodes/edges) so it always sees the
+        // current graph. See compositeRelay.ts — the compiler's `expandComposites`
+        // uses the SAME resolver, so editor and lowering cannot disagree.
+        const liveNodes = nodesRef.current;
+        const nodeById = (id: string) => liveNodes.find(n => n.id === id);
+        const typeOfNode = (id: string) =>
+          ((nodeById(id)?.data as { nodeType?: string } | undefined)?.nodeType);
+        const cfgOfNode = (id: string) =>
+          ((nodeById(id)?.data as { config?: Record<string, unknown> } | undefined)?.config);
+        const resolveComposite = makeCompositeTypeResolver({
+          nodeTypeOf: typeOfNode,
+          portCompositeType: (id, port) => {
+            // A reroute is not a registry node — it carries the relayed wire's
+            // own dataType in `node.data`, and `collapseReroutes` erases it long
+            // before any lowering, so a rerouted composite is legal and must
+            // resolve here (otherwise a vector could be rerouted but the reroute
+            // could never be wired onward).
+            return rerouteCompositeType(nodeById(id)?.data)
+              ?? editorPortCompositeType(typeOfNode(id), port, 'output', cfgOfNode(id), model);
+          },
+          sourceOf: (id, port) => {
+            const e = currentEdges.find(x => x.target === id && x.targetHandle === `input_value_${port}`);
+            return e ? { nodeId: e.source, portId: (e.sourceHandle ?? '').replace(/^output_value_/, '') } : undefined;
+          },
+        });
+        // Effective composite type of each side. The SOURCE resolves through
+        // relays; the TARGET is composite either by its own type or, for a relay
+        // BRANCH, by whatever the SIBLING branch already carries (undefined =
+        // "still free", so the first composite wired in decides).
+        const srcComposite = srcType === 'vector' || srcType === 'color'
+          ? srcType
+          : resolveComposite(connection.source!, srcParsed.portId);
+        const siblingComposite = targetPort?.compositeCapable
+          ? (() => {
+            const other = RELAY_BRANCH_PORTS.find(bp => bp !== tgtParsed.portId);
+            if (!other) return null;
+            const e = currentEdges.find(x => x.target === connection.target && x.targetHandle === `input_value_${other}`);
+            return e ? resolveComposite(e.source, (e.sourceHandle ?? '').replace(/^output_value_/, '')) : null;
+          })()
+          : null;
         const tgtIsNI = tgtType === 'neighborIndex';
         const srcIsNI = srcType === 'neighborIndex';
         if (tgtIsNI && sourcePort && srcType !== 'neighborIndex' && srcType !== 'any') {
@@ -1582,8 +1658,19 @@ export function GraphEditorInner() {
         // no meaning, and `expandComposites` can only lower vector→vector /
         // color→color wiring — so the editor must forbid the rest up front.
         for (const ct of ['vector', 'color'] as const) {
-          if (tgtType === ct && srcType !== ct) return false;
-          if (srcType === ct && tgtType !== ct) return false;
+          // A composite source may ALSO feed a `compositeCapable` relay branch —
+          // but only while the sibling branch is free or already carries the SAME
+          // composite, so a relay can never end up with mismatched branches.
+          if (srcComposite === ct && tgtType !== ct) {
+            if (!targetPort?.compositeCapable) return false;
+            if (siblingComposite && siblingComposite !== ct) return false;
+            continue;
+          }
+          if (tgtType === ct && srcComposite !== ct) return false;
+          // A SCALAR into a relay branch whose sibling already carries a composite
+          // would make the relay's two branches disagree — refuse it here rather
+          // than let the lowering meet a shape it cannot select component-wise.
+          if (!srcComposite && siblingComposite === ct) return false;
         }
       }
 
@@ -2339,7 +2426,7 @@ export function GraphEditorInner() {
       if (!sh) return null;
       const category = sh.category;
       const srcNode = nodesRef.current.find(n => n.id === edge.source);
-      const dataType = srcNode ? getOriginPortInfo(srcNode, sh.portId)?.dataType : undefined;
+      const dataType = srcNode ? getOriginPortInfo(srcNode, sh.portId, modelRef.current)?.dataType : undefined;
       const reroute = makeRerouteNode(category, dataType, pos,
         defaultRerouteLabel(nodesRef.current, edgesRef.current, edge.source, sh.portId));
       const ts = Date.now().toString(36);
@@ -3984,7 +4071,7 @@ export function GraphEditorInner() {
       const parsed = parseHandleId(params.handleId);
       if (parsed) {
         const srcNode = nodesRef.current.find(n => n.id === params.nodeId);
-        const info = srcNode ? getOriginPortInfo(srcNode, parsed.portId) : null;
+        const info = srcNode ? getOriginPortInfo(srcNode, parsed.portId, modelRef.current) : null;
         const origin: ConnectionOrigin = {
           nodeId: params.nodeId,
           portId: parsed.portId,
@@ -3993,6 +4080,7 @@ export function GraphEditorInner() {
           dataType: info?.dataType,
           isArray: info?.isArray,
           arrayCapable: info?.arrayCapable,
+          compositeCapable: info?.compositeCapable,
         };
         connectionOriginRef.current = origin;
         setConnectingFrom({

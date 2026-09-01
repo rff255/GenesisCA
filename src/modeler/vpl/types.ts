@@ -40,6 +40,15 @@ export interface PortDef {
    *  offer such ports in array contexts too. Has no effect on `isValidConnection`
    *  (which already permits the wiring) or on any compiler. */
   arrayCapable?: boolean;
+  /** Dual-mode relay flag for the COMPOSITE types — the `arrayCapable` sibling.
+   *  A scalar-typed (`any`) port that may ALSO carry a `vector` / `color` shape
+   *  depending on its wiring. Only `valueSwitch`'s ifValue/elseValue/result use
+   *  it: when BOTH branches carry the same composite, the result IS that
+   *  composite. Unlike `arrayCapable` this one IS load-bearing beyond discovery —
+   *  `isValidConnection` consults it to permit the wire, and `expandComposites`
+   *  lowers such a relay into one scalar `valueSwitch` per component (so every
+   *  target emits it through the verified scalar path). See compositeRelay.ts. */
+  compositeCapable?: boolean;
   /** Inline widget type for unconnected input ports (Unreal Blueprint style) */
   inlineWidget?: 'number' | 'bool' | 'color' | 'tag' | 'glyph';
   /** Default value for inline widget when port is unconnected */

@@ -35,6 +35,7 @@ import { computeAsyncReadWriteHazards } from './asyncWriteHazard';
 import { sparseSteppingEnabled } from './sparseStepping';
 import { expandMacros } from './macroExpand';
 import { detectDanglingRefs } from './danglingRefs';
+import { detectCompositeShapeMismatch } from './compositeRelay';
 import { inputBrushKindForNode, inputParamsForNode, spawnerBrushPorts } from '../../../model/inputMappingParams';
 export { sparseSteppingEnabled } from './sparseStepping';
 import { computeVolatileHoist } from './volatileHoist';
@@ -1725,6 +1726,21 @@ export function compileGraph(
   // to top-level prefixed nodes) collapse too, and so no later analysis or
   // emitter ever sees a reroute. `A → R → B` compiles byte-identically to `A → B`.
   ({ nodes: graphNodes, edges: graphEdges } = collapseReroutes(graphNodes, graphEdges));
+  // Composite (vector / colour) SHAPE mismatches — the same "report by NAME"
+  // discipline as the dangling-reference gate, for a wire `expandComposites`
+  // cannot lower. `isValidConnection` refuses to create one, so this only fires
+  // on a paste / hand-edit / an edge deleted after the fact; without it such a
+  // graph emits a reference to an undeclared `_v<id>_vector`.
+  //   Placed AFTER collapseReroutes (a reroute is a pure relay whose in/out
+  //   ports carry no composite dataType, so checking before the collapse would
+  //   flag every rerouted vector wire) and BEFORE the lowering chain (so a
+  //   vector ATTRIBUTE port and a multi-attr slot still resolve). compositeRelay.ts
+  {
+    const shape = detectCompositeShapeMismatch(graphNodes, graphEdges, model);
+    if (shape) {
+      return { stepCode: '', initCode: '', gridInitCode: '', inputColorCodes: [], outputMappingCodes: [], stopMessages: [], error: shape };
+    }
+  }
 
   // Multi-attribute slot expansion — rewrite each multi-slot Get/Set Attribute
   // (extra `attr_${i}` slots + `value_${i}` ports) into the single-slot
@@ -2699,6 +2715,11 @@ export function compileAgentGraph(
     if (dangling) return { behaviourCode: '', initCode: '', divisionCode: '', stopMessages: [], outputMappingCodes: [], inputMappingCodes: [], dividePartitions: [], error: dangling };
   }
   ({ nodes: agentNodes, edges: agentEdges } = collapseReroutes(agentNodes, agentEdges));
+  // …and the same composite SHAPE gate, at the same point (see the cell note).
+  {
+    const shape = detectCompositeShapeMismatch(agentNodes, agentEdges, model);
+    if (shape) return { behaviourCode: '', initCode: '', divisionCode: '', stopMessages: [], outputMappingCodes: [], inputMappingCodes: [], dividePartitions: [], error: shape };
+  }
   // Neighbour State Census → the gather + one Count Matching per CONSUMED state
   // port (+ Array Length for `total`), so it reuses the existing emitters on every
   // target (no new emit). See censusExpand.ts.
