@@ -9,6 +9,7 @@ import {
   useNodesState,
   useEdgesState,
   useReactFlow,
+  useUpdateNodeInternals,
   ReactFlowProvider,
   useStoreApi,
   useStore,
@@ -58,7 +59,10 @@ import {
   countInstancesEverywhere,
   locateMacroInstance,
   groupCrossingEdges,
+  MOVE_SCOPE_EXCLUDED_TYPES,
 } from './macroMoveScope';
+import { NODE_MORPHS } from './nodeMorph';
+import type { MorphContext, MorphSpec } from './nodeMorph';
 import type { CrossingGroup } from './macroMoveScope';
 import { computeAlignmentSnap, sameGuides } from './alignmentSnap';
 import type { AlignGuides, AlignTarget } from './alignmentSnap';
@@ -319,6 +323,85 @@ function portsCompatible(
     if (b === ct && a !== ct) return !!srcCompositeCapable;
   }
   return a === 'any' || b === 'any' || a === b;
+}
+
+/** A synthetic `PortDef` describing a LIVE connection endpoint, so the shared
+ *  `portsCompatible` rule can be applied endpoint-to-endpoint (it otherwise
+ *  compares an endpoint against a node-def port). Only the fields
+ *  `portsCompatible` actually reads are filled in. */
+function originAsPort(origin: ConnectionOrigin): PortDef {
+  return {
+    id: origin.portId,
+    label: '',
+    kind: origin.kind,
+    category: origin.category,
+    dataType: origin.dataType as PortDef['dataType'],
+    isArray: origin.isArray,
+    arrayCapable: origin.arrayCapable,
+    compositeCapable: origin.compositeCapable,
+  };
+}
+
+/** May a wire run from `src` (an OUTPUT endpoint) to `dst` (an INPUT endpoint)?
+ *  The editor's OWN `portsCompatible` rule — category, dataType, array shape and
+ *  the composite (vector / color) rule — applied between two live endpoints.
+ *  Used by Dissolve Node to decide whether an upstream source may take over a
+ *  downstream consumer; conservative by construction, since a pair it rejects is
+ *  a pair the connection validator would reject too. */
+function endpointsCompatible(src: ConnectionOrigin, dst: ConnectionOrigin): boolean {
+  return portsCompatible(
+    src.category, 'output', src.dataType, src.isArray, src.arrayCapable,
+    originAsPort(dst), src.compositeCapable,
+  );
+}
+
+/** Pass-through preference for Dissolve Node: an INPUT port whose declared
+ *  dataType matches the OUTPUT port the consumer was reading sorts first, so a
+ *  Value Switch relays its BRANCH (`any`, like `result`) rather than its `bool`
+ *  condition. Everything else keeps declaration order (the sort is stable). */
+function rankPassThrough(input: PortDef, outPort: PortDef | undefined): number {
+  return (outPort && input.dataType !== undefined && input.dataType === outPort.dataType) ? 0 : 1;
+}
+
+/** Node types that may NOT be dissolved. Reuses the move-across-a-boundary
+ *  exclusion set — the macro's own interface (which cannot be deleted at all)
+ *  and the singleton event roots (nothing feeds an event root, so "reconnect
+ *  around it" is meaningless) — plus reroutes, which keep their own, older
+ *  "Dissolve Reroute" item and its transitive batch semantics. */
+function canDissolveNodeType(nodeType: string): boolean {
+  return nodeType !== 'reroute' && !MOVE_SCOPE_EXCLUDED_TYPES.has(nodeType);
+}
+
+/** Assemble the `MorphContext` for a node — its config, which of its input ports
+ *  are WIRED, and a resolver for an unwired port's inline value. Module-level
+ *  and pure so the context-menu render (which lists the morphs whose `build`
+ *  succeeds) and the commit path (which re-runs `build`) cannot drift. */
+function buildMorphContext(
+  node: Node,
+  edges: readonly Edge[],
+): { ctx: MorphContext; oldDef: NodeTypeDef } | null {
+  const nd = node.data as { nodeType?: string; config?: Record<string, unknown> } | undefined;
+  const oldDef = nd?.nodeType ? getNodeDef(nd.nodeType) : undefined;
+  if (!oldDef) return null;
+  const config = (nd?.config ?? {}) as Record<string, string | number | boolean>;
+  const wired = new Set<string>();
+  for (const e of edges) {
+    if (e.target !== node.id || !e.targetHandle) continue;
+    const th = parseHandleId(e.targetHandle);
+    if (th) wired.add(th.portId);
+  }
+  return {
+    oldDef,
+    ctx: {
+      config,
+      wired,
+      inline: (portId: string) => {
+        const v = config[`_port_${portId}`];
+        if (v !== undefined) return String(v);
+        return oldDef.ports.find(p => p.id === portId)?.defaultValue ?? '0';
+      },
+    },
+  };
 }
 
 /** Build the list of node-type candidates for a model-element drop. When
@@ -809,6 +892,9 @@ export function GraphEditorInner() {
   const contextMenuRef = useRef<HTMLDivElement>(null);
   const [menuPos, setMenuPos] = useState<{ x: number; y: number } | null>(null);
   const { deleteElements, getNodes, updateNodeData } = useReactFlow();
+  // Nudged after a MORPH: the two formula twins keep the very same handle ids,
+  // so CaNode's port-signature effect would not fire on its own.
+  const updateNodeInternals = useUpdateNodeInternals();
   const rfStore = useStoreApi();
 
   // Ref for paste position (flow coords of last right-click or viewport center for Ctrl+V)
@@ -2511,6 +2597,27 @@ export function GraphEditorInner() {
    *  instance's dynamic ports); fall back to the HANDLE's own category with an
    *  `any` dataType — the editor's permissive default — rather than refusing to
    *  reconnect at all. */
+  /** The `ConnectionOrigin` describing an edge's SOURCE side (the port the wire
+   *  leaves). The mirror of `consumerOriginOf`; same null-info fallback (a macro
+   *  instance's dynamic ports have no static def, so fall back to the HANDLE's
+   *  own category with an `any` dataType rather than refusing). */
+  const sourceOriginOf = useCallback((edge: Edge): ConnectionOrigin | null => {
+    const sh = edge.sourceHandle ? parseHandleId(edge.sourceHandle) : null;
+    if (!sh) return null;
+    const srcNode = nodesRef.current.find(n => n.id === edge.source);
+    const info = srcNode ? getOriginPortInfo(srcNode, sh.portId, modelRef.current) : null;
+    return {
+      nodeId: edge.source,
+      portId: sh.portId,
+      kind: 'output',
+      category: info?.category ?? sh.category,
+      dataType: info?.dataType,
+      isArray: info?.isArray,
+      arrayCapable: info?.arrayCapable,
+      compositeCapable: info?.compositeCapable,
+    };
+  }, []);
+
   const consumerOriginOf = useCallback((edge: Edge): ConnectionOrigin | null => {
     const th = edge.targetHandle ? parseHandleId(edge.targetHandle) : null;
     if (!th) return null;
@@ -2553,23 +2660,11 @@ export function GraphEditorInner() {
       if (!def) return;
       const edge = edgesRef.current.find(e => e.id === edgeId);
       if (!edge || !edge.sourceHandle || !edge.targetHandle) return;
-      const sh = parseHandleId(edge.sourceHandle);
-      if (!sh) return;
       if (SINGLETON_NODE_TYPES.has(nodeType)
         && nodesRef.current.some(n => (n.data as Record<string, unknown>)?.nodeType === nodeType)) return;
 
-      const srcNode = nodesRef.current.find(n => n.id === edge.source);
-      const srcInfo = srcNode ? getOriginPortInfo(srcNode, sh.portId, modelRef.current) : null;
-      const origin: ConnectionOrigin = {
-        nodeId: edge.source,
-        portId: sh.portId,
-        kind: 'output',
-        category: srcInfo?.category ?? sh.category,
-        dataType: srcInfo?.dataType,
-        isArray: srcInfo?.isArray,
-        arrayCapable: srcInfo?.arrayCapable,
-        compositeCapable: srcInfo?.compositeCapable,
-      };
+      const origin = sourceOriginOf(edge);
+      if (!origin) return;
       // Resolved config drives effective ports for nodes whose port set depends on
       // config (hiddenPorts, GetModelAttribute's r/g/b, …) — same as addNodeAndConnect.
       const resolvedCfg: Record<string, unknown> = { ...def.defaultConfig };
@@ -2629,7 +2724,7 @@ export function GraphEditorInner() {
       ]);
       scheduleSync();
     },
-    [consumerOriginOf, pushCurrentSnapshot, scheduleSync, setNodes, setEdges],
+    [consumerOriginOf, sourceOriginOf, pushCurrentSnapshot, scheduleSync, setNodes, setEdges],
   );
 
   /** DISSOLVE reroutes — remove the dots but KEEP the wiring (Blender's term for
@@ -2748,6 +2843,257 @@ export function GraphEditorInner() {
   const dissolveReroute = useCallback((nodeId: string) => {
     dissolveReroutes([nodeId]);
   }, [dissolveReroutes]);
+
+  /** DISSOLVE NODE — the generalisation of "Dissolve Reroute" to an ordinary
+   *  node: remove it, and reconnect each of its consumers straight to whatever
+   *  fed it, wherever a COMPATIBLE pairing exists.
+   *
+   *  THE PAIRING RULE, stated once because everything else falls out of it —
+   *  for each consumer of an output port, the pass-through source is the FIRST
+   *  wired INPUT port whose source the editor would let you wire to that
+   *  consumer, ordered: a port whose declared dataType matches the OUTPUT port
+   *  the consumer was reading first, then declaration order. The dataType
+   *  preference is what makes a Value Switch relay its BRANCH rather than its
+   *  bool condition; for FLOW it never fires (neither side has a dataType), so a
+   *  flow output pairs with `do` — i.e. the node is spliced OUT of the chain,
+   *  the exact inverse of the press-and-hold link splice.
+   *
+   *  Compatibility is the editor's own `portsCompatible`, applied
+   *  endpoint-to-endpoint (`endpointsCompatible`), so a pair it accepts is a
+   *  pair `isValidConnection` would accept too. A consumer with NO compatible
+   *  pairing is simply LEFT UNWIRED — never repointed onto a merely plausible
+   *  source (the project's drop-never-repoint rule). Dissolving a node whose
+   *  inputs are all unwired therefore degrades to a plain delete.
+   *
+   *  MULTIPLICITY: a FLOW consumer (or an `isArray` value consumer) takes EVERY
+   *  compatible source of the chosen port — `A.next → N`, `B.next → N`,
+   *  `N.next → C` dissolves to `A → C` AND `B → C`. A plain value consumer is
+   *  single-occupancy, so it takes the FIRST compatible source only.
+   *
+   *  EVERY output port relinks, not just the main one. Dissolving a Conditional
+   *  therefore makes its THEN and ELSE chains unconditional successors of
+   *  whatever ran it, rather than orphaning them — "remove this node from the
+   *  flow; everything it would have run now runs directly".
+   *
+   *  No cycle can be created: `S → T` replaces `S → N → T`, and if T could reach
+   *  S the graph already had a cycle (which the connection validator prevents).
+   *  Duplicate suppression + the value-input occupancy guard mirror
+   *  `dissolveReroutes`. ONE undo snapshot, ONE edge rewrite, ONE sync. */
+  const dissolveNode = useCallback((nodeId: string) => {
+    const node = nodesRef.current.find(n => n.id === nodeId);
+    if (!node || node.type !== 'caNode') return;
+    const nd = node.data as { nodeType?: string; config?: Record<string, unknown> } | undefined;
+    const nodeType = nd?.nodeType;
+    if (!nodeType || !canDissolveNodeType(nodeType)) return;
+
+    // Effective (post-hiddenPorts / dynamic) ports: a hidden port is not a
+    // candidate pass-through, and its dataType is what the ordering reads.
+    const eff = getEffectivePorts(nodeType, nd?.config, modelRef.current);
+    const outPortById = new Map(eff.outputs.map(p => [p.id, p] as const));
+
+    pushCurrentSnapshot();
+    const ts = Date.now().toString(36);
+    let seq = 0;
+    setEdges(cur => {
+      // Sources feeding each INPUT port, in edge order. Resolved from
+      // `nodesRef` (untouched — the node is removed by the setNodes below).
+      const sourcesByPort = new Map<string, { edge: Edge; origin: ConnectionOrigin }[]>();
+      for (const e of cur) {
+        if (e.target !== nodeId || !e.targetHandle) continue;
+        const th = parseHandleId(e.targetHandle);
+        const origin = th ? sourceOriginOf(e) : null;
+        if (!th || !origin) continue;
+        const list = sourcesByPort.get(th.portId);
+        if (list) list.push({ edge: e, origin });
+        else sourcesByPort.set(th.portId, [{ edge: e, origin }]);
+      }
+
+      const kept = cur.filter(e => e.source !== nodeId && e.target !== nodeId);
+      const seen = new Set(
+        kept.map(e => `${e.source} ${e.sourceHandle ?? ''} ${e.target} ${e.targetHandle ?? ''}`),
+      );
+      // Non-array VALUE inputs are single-occupancy. The dissolved node's own
+      // edge into such a port is gone, so the slot is free — this guard only
+      // bites a hand-edited file, or two of the node's outputs feeding one port.
+      const occupied = new Set(
+        kept.filter(e => e.targetHandle?.startsWith('input_value_'))
+          .map(e => `${e.target} ${e.targetHandle}`),
+      );
+
+      const rewired: Edge[] = [];
+      for (const e of cur) {
+        if (e.source !== nodeId || e.target === nodeId) continue;
+        const consumer = consumerOriginOf(e);
+        if (!consumer) continue;
+        const sh = e.sourceHandle ? parseHandleId(e.sourceHandle) : null;
+        const outPort = sh ? outPortById.get(sh.portId) : undefined;
+        const candidates = eff.inputs
+          .filter(p => (sourcesByPort.get(p.id)?.length ?? 0) > 0)
+          // Stable sort (ES2019+), so equal ranks keep declaration order.
+          .sort((a, b) => rankPassThrough(a, outPort) - rankPassThrough(b, outPort));
+
+        let chosen: { edge: Edge; origin: ConnectionOrigin }[] | null = null;
+        for (const p of candidates) {
+          const compatible = (sourcesByPort.get(p.id) ?? [])
+            .filter(s => endpointsCompatible(s.origin, consumer));
+          if (compatible.length > 0) { chosen = compatible; break; }
+        }
+        if (!chosen) continue;   // no compatible pairing — leave the consumer unwired
+
+        const multi = consumer.category === 'flow' || consumer.isArray === true;
+        for (const s of (multi ? chosen : chosen.slice(0, 1))) {
+          if (s.origin.nodeId === e.target) continue;   // would be a self-connection
+          const key = `${s.origin.nodeId} ${s.edge.sourceHandle ?? ''} ${e.target} ${e.targetHandle ?? ''}`;
+          if (seen.has(key)) continue;
+          const occKey = `${e.target} ${e.targetHandle ?? ''}`;
+          if (!multi && consumer.category === 'value' && occupied.has(occKey)) continue;
+          seen.add(key);
+          if (!multi && consumer.category === 'value') occupied.add(occKey);
+          rewired.push({
+            ...e,
+            id: `e_${ts}_dn${seq++}_${Math.random().toString(36).slice(2, 5)}`,
+            source: s.origin.nodeId,
+            sourceHandle: s.edge.sourceHandle,
+            selected: false,
+          });
+        }
+      }
+      return [...kept, ...rewired];
+    });
+    setNodes(nds => nds.filter(n => n.id !== nodeId));
+    scheduleSync();
+  }, [consumerOriginOf, sourceOriginOf, pushCurrentSnapshot, scheduleSync, setNodes, setEdges]);
+
+  /** MORPH INTO — retype a node IN PLACE (same id, position and user rename),
+   *  mapping its config and re-pointing its wires through the spec's port maps.
+   *  The table of what may become what — and how each config maps — lives in
+   *  `nodeMorph.ts`; this is the engine every spec relies on:
+   *
+   *    - EVERY re-pointed edge is validated against the NEW node's EFFECTIVE
+   *      ports with `portsCompatible`. An unmapped port, a port the new config
+   *      hides, or an incompatible type ⇒ the edge is DROPPED, never repointed
+   *      onto something merely plausible. (This is what makes Compare → Math
+   *      safe: the result goes `bool` → `any`, so consumers survive, while
+   *      Math → Compare narrows `any` → `bool` and a float consumer is dropped.)
+   *    - An inline `_port_<old>` is carried to `_port_<new>` ONLY when the two
+   *      ports' `inlineWidget` KINDS match — a number carried into a bool select
+   *      renders blank and is one click from being lost.
+   *    - Every remaining inline port is seeded with its `defaultValue`
+   *      (`addNodeAtPosition`'s rule), so the morphed node is self-contained.
+   *
+   *  `updateNodeInternals` is nudged afterwards: two of the morphs (the two
+   *  formula twins) keep the very same handle ids, so CaNode's port-signature
+   *  effect would not fire, and the node's own size change is the only thing
+   *  that would otherwise re-measure it. ONE undo snapshot, ONE sync. */
+  const morphNode = useCallback((nodeId: string, spec: MorphSpec) => {
+    const node = nodesRef.current.find(n => n.id === nodeId);
+    if (!node || node.type !== 'caNode') return;
+    const built = buildMorphContext(node, edgesRef.current);
+    const newDef = getNodeDef(spec.to);
+    if (!built || !newDef) return;
+    if (!isNodeAvailable(newDef, modelRef.current)) return;
+    if (SINGLETON_NODE_TYPES.has(spec.to)
+      && nodesRef.current.some(n => n.id !== nodeId && (n.data as Record<string, unknown>)?.nodeType === spec.to)) return;
+    const res = spec.build(built.ctx);
+    if (!res) return;
+
+    const newConfig: Record<string, string | number | boolean> = { ...res.config };
+    const oldPortById = new Map(built.oldDef.ports.map(p => [p.id, p] as const));
+    const newPortById = new Map(newDef.ports.map(p => [p.id, p] as const));
+    for (const [oldId, newId] of Object.entries(res.inputMap)) {
+      const key = `_port_${newId}`;
+      if (newConfig[key] !== undefined) continue;          // the spec's own value wins
+      const op = oldPortById.get(oldId);
+      const np = newPortById.get(newId);
+      if (!op?.inlineWidget || !np?.inlineWidget || op.inlineWidget !== np.inlineWidget) continue;
+      const v = built.ctx.config[`_port_${oldId}`];
+      if (v !== undefined) newConfig[key] = v;
+    }
+    for (const p of newDef.ports) {
+      if (p.inlineWidget && p.defaultValue !== undefined && newConfig[`_port_${p.id}`] === undefined) {
+        newConfig[`_port_${p.id}`] = p.defaultValue;
+      }
+    }
+
+    const eff = getEffectivePorts(spec.to, newConfig, modelRef.current);
+    const newIn = new Map(eff.inputs.map(p => [p.id, p] as const));
+    const newOut = new Map(eff.outputs.map(p => [p.id, p] as const));
+
+    pushCurrentSnapshot();
+    const oldData = (node.data ?? {}) as Record<string, unknown>;
+    // The user's rename (`data.label`) survives — only the type + config change.
+    const newData: Record<string, unknown> = { ...oldData, nodeType: spec.to, config: newConfig };
+    setNodes(nds => nds.map(n => (n.id === nodeId ? { ...n, data: newData } : n)));
+    setEdges(cur => {
+      const claimedIn = new Set<string>();
+      const next: Edge[] = [];
+      for (const e of cur) {
+        const asTarget = e.target === nodeId;
+        const asSource = e.source === nodeId;
+        if (!asTarget && !asSource) { next.push(e); continue; }
+        let edge = e;
+        if (asTarget) {
+          const th = e.targetHandle ? parseHandleId(e.targetHandle) : null;
+          const mapped = th ? res.inputMap[th.portId] : undefined;
+          const port = mapped ? newIn.get(mapped) : undefined;
+          const src = port ? sourceOriginOf(e) : null;
+          if (!port || !src) continue;
+          if (!portsCompatible(src.category, 'output', src.dataType, src.isArray, src.arrayCapable, port, src.compositeCapable)) continue;
+          const handle = handleId({ id: port.id, kind: 'input', category: port.category });
+          if (port.category === 'value' && !port.isArray) {
+            if (claimedIn.has(handle)) continue;           // two old ports → one new port
+            claimedIn.add(handle);
+          }
+          edge = { ...edge, targetHandle: handle, style: { stroke: edgeStrokeFor(port.category), strokeWidth: 2 } };
+        }
+        if (asSource) {
+          const sh = e.sourceHandle ? parseHandleId(e.sourceHandle) : null;
+          const mapped = sh ? res.outputMap[sh.portId] : undefined;
+          const port = mapped ? newOut.get(mapped) : undefined;
+          const dst = port ? consumerOriginOf(e) : null;
+          if (!port || !dst) continue;
+          if (!portsCompatible(port.category, 'output', port.dataType, port.isArray, port.arrayCapable, originAsPort(dst), port.compositeCapable)) continue;
+          edge = {
+            ...edge,
+            sourceHandle: handleId({ id: port.id, kind: 'output', category: port.category }),
+            style: { stroke: edgeStrokeFor(port.category), strokeWidth: 2 },
+          };
+        }
+        next.push(edge);
+      }
+      return next;
+    });
+    scheduleSync();
+    requestAnimationFrame(() => updateNodeInternals(nodeId));
+  }, [consumerOriginOf, sourceOriginOf, pushCurrentSnapshot, scheduleSync, setNodes, setEdges, updateNodeInternals]);
+
+  /** The morphs offered for a node right now: those whose target type this model
+   *  / graph can run, that would not duplicate a singleton, and whose `build`
+   *  accepts the node's CURRENT config (Compare → Logical Expression declines a
+   *  NeighborIndex comparison, for instance). Called from the context-menu
+   *  render, so it reads the live `nodes` / `edges` state rather than the refs. */
+  const morphOptionsFor = (nodeId: string): { spec: MorphSpec; label: string }[] => {
+    const node = nodes.find(n => n.id === nodeId);
+    if (!node || node.type !== 'caNode') return [];
+    const nodeType = (node.data as { nodeType?: string } | undefined)?.nodeType;
+    const specs = nodeType ? NODE_MORPHS[nodeType] : undefined;
+    if (!specs || specs.length === 0) return [];
+    const built = buildMorphContext(node, edges);
+    if (!built) return [];
+    const out: { spec: MorphSpec; label: string }[] = [];
+    for (const spec of specs) {
+      const def = getNodeDef(spec.to);
+      if (!def || !isNodeAvailable(def, model)) continue;
+      if (SINGLETON_NODE_TYPES.has(spec.to)
+        && nodes.some(n => n.id !== nodeId && (n.data as Record<string, unknown>)?.nodeType === spec.to)) continue;
+      if (!spec.build(built.ctx)) continue;
+      out.push({ spec, label: displayNodeLabel(def) });
+    }
+    return out;
+  };
+  // Latest-ref so the DEV hook (registered once) never reads a stale graph.
+  const morphOptionsForRef = useRef(morphOptionsFor);
+  morphOptionsForRef.current = morphOptionsFor;
 
   /** Latest-ref for the link-splice menu opener. The press-and-hold listener is
    *  registered ONCE (empty dep array, so a gesture can never be interrupted by a
@@ -4256,6 +4602,25 @@ export function GraphEditorInner() {
     return () => { delete (window as unknown as Record<string, unknown>).__openConnectionDropMenu; };
   }, []);
 
+  // DEV-only test hooks for the two node-context-menu edits. The MENU path is
+  // drivable (a node right-click does fire via dispatchEvent), but the submenu
+  // is CSS-hover-gated and the morph list is rebuilt per render, so a test that
+  // wants to assert SEMANTICS drives the same functions the menu items call.
+  // Same precedent as __moveSelectionToScope / __openSelectionMenu.
+  useEffect(() => {
+    if (!import.meta.env.DEV) return undefined;
+    const w = window as unknown as Record<string, unknown>;
+    w.__dissolveNode = (nodeId: string) => dissolveNode(nodeId);
+    w.__morphOptions = (nodeId: string) => morphOptionsForRef.current(nodeId).map(o => o.spec.to);
+    w.__morphNode = (nodeId: string, to: string) => {
+      const spec = morphOptionsForRef.current(nodeId).find(o => o.spec.to === to)?.spec;
+      if (!spec) return false;
+      morphNode(nodeId, spec);
+      return true;
+    };
+    return () => { delete w.__dissolveNode; delete w.__morphOptions; delete w.__morphNode; };
+  }, [dissolveNode, morphNode]);
+
   // DEV-only test hook: box-select multi-selection can't be driven by synthetic
   // events either (same limitation), so browser-eval tests open the selection
   // context menu (the one carrying "Create Macro from Selection") through this.
@@ -5330,6 +5695,56 @@ export function GraphEditorInner() {
                   Dissolve Reroute
                 </button>
               )}
+              {/* DISSOLVE NODE — the reroute item's generalisation. Offered for
+                  every ordinary caNode (reroutes keep their own item above; the
+                  macro interface and the singleton event roots are excluded). */}
+              {contextMenu.target.nodeType !== 'reroute'
+                && canDissolveNodeType(contextMenu.target.nodeType) && (
+                <button
+                  className={styles.contextItem}
+                  title="Remove this node but keep the connections — each consumer rewires to the first compatible source feeding an input (a consumer with no compatible pairing is left unwired)"
+                  onClick={e => {
+                    e.stopPropagation();
+                    const nid = (contextMenu.target as { nodeId: string }).nodeId;
+                    setContextMenu(null);
+                    dissolveNode(nid);
+                  }}
+                >
+                  Dissolve Node
+                </button>
+              )}
+              {/* MORPH INTO — convert to a closely-related type in place. Listed
+                  only when at least one morph is available on THIS graph for
+                  THIS node's config (see nodeMorph.ts for the table). */}
+              {(() => {
+                const nid = (contextMenu.target as { nodeId: string }).nodeId;
+                const options = morphOptionsFor(nid);
+                if (options.length === 0) return null;
+                return (
+                  <div className={styles.contextSubmenuTrigger}>
+                    <button className={styles.contextItem}>
+                      Morph into
+                      <span style={{ marginLeft: 'auto', fontSize: '0.6rem', color: '#6080a0' }}>&rsaquo;</span>
+                    </button>
+                    <div className={styles.contextSubmenu}>
+                      {options.map(({ spec, label }) => (
+                        <button
+                          key={spec.to}
+                          className={styles.contextItem}
+                          title={spec.title}
+                          onClick={e => {
+                            e.stopPropagation();
+                            setContextMenu(null);
+                            morphNode(nid, spec);
+                          }}
+                        >
+                          {label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                );
+              })()}
               {contextMenu.target.isMacro ? (
                 <div className={styles.contextSubmenuTrigger}>
                   <button className={styles.contextItem}>
