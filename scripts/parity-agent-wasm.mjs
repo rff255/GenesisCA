@@ -2841,6 +2841,107 @@ entries.push({
   name: '[synthetic] By-id targeting (Kill / Set Velocity / Set Target Radius, self + by id)',
   raw: buildByIdTargetingModel(), invariant: byIdTargetingInvariant,
 });
+// ---------------------------------------------------------------------------
+// TORUS SEAM — Get Nearby Agents across the world wrap.
+//
+// A neighbour query on a torus has TWO independent ways to be wrong, and BOTH
+// are invisible anywhere except within one query radius of a seam: the 3x3 hash
+// stencil may not WRAP its bin index (the bins across the seam are never
+// visited), and the candidate delta may not FOLD to the shortest way round (a
+// partner 1 unit away measures W-1 away). Parity alone cannot see either — both
+// targets share the stencil SHAPE, so a shared mistake agrees perfectly. Hence
+// the VALUE invariant below, which recounts every agent's neighbours from the
+// store's own positions with an independent O(N^2) torus fold.
+//
+// `setupTorusSeamStores` deliberately puts MANY agents within the query radius
+// of a seam (and four exactly on the corner, where BOTH wraps must apply at
+// once). The fixture is sized so the hash is genuinely used — `binSize` comes
+// out WIDER than the query radius, so the seam pairs are reachable ONLY through
+// a wrapped stencil, never by luck.
+const SEAM_W = 60, SEAM_H = 40, SEAM_R = 3;
+function buildTorusSeamModel() {
+  const used = new Set();
+  const nid = (p) => { let id; do { id = p + Math.random().toString(36).slice(2, 8); } while (used.has(id)); used.add(id); return id; };
+  const aN = [], aEd = [];
+  const an = (t, c) => { const n = { id: nid('a'), type: 'caNode', position: { x: 0, y: 0 }, data: { nodeType: t, config: c } }; aN.push(n); return n; };
+  const aE = (s, sp, tt, tp, cat) => aEd.push({ id: nid('e'), source: s.id, target: tt.id, sourceHandle: `output_${cat}_${sp}`, targetHandle: `input_${cat}_${tp}` });
+  const bs = an('behaviourStep', {});
+  const na = an('getNearbyAgents', { _port_radius: String(SEAM_R) });
+  const al = an('arrayLength', {});
+  const sa = an('setAttribute', { attributeId: 'nb' });
+  aE(bs, 'do', sa, 'do', 'flow');
+  aE(na, 'agents', al, 'array', 'value');
+  aE(al, 'length', sa, 'value', 'value');
+  return {
+    schemaVersion: 1,
+    properties: { name: 'Torus Seam Parity Test', dimension: '2d', gridWidth: SEAM_W, gridHeight: SEAM_H, gridDepth: 1, topology: '2d-grid', boundaryTreatment: 'torus', useWasm: false, useWebGPU: false },
+    topologyMode: { gridCells: false, agents: true },
+    centerBased: {
+      enabled: true, maxAgents: 200, maxBonds: 0, worldWidth: SEAM_W, worldHeight: SEAM_H,
+      seedCount: 0, seedPattern: 'none', defaultRadius: 0.5, growthRate: 0,
+      repulsionStiffness: 0, adhesionStiffness: 0, interactionRange: 1.5,
+      drag: 1, timeStep: 0.1, momentum: 0, maxSpeed: 0, neighbourQueryRadius: 8,
+      useBondingPhysics: false, autoBond: false, agentTarget: 'wasm', agentUpdateMode: 'async',
+      agentCapabilities: { motion: 'static', body: true, collision: 'off', bonds: 'off', autoBond: false, growth: false, division: false, lifespan: false, populationBirth: false, populationDeath: false, sensing: true, sensingHeadingSource: 'velocity', orientation: false, fieldCoupling: false, appearance: true },
+    },
+    attributes: [], modelAttributes: [], neighborhoods: [],
+    agentAttributes: [{ id: 'nb', name: 'Neighbours', type: 'integer', defaultValue: '0' }],
+    variables: [], agentVariables: [], indicators: [], mappings: [],
+    graphNodes: [], graphEdges: [], agentGraphNodes: aN, agentGraphEdges: aEd, macroDefs: [],
+  };
+}
+/** Reposition both stores identically: a seam-heavy but deterministic layout —
+ *  the first agents hug the four seams and the two corners, the rest scatter. */
+function setupTorusSeamStores(stores) {
+  for (const s of stores) {
+    for (let i = 0; i < s.highWater; i++) {
+      let x, y;
+      if (i < 8) { x = (i % 2 === 0 ? 0.4 : SEAM_W - 0.4); y = 5 + Math.floor(i / 2) * 9; }          // x-seam pairs
+      else if (i < 16) { x = 5 + Math.floor((i - 8) / 2) * 13; y = (i % 2 === 0 ? 0.4 : SEAM_H - 0.4); } // y-seam pairs
+      else if (i < 20) { x = ((i - 16) & 1) ? SEAM_W - 0.6 : 0.6; y = ((i - 16) & 2) ? SEAM_H - 0.6 : 0.6; } // corners
+      else { x = ((i * 7.371) + Math.sin(i * 1.618) * 0.7) % SEAM_W; y = ((i * 5.137) + Math.cos(i * 2.71) * 0.7) % SEAM_H; }
+      x = ((x % SEAM_W) + SEAM_W) % SEAM_W; y = ((y % SEAM_H) + SEAM_H) % SEAM_H;
+      s.x[i] = x; s.xNext[i] = x; s.y[i] = y; s.yNext[i] = y;
+    }
+  }
+}
+/** THE VALUE INVARIANT — recount every agent's neighbours from the store's own
+ *  positions with an independent torus fold. Also asserts the fixture actually
+ *  EXERCISES the wrap (a seam-blind recount must disagree somewhere), so a green
+ *  run is evidence rather than a fixture that never crosses a seam. */
+function torusSeamInvariant(st) {
+  const hW = SEAM_W / 2, hH = SEAM_H / 2, r2 = SEAM_R * SEAM_R;
+  const count = (fold) => {
+    const out = new Array(st.highWater).fill(0);
+    for (let i = 0; i < st.highWater; i++) {
+      if (!st.alive[i]) continue;
+      for (let j = 0; j < st.highWater; j++) {
+        if (i === j || !st.alive[j]) continue;
+        let dx = st.x[j] - st.x[i], dy = st.y[j] - st.y[i];
+        if (fold) {
+          if (dx > hW) dx -= SEAM_W; else if (dx < -hW) dx += SEAM_W;
+          if (dy > hH) dy -= SEAM_H; else if (dy < -hH) dy += SEAM_H;
+        }
+        if (dx * dx + dy * dy <= r2) out[i]++;
+      }
+    }
+    return out;
+  };
+  const truth = count(true), blind = count(false);
+  let crossers = 0;
+  for (let i = 0; i < st.highWater; i++) if (st.alive[i] && truth[i] !== blind[i]) crossers++;
+  if (crossers === 0) return 'the fixture crosses NO seam — the invariant would be vacuous';
+  for (let i = 0; i < st.highWater; i++) {
+    if (!st.alive[i]) continue;
+    const got = st.attrRead.nb[i];
+    if (got !== truth[i]) return `agent ${i} at (${st.x[i].toFixed(2)}, ${st.y[i].toFixed(2)}): nb ${got} !== torus recount ${truth[i]} (seam-blind would say ${blind[i]})`;
+  }
+  return null;
+}
+entries.push({
+  name: '[synthetic] Torus seam (Get Nearby Agents across the wrap)',
+  raw: buildTorusSeamModel(), setup: setupTorusSeamStores, invariant: torusSeamInvariant,
+});
 entries.push({ name: '[synthetic] Flow diamond (conditional → shared getRandom chain)', raw: buildDiamondModel() });
 entries.push({ name: '[synthetic] RNG draw order (branch draw + post-branch draws)', raw: buildRngOrderModel() });
 entries.push({ name: '[synthetic] Branch scope (value used inside AND after a branch)', raw: buildBranchScopeModel() });
