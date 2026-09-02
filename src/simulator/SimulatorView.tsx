@@ -13109,6 +13109,14 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
     workerRef.current?.postMessage({ type: 'step', count: 1, activeViewer });
   };
 
+  /** The transport bar's ONE play/pause TOGGLE. Derived once so the glyph, the
+   *  tooltip and the accessible name can never disagree about which state the
+   *  button is in. It renders from `playing`, so every pause path that routes
+   *  through `setPlaying(false)` — the Enter shortcut, Esc/Reset, an end
+   *  condition, a Stop Event, a capture pause, leaving the tab — flips the icon
+   *  back to ▶ for free. */
+  const playPauseLabel = playing ? 'Pause (Enter)' : 'Play (Enter)';
+
   /** The model's embedded BOARD (null when it carries none / only controls) and
    *  whether Reset restores it by DEFAULT. Both actions stay reachable from the ■
    *  button's menu whichever way the flag is set; the menu itself only renders
@@ -16291,9 +16299,20 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
           </div>
           <div className={styles.transportDivider} />
 
-          {/* Playback controls (center) */}
-          <button className={styles.transportBtn} onClick={() => setPlaying(true)} disabled={playing} title="Play (Enter)">&#9654;</button>
-          <button className={styles.transportBtn} onClick={() => setPlaying(false)} disabled={!playing} title="Pause (Enter)">&#9646;&#9646;</button>
+          {/* Playback controls (center). Play/pause is ONE button alternating its
+              glyph — never two, one of which is always dead. The click is the
+              SAME functional toggle the Enter shortcut uses, so both paths land
+              on the single `useEffect([playing])` seam identically.
+              `.transportBtnPlay` pins the width so the bar's geometry is
+              IDENTICAL in both states: the bar is CENTRED, so a glyph-width
+              change would nudge every neighbouring button on every toggle (the
+              capture popover's "rows never reflow" rule, in miniature). */}
+          <button
+            className={`${styles.transportBtn} ${styles.transportBtnPlay}`}
+            onClick={() => setPlaying(p => !p)}
+            title={playPauseLabel}
+            aria-label={playPauseLabel}
+          >{playing ? '▮▮' : '▶'}</button>
           <button className={styles.transportBtn} onClick={handleStep} title="Step (Space)">&#9654;|</button>
           {/* Reset — a plain click performs the MODEL's default (Properties →
               Execution → "Reset restores saved board"); hover / right-click

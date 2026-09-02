@@ -690,6 +690,21 @@
   border-color: var(--color-border-muted);
 }
 
+/* The play/pause TOGGLE. Its glyph changes width between states (measured: the
+   two-bar pause mark renders 12px wider than the play triangle) and the
+   transport bar is CENTRED, so an unpinned button would nudge every
+   neighbouring control on every toggle — the capture popover's "rows never
+   reflow" rule in miniature.
+   A fixed `width` with an EXPLICIT `border-box`, not a `min-width`: min-width
+   still lets a glyph wider than the guess grow the box, so the geometry would
+   depend on the renderer's font metrics. With border-box the button is exactly
+   this wide whatever it contains, and the glyph simply centres inside it. */
+.transportBtnPlay {
+  box-sizing: border-box;
+  width: 46px;
+  text-align: center;
+}
+
 .transportBtn:disabled {
   opacity: 0.4;
   cursor: default;
