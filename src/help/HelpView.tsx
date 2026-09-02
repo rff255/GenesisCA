@@ -947,6 +947,36 @@ export function HelpView() {
             (WebAssembly / WebGPU / JS).
           </p>
 
+          <h3 className={styles.h3}>Grid Periodic Event Node</h3>
+          <p className={styles.p}>
+            The <strong>Grid Periodic Event</strong> is the Grid Init Event <em>on a clock</em>:
+            it runs <strong>once globally</strong> &mdash; not per cell, with no current cell
+            &mdash; on generations where <code>generation % Period === Phase</code>. Use it for
+            things that happen <em>to the world</em> rather than to each cell: periodically add
+            substrate or food, seed a fresh wave of pattern, redraw a region, or read an{' '}
+            <strong>indicator</strong> and fire a <strong>Stop Event</strong> when the run should
+            end.
+          </p>
+          <p className={styles.p}>
+            It has the same value outputs as the Grid Init Event (<code>width</code>,{' '}
+            <code>height</code>, and <code>depth</code> in 3D) plus <strong>Step Index</strong>{' '}
+            = &lfloor;generation &divide; Period&rfloor; &mdash; the firing counter, so the tenth
+            firing can behave differently from the first. Wire a <strong>Loop</strong> and{' '}
+            <strong>Set Cell (at Position)</strong> inside its <code>DO</code> chain exactly as
+            you would in the Grid Init Event. Unlike the Init Event it is <strong>not a
+            singleton</strong>: place several with different periods to get a fast and a slow
+            clock in one model. <code>Period</code> is clamped to at least 1 and <code>Phase</code>{' '}
+            folds into <code>[0, Period)</code>, so a period of 1 fires every generation.
+          </p>
+          <p className={styles.p}>
+            It fires at the <strong>top of the generation</strong> &mdash; before the agent step
+            and before the cell step &mdash; so whatever it writes is already there when that
+            same generation&apos;s rule runs. It works on every compile target; on the{' '}
+            <strong>WebGPU</strong> grid the engine reads the board back and re-uploads it around
+            a firing, so an evolved board is never lost, and that cost is paid only on the
+            generations that actually fire.
+          </p>
+
           <h3 className={styles.h3}>Local Variables</h3>
           <p className={styles.p}>
             <strong>Local Variables</strong> are per-cell mutable scratch storage you
@@ -1283,6 +1313,7 @@ export function HelpView() {
               <tr><td>Generation Step</td><td>Entry point for per-generation cell update logic. Connect &quot;DO&quot; to start the flow chain. Singleton.</td></tr>
               <tr><td>Init Event</td><td>Runs once per cell on simulator <strong>Reset</strong> (after defaults, before the first color pass; not on a state restore). Outputs <code>x</code>, <code>y</code>, <code>maxX</code>, <code>maxY</code> (plus <code>z</code>, <code>maxZ</code> in 3D models). Singleton. Useful for procedural initial state (gradients, noise, random orientations).</td></tr>
               <tr><td>Grid Init Event</td><td>Runs <strong>once globally</strong> on Reset (and first load) &mdash; the free-form counterpart to the per-cell Init Event. Loop inside <code>DO</code> and write arbitrary cells with <strong>Set Cell (at Position)</strong> to seed procedurally (random seeds, shapes, a middle box). Outputs <code>width</code>, <code>height</code> (plus <code>depth</code> in 3D). Singleton; no current cell.</td></tr>
+              <tr><td>Grid Periodic Event</td><td>Runs <strong>once globally</strong> (not per cell, no current cell) on generations where <code>generation % Period === Phase</code> &mdash; the Grid Init Event on a clock. Loop + <strong>Set Cell (at Position)</strong> to add substrate or redraw a region, or read an indicator and fire a <strong>Stop Event</strong>. Outputs the grid size plus <strong>Step Index</strong> = &lfloor;generation &divide; Period&rfloor;. <strong>Not a singleton</strong> &mdash; several cadences per graph. Fires at the top of the generation, so what it writes is visible to that same generation&apos;s rule. Runs on every compile target.</td></tr>
               <tr><td>Input Mapping (C&rarr;A)</td><td>Entry point for Color-to-Attribute mapping (brush/image import). Its value outputs are the <strong>parameters its mapping declares</strong> &mdash; one port per parameter (three for a <em>color</em> one). A mapping that declares none keeps the classic <code>R</code>, <code>G</code>, <code>B</code> outputs. See &ldquo;Input Mapping Parameters&rdquo; under Mappings.</td></tr>
               <tr><td>Output Mapping (A&rarr;C)</td><td>Entry point for Attribute-to-Color visualization. Runs as a separate sequential pass after the Generation Step, ensuring colors reflect the final cell state. A mapping can instead be marked <strong>Linked</strong> in the Mappings panel (pick an attribute and the color pass is auto-generated &mdash; see &ldquo;Linked Output Mappings&rdquo; below); if you also add this node for a linked mapping, the auto pass runs first as a background and your graph overrides the cells it paints.</td></tr>
               <tr><td>Stop Event</td><td>Terminates the simulation run with a user-defined message when its DO flow input fires. Use for end conditions that need graph-level logic (complex spatial patterns, multi-attribute combinations). The text widget on the node body holds the message. First triggered stop in a step wins.</td></tr>
@@ -1314,7 +1345,7 @@ export function HelpView() {
               <tr><td>Get Cell Attribute</td><td>Read the current cell&apos;s attribute value (e.g., &quot;alive&quot;). Supports multiple attribute <strong>slots</strong> (&quot;+ Attribute&quot;): one node reads several attributes, each through its own output port &mdash; no need for a separate Get node per attribute.</td></tr>
               <tr><td>Get Cell Position</td><td>Outputs the current cell&apos;s grid coordinates &mdash; <strong>Row</strong>, <strong>Col</strong>, and (in 3D) <strong>Layer</strong>. A controlled, own-cell-only break of locality so a cell can behave by where it is: spatial gradients, region-specific rules, or a coordinate-aware Output Mapping. Works in every event.</td></tr>
               <tr><td>Get Grid Dimensions</td><td>Outputs the <strong>size of the world</strong> &mdash; <strong>Width</strong>, <strong>Height</strong>, and (in 3D) <strong>Depth</strong>. Use it to write a rule that doesn&apos;t care how big the grid is: seed the middle, normalise a coordinate to 0&ndash;1, or fade by distance from an edge &mdash; instead of typing the numbers in and having them go silently wrong the moment you resize the grid. Tick <strong>Output center</strong> to also get the grid centre directly (<strong>Center X/Y</strong> = &lfloor;size&divide;2&rfloor;, plus <strong>Center Z</strong> in 3D) with no hand-wired &divide;2 arithmetic. Works in every event, and on the <strong>Agents</strong> graph too (there it&apos;s called <strong>Get World Dimensions</strong> &mdash; the agent world <em>is</em> the cell grid, so it reports the same numbers).</td></tr>
-              <tr><td>Get Generation</td><td>Outputs the <strong>current generation number</strong> (0-based &mdash; the first step after a Reset is 0). Use it to give a rule its own <strong>cadence</strong>: <code>Get Generation &rarr; Math (%) &rarr; Compare (==) &rarr; If/Then</code> runs a branch only every Nth generation. Works on the <strong>Cells</strong> graph and the <strong>Agents</strong> graph &mdash; both read one shared counter, so they always agree. In an <strong>Init event</strong> it reads 0 (Reset zeroes the counter before seeding); in a <strong>Division Event</strong> it reads the generation the division happened in. On the Agents graph, <strong>Periodic Step</strong> is this same gate as a ready-made event root.</td></tr>
+              <tr><td>Get Generation</td><td>Outputs the <strong>current generation number</strong> (0-based &mdash; the first step after a Reset is 0). Use it to give a rule its own <strong>cadence</strong>: <code>Get Generation &rarr; Math (%) &rarr; Compare (==) &rarr; If/Then</code> runs a branch only every Nth generation. Works on the <strong>Cells</strong> graph and the <strong>Agents</strong> graph &mdash; both read one shared counter, so they always agree. In an <strong>Init event</strong> it reads 0 (Reset zeroes the counter before seeding); in a <strong>Division Event</strong> it reads the generation the division happened in. On the Agents graph, <strong>Agent Periodic Step</strong> is this same gate as a ready-made per-agent event root; for a rule that should run <em>once</em> on those generations rather than per agent, use <strong>Population Periodic Event</strong> (Agents) or <strong>Grid Periodic Event</strong> (Cells).</td></tr>
               <tr><td>Get Model Attribute</td><td>Read a global model parameter. Supports multiple attribute slots (&quot;+ Attribute&quot;) &mdash; one node exposes several model parameters as separate output ports (a color parameter in a slot exposes its own R/G/B trio).</td></tr>
               <tr><td>Get Neighbors Attribute</td><td>Collect an attribute from all neighbors as an array.</td></tr>
               <tr><td>Get Neighbor Attr By Index</td><td>Read a cell attribute from ONE specific neighbor by index. Works in both sync and async modes.</td></tr>
@@ -2539,7 +2570,7 @@ export function HelpView() {
             <code>side = sqrt(maxAgents &times; (bond rest &times; 1.45)&sup2;)</code>, since a
             charged layout settles at about 1.45&times; the rest length per link. And if the rule
             <em> rewrites</em> faster than the solver can untangle, no force helps: give the rule a{' '}
-            <strong>Periodic Step</strong> (rewrite every Nth generation) or raise{' '}
+            <strong>Agent Periodic Step</strong> (rewrite every Nth generation) or raise{' '}
             <strong>Layout iterations</strong> below.
           </p>
           <h3 className={styles.h3}>Charge range &mdash; Cutoff or Global (Barnes&ndash;Hut)</h3>
@@ -2597,13 +2628,13 @@ export function HelpView() {
             division, death) runs exactly once, after the last iteration.
           </p>
           <p className={styles.p}>
-            It pairs with <strong>Periodic Step</strong> rather than replacing it. Raising layout
+            It pairs with <strong>Agent Periodic Step</strong> rather than replacing it. Raising layout
             iterations gives the layout more time <em>without</em> changing what a generation
             means &mdash; useful when your model counts generations (indicators, end conditions, an
-            Overseer budget). A Periodic Step instead slows the <em>rule</em> down, which is what
+            Overseer budget). An Agent Periodic Step instead slows the <em>rule</em> down, which is what
             you want when the rule itself should tick more slowly than the physics. Relaxation
             passes per rule step = <em>period</em> &times; <em>layout iterations</em>; the shipped{' '}
-            <strong>Growing Graphs</strong> hangs its whole rule off a Periodic Step, and{' '}
+            <strong>Growing Graphs</strong> hangs its whole rule off an Agent Periodic Step, and{' '}
             <strong>SDCA</strong> &mdash; whose
             population is fixed, so there is no growth to outrun &mdash; uses 2 layout iterations
             instead.
@@ -2677,8 +2708,11 @@ export function HelpView() {
               <code> Z</code> in a 3D model) / <code>Radius</code> / <code>Area</code> /
               <code> Bond Degree</code> / <code>Age</code>. (Agents have <em>no built-in
               type</em> &mdash; describe an agent with your own Agent Attributes.)</li>
-            <li><strong>Periodic Step</strong> &mdash; an entry root that runs its chain
-              <strong> only every Nth generation</strong> (<code>generation % Period === Phase</code>).
+            <li><strong>Agent Periodic Step</strong> &mdash; an entry root that runs its chain
+              <strong> for every agent</strong>, but <strong>only every Nth generation</strong>
+              (<code>generation % Period === Phase</code>). It is a Behaviour Step on a clock, so
+              it has a <code>self</code>; the <em>global</em> once-per-firing counterpart is{' '}
+              <strong>Population Periodic Event</strong> below.
               Unlike Behaviour Step you may place <strong>several</strong>: two at Period 2 with
               phases 0 and 1 alternate &mdash; states on even ticks, rewrites on odd &mdash; and
               three at 1 / 5 / 50 give a fast, a medium and a slow clock in one model. A plain
@@ -2687,6 +2721,19 @@ export function HelpView() {
               rule-step counter. Why a root rather than wiring the modulo yourself: it gates the
               state update and the rewrite on the <em>same</em> tick, which is what keeps a
               periodic automaton faithful.</li>
+            <li><strong>Population Periodic Event</strong> &mdash; the <strong>global</strong>
+              periodic root: it runs its chain <strong>once</strong> per firing generation, with
+              <strong> no <code>self</code></strong> &mdash; the periodic counterpart to the Agent
+              Init Event. Use it to <strong>spawn a wave</strong> of agents (Create Agent &rarr;
+              set-by-handle &rarr; Add Agent To World, exactly as in the Init Event), retire agents
+              by id, sweep an attribute, or read an indicator and fire a <strong>Stop Event</strong>.
+              Outputs the world size, <strong>Step Index</strong>, and <strong>Seed Index Base</strong>
+              (the id the first agent created this firing will get, so a spawn loop can number its
+              own batch). It fires at the <em>top</em> of the generation, so a newborn behaves and
+              moves that same generation. Several are allowed, each with its own cadence.
+              &mdash; <em>Note:</em> a model using it cannot take the GPU-resident fast path (that
+              path runs many generations in one submit with no pause in between, which is exactly
+              what a per-generation event needs); it still runs on every compile target.</li>
             <li><strong>Get Self Position / Get Radius / Get Bond Degree / Neighbour Density</strong>
               &mdash; read the agent's geometry and its local crowding.{' '}
               <strong>Neighbour Density</strong> has two modes, decided by its optional
@@ -2896,7 +2943,7 @@ export function HelpView() {
             3-regular graph 3-regular while it grows: a split turns one node into three, and the
             whole rewrite lands in a single generation so the graph is <em>never</em> caught in a
             broken intermediate state. Its rule is two eight-cell tables you can re-roll, and it
-            runs on a <em>Periodic Step</em>, so the generations in between are pure layout
+            runs on an <em>Agent Periodic Step</em>, so the generations in between are pure layout
             relaxation &mdash; which is why the growing graph stays readable instead of collapsing
             into a blob.{' '}
             <strong>SDCA &mdash; Couplers and Decouplers</strong> is the classic

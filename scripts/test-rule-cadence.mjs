@@ -592,10 +592,12 @@ console.log('\n== ABI arity contract ==');
   const wsrc = readFileSync(join(ROOT, 'src/simulator/engine/sim.worker.ts'), 'utf8');
   check('the worker arity assertion tolerates exactly one trailing slot',
     /const arityOk = \(declared: number, want: number\) => declared === want \|\| declared === want - 1;/.test(wsrc));
-  // One site per ABI kind the worker eval's a fn for: behaviour / division /
-  // init / input-mapping. (The `spawner` kind shares the input-mapping site.)
+  // One site per compiled-fn LIST the worker eval's: behaviour / division /
+  // init / input-mapping / Population Periodic Events. (The `spawner` kind
+  // shares the input-mapping site; the periodic events REUSE the `init` ABI
+  // kind but are their own fn list, so they get their own assert.)
   check('every ABI pair goes through arityOk',
-    (wsrc.match(/!arityOk\(/g) ?? []).length === 4, `${(wsrc.match(/!arityOk\(/g) ?? []).length} sites`);
+    (wsrc.match(/!arityOk\(/g) ?? []).length === 5, `${(wsrc.match(/!arityOk\(/g) ?? []).length} sites`);
   check('the DANGEROUS direction (params > args) is still an error',
     !/declared === want \+ 1/.test(wsrc));
 }

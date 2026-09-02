@@ -975,7 +975,7 @@ export const LATTICE_ONLY_TYPES = new Set<string>([
   'assertActiveViewer',
   // Grid Init Event + its write primitive — seed the LATTICE grid (agents use the
   // Agent Init Event + Create Agent).
-  'gridInit', 'setCellAtPosition',
+  'gridInit', 'gridPeriodic', 'setCellAtPosition',
   // neighbour + neighbour-index access (agents have no lattice neighbourhood)
   'getNeighborsAttribute', 'getNeighborAttributeByIndex', 'getNeighborAttributeByTag',
   'getNeighborIndexesByTags', 'getNeighborsAttrByIndexes', 'getAllNeighborIndexes',
@@ -1113,15 +1113,18 @@ function agentInitSelfOnlyNodeIds(model: CAModel): Map<string, string> {
   }
   /** nodeId -> the reason string (which selfless root it was reached from). */
   const result = new Map<string, string>();
-  // EVERY root whose ABI has no `self`: the Agent Init Event and every
+  // EVERY root whose ABI has no `self`: the Agent Init Event, the Population
+  // Periodic Event (which REUSES the init ABI kind verbatim) and every
   // SPAWNER-kind Agent Input Mapping. They share the footgun exactly (no `idx`,
   // no live-population buffers), so they share one walk.
   const selflessRoots = nodes.filter(n =>
     n.data?.nodeType === 'agentInit'
+    || n.data?.nodeType === 'agentPeriodic'
     || (n.data?.nodeType === 'agentInputMapping'
       && inputBrushKindForNode('agentInputMapping', n.data?.config, model) === 'spawner'));
   for (const initNode of selflessRoots) {
     const isSpawner = initNode.data?.nodeType === 'agentInputMapping';
+    const isPeriodic = initNode.data?.nodeType === 'agentPeriodic';
     const whenUnwired = isSpawner ? SPAWNER_SELF_ONLY_WHEN_UNWIRED : AGENT_SELF_ONLY_WHEN_UNWIRED;
     const nodeMap = new Map(nodes.map(n => [n.id, n] as const));
     // flow-output adjacency (src → targets) + value-input adjacency (node → sources).
@@ -1164,7 +1167,9 @@ function agentInitSelfOnlyNodeIds(model: CAModel): Map<string, string> {
       if (!result.has(id)) {
         result.set(id, isSpawner
           ? 'Reads agent state — unavailable in a SPAWNER-kind Agent Input Mapping, which runs ONCE per brush application (no current agent) to CREATE agents by handle: Create Agent → Set Agent Position/Radius/Attribute → Add Agent To World. Switch the mapping to the Editor brush kind to run per painted agent.'
-          : 'Reads agent state — unavailable in the Agent Init Event, which runs once (no current agent, no live population) to SPAWN + configure NEW agents by handle: Create Agent → Set Agent Position/Radius/Attribute → Add Agent To World.');
+          : isPeriodic
+            ? 'Reads agent state — unavailable in a Population Periodic Event, which runs ONCE per firing generation (no current agent) to SPAWN + configure agents by handle: Create Agent → Set Agent Position/Radius/Attribute → Add Agent To World. For a rule that runs FOR EVERY agent on those generations use an Agent Periodic Step instead.'
+            : 'Reads agent state — unavailable in the Agent Init Event, which runs once (no current agent, no live population) to SPAWN + configure NEW agents by handle: Create Agent → Set Agent Position/Radius/Attribute → Add Agent To World.');
       }
     }
   }

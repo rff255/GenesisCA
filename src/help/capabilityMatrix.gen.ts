@@ -127,6 +127,20 @@ export const AGENT_NODE_MATRIX: CapabilityNodeRow[] = [
     "webgpuStatus": "yes"
   },
   {
+    "type": "agentPeriodic",
+    "label": "Population Periodic Event",
+    "category": "event",
+    "capability": null,
+    "capabilityLabel": null,
+    "wasm": false,
+    "webgpu": false,
+    "entryPoint": true,
+    "lowered": false,
+    "cpuRoot": true,
+    "wasmStatus": "exempt",
+    "webgpuStatus": "exempt"
+  },
+  {
     "type": "applyForce",
     "label": "Apply Force",
     "category": "output",
@@ -576,7 +590,7 @@ export const AGENT_NODE_MATRIX: CapabilityNodeRow[] = [
   },
   {
     "type": "periodicStep",
-    "label": "Periodic Step",
+    "label": "Agent Periodic Step",
     "category": "event",
     "capability": null,
     "capabilityLabel": null,
@@ -884,14 +898,14 @@ export const CAPACITY_LIMITS: CapacityLimit[] = [
 
 /** Node counts, so prose never hard-codes a number that can rot. */
 export const NODE_COUNTS = {
-  "registry": 154,
+  "registry": 156,
   "hiddenMacro": 3,
-  "selectable": 151,
-  "agent": 52,
+  "selectable": 153,
+  "agent": 53,
   "overseer": 20,
   "agentOnWasm": 45,
   "agentOnWebgpu": 46,
-  "agentCpuRoots": 4,
+  "agentCpuRoots": 5,
   "agentLowered": 3,
   "agentGapsWasm": 0,
   "agentGapsWebgpu": 0

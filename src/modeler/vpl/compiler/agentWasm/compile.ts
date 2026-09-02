@@ -222,6 +222,10 @@ export const AGENT_WASM_SUPPORTED_TYPES: ReadonlySet<string> = new Set<string>([
  *  BEHAVIOUR-reachable node set (the divisionEvent/agentInit subtrees). */
 export const AGENT_WASM_CPU_ROOT_TYPES: ReadonlySet<string> = new Set<string>([
   'divisionEvent', 'agentInit', 'createAgent', 'addAgentToWorld',
+  // The Population Periodic Event is a GLOBAL, once-per-firing-generation root the
+  // worker runs in JS on every agent target — the WASM behaviour module never sees
+  // it (the gate walks the BEHAVIOUR cone, which a root can never be in).
+  'agentPeriodic',
 ]);
 
 export interface AgentWasmResult {

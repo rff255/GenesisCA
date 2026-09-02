@@ -2,7 +2,7 @@ import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useReducer, use
 import { useModel } from '../model/ModelContext';
 import { hexToRgba, rgbaToHex, OPAQUE } from '../model/colorHex';
 import { ColorField } from '../modeler/vpl/widgets/ColorField';
-import { compileGraph, compileAgentGraph, type CompileResult } from '../modeler/vpl/compiler/compile';
+import { compileGraph, compileAgentGraph, type CompileResult, type PeriodicEventCode } from '../modeler/vpl/compiler/compile';
 import { expandVectorAttributes, encodeAttrSets, decodeVectorFromValues } from '../modeler/vpl/compiler/vectorAttr';
 import { hasGlyphsInModel } from '../modeler/vpl/compiler/glyphsUsage';
 import { agentGraphReadsEngineDensity } from '../modeler/vpl/compiler/densityExpand';
@@ -1849,7 +1849,7 @@ function safeCompileGraph(
     return compileGraph(graphNodes, graphEdges, model);
   } catch (e) {
     return {
-      stepCode: '', initCode: '', gridInitCode: '',
+      stepCode: '', initCode: '', gridInitCode: '', gridPeriodicCodes: [],
       inputColorCodes: [], outputMappingCodes: [], stopMessages: [],
       error: `Compile failed: ${String((e as Error)?.message || e)}`,
     };
@@ -4826,7 +4826,7 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
   // (Decision D-TARGET). PR-A2 returns a placeholder (agents seed + render but
   // don't behave); PR-A3 wires the real compileAgentGraph over
   // model.agentGraphNodes (the behaviourStep loop + value-outs + force hooks).
-  const compileAgentModel = useCallback((stopIdxBase = 0, dimsModel?: CAModel): { behaviourCode?: string; initCode?: string; divisionCode?: string; outputMappingCodes?: Array<{ mappingId: string; code: string }>; inputMappingCodes?: Array<{ mappingId: string; code: string; channels: number; spawner?: boolean }>; stopMessages: string[]; dividePartitions?: DividePartitionSpec[]; colorViewer: string; error?: string; agentTarget: 'js' | 'wasm' | 'webgpu'; agentWasmBytes?: Uint8Array; agentWasmViewerGuardIds?: string[]; agentLayoutExtras?: AgentLayoutExtras; agentWasmLayoutSig?: { maxHashBins: number; totalBytes: number }; agentResidencyClean?: boolean; agentWebgpuBehaviourShader?: string; agentWebgpuForceShader?: string; agentWebgpuMaxAgents?: number; agentWebgpuMaxHashBins?: number; agentWebgpuLayout?: AgentWebGPULayout; agentRenderLayout?: AgentWebGPULayout; agentWebgpuUsesI32Write?: boolean; agentWebgpuUsage?: { usesBondStore?: boolean; usesBondStoreWrite?: boolean; usesIndicators?: boolean; usesAux?: boolean; usesSpawn?: boolean; usesStop?: boolean; usesForceScatter?: boolean; usesGeneration?: boolean; usesSpriteWrite?: boolean }; agentWebgpuOmShaders?: Array<{ mappingId: string; code: string; usesBondStore: boolean; usesBondStoreWrite?: boolean; usesIndicators: boolean; usesAux: boolean; usesGeneration?: boolean }>; agentWebgpuOmSupported?: boolean } => {
+  const compileAgentModel = useCallback((stopIdxBase = 0, dimsModel?: CAModel): { behaviourCode?: string; initCode?: string; periodicCodes?: PeriodicEventCode[]; divisionCode?: string; outputMappingCodes?: Array<{ mappingId: string; code: string }>; inputMappingCodes?: Array<{ mappingId: string; code: string; channels: number; spawner?: boolean }>; stopMessages: string[]; dividePartitions?: DividePartitionSpec[]; colorViewer: string; error?: string; agentTarget: 'js' | 'wasm' | 'webgpu'; agentWasmBytes?: Uint8Array; agentWasmViewerGuardIds?: string[]; agentLayoutExtras?: AgentLayoutExtras; agentWasmLayoutSig?: { maxHashBins: number; totalBytes: number }; agentResidencyClean?: boolean; agentWebgpuBehaviourShader?: string; agentWebgpuForceShader?: string; agentWebgpuMaxAgents?: number; agentWebgpuMaxHashBins?: number; agentWebgpuLayout?: AgentWebGPULayout; agentRenderLayout?: AgentWebGPULayout; agentWebgpuUsesI32Write?: boolean; agentWebgpuUsage?: { usesBondStore?: boolean; usesBondStoreWrite?: boolean; usesIndicators?: boolean; usesAux?: boolean; usesSpawn?: boolean; usesStop?: boolean; usesForceScatter?: boolean; usesGeneration?: boolean; usesSpriteWrite?: boolean }; agentWebgpuOmShaders?: Array<{ mappingId: string; code: string; usesBondStore: boolean; usesBondStoreWrite?: boolean; usesIndicators: boolean; usesAux: boolean; usesGeneration?: boolean }>; agentWebgpuOmSupported?: boolean } => {
     // A simulator Resize / image-import overrides the live grid dims WITHOUT
     // touching model state, and the agent WASM/WebGPU compilers bake dims-derived
     // layout regions (the spatial-hash reserve, fieldTotal). Compiling from the
@@ -4850,7 +4850,7 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
       try { return compileAgentGraph(m.agentGraphNodes || [], m.agentGraphEdges || [], m, stopIdxBase); }
       catch (e) {
         return {
-          behaviourCode: '', initCode: '', divisionCode: '', stopMessages: [],
+          behaviourCode: '', initCode: '', periodicCodes: [], divisionCode: '', stopMessages: [],
           outputMappingCodes: [], inputMappingCodes: [], dividePartitions: [],
           error: `Compile failed: ${String((e as Error)?.message || e)}`,
         };
@@ -4979,7 +4979,7 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
         { gridDepth: renderDepth, sprites: (m.sprites?.length ?? 0) > 0 },
       );
     }
-    return { behaviourCode: ag.behaviourCode || undefined, initCode: ag.initCode || undefined, divisionCode: ag.divisionCode || undefined, outputMappingCodes: ag.outputMappingCodes && ag.outputMappingCodes.length ? ag.outputMappingCodes : undefined, inputMappingCodes: ag.inputMappingCodes && ag.inputMappingCodes.length ? ag.inputMappingCodes : undefined, stopMessages: ag.stopMessages, dividePartitions: ag.dividePartitions, colorViewer, error: ag.error || undefined, agentTarget, agentWasmBytes, agentWasmViewerGuardIds, agentLayoutExtras, agentWasmLayoutSig, agentResidencyClean, agentWebgpuBehaviourShader, agentWebgpuForceShader, agentWebgpuMaxAgents, agentWebgpuMaxHashBins, agentWebgpuLayout, agentRenderLayout, agentWebgpuUsesI32Write, agentWebgpuUsage, agentWebgpuOmShaders, agentWebgpuOmSupported };
+    return { behaviourCode: ag.behaviourCode || undefined, initCode: ag.initCode || undefined, periodicCodes: ag.periodicCodes && ag.periodicCodes.length ? ag.periodicCodes : undefined, divisionCode: ag.divisionCode || undefined, outputMappingCodes: ag.outputMappingCodes && ag.outputMappingCodes.length ? ag.outputMappingCodes : undefined, inputMappingCodes: ag.inputMappingCodes && ag.inputMappingCodes.length ? ag.inputMappingCodes : undefined, stopMessages: ag.stopMessages, dividePartitions: ag.dividePartitions, colorViewer, error: ag.error || undefined, agentTarget, agentWasmBytes, agentWasmViewerGuardIds, agentLayoutExtras, agentWasmLayoutSig, agentResidencyClean, agentWebgpuBehaviourShader, agentWebgpuForceShader, agentWebgpuMaxAgents, agentWebgpuMaxHashBins, agentWebgpuLayout, agentRenderLayout, agentWebgpuUsesI32Write, agentWebgpuUsage, agentWebgpuOmShaders, agentWebgpuOmSupported };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   // `model.sprites` is a real dependency since the A2 render-only layout reserves
   // the sprite runs from it (and `spritesReserved` selects the sprite-aware disc
@@ -8626,6 +8626,7 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
       stepCode: result.stepCode,
       initCode: result.initCode,
       gridInitCode: result.gridInitCode,
+      gridPeriodicCodes: result.gridPeriodicCodes,
       // "Skip Isolated Empty Cells" (docs/PLAN_LARGE_GRID_PERF.md) — the worker
       // resolves the active-set spec from it. Absent/off → full loop.
       skipIsolatedEmpty: dimsModel.properties.skipIsolatedEmpty,
@@ -8696,6 +8697,7 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
       centerBased: model.centerBased,
       agentBehaviourCode: agentResult.behaviourCode,
       agentInitCode: agentResult.initCode,
+      agentPeriodicCodes: agentResult.periodicCodes,
       agentDivisionCode: agentResult.divisionCode,
       agentColorViewer: activeAgentViewerRef.current || agentResult.colorViewer,
       agentOutputMappingCodes: agentResult.outputMappingCodes,
@@ -9155,6 +9157,7 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
         stepCode: result.stepCode,
         initCode: result.initCode,
         gridInitCode: result.gridInitCode,
+        gridPeriodicCodes: result.gridPeriodicCodes,
         skipIsolatedEmpty: dimsModel.properties.skipIsolatedEmpty,
         inputColorCodes: result.inputColorCodes,
         outputMappingCodes: result.outputMappingCodes || [],
@@ -9186,6 +9189,7 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
         // center-based config so the worker re-clamps Δt and re-binds behaviourFn.
         agentBehaviourCode: agentResult.behaviourCode,
         agentInitCode: agentResult.initCode,
+        agentPeriodicCodes: agentResult.periodicCodes,
         agentDivisionCode: agentResult.divisionCode,
         agentColorViewer: activeAgentViewerRef.current || agentResult.colorViewer,
         agentOutputMappingCodes: agentResult.outputMappingCodes,

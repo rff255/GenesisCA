@@ -54,6 +54,15 @@ export interface ResidencyGraphFacts {
    *  shader's writes with that tick. Absent ⇒ false (a caller that predates this
    *  term keeps today's verdict). */
   usesSpriteWrite?: boolean;
+  /** The model carries a GLOBAL periodic event — a Grid Periodic Event on the
+   *  Cells graph and/or a Population Periodic Event on the Agents graph. Both are
+   *  JS-on-CPU functions the worker fires at the TOP of a firing generation, i.e.
+   *  precisely the per-generation CPU touch point a whole-batch submit does not
+   *  have. BOTH layers block, deliberately with ONE term: a resident batch runs
+   *  every agent generation in one submit and only then steps the grid, so there
+   *  is no point in that sequence at which either kind could fire on the right
+   *  generation. Absent ⇒ false (a caller predating this term keeps its verdict). */
+  usesPeriodicEvents?: boolean;
   /** The model declares Stop Event messages (cell and/or agent). */
   hasStopMessages: boolean;
   /** Allocated bond slots per agent. The WORKER passes its store's real
@@ -131,6 +140,9 @@ export function residencyModelBlockers(
   }
   if (facts.usesSpriteWrite) {
     out.push({ key: 'sprites', text: 'the behaviour graph sets agent sprites — the engine advances sprite frames on the CPU once per generation, so the batch cannot run without a per-generation touch point' });
+  }
+  if (facts.usesPeriodicEvents) {
+    out.push({ key: 'periodicEvents', text: 'the model has a global periodic event (Grid Periodic Event / Population Periodic Event) — it runs on the CPU at the top of every firing generation, which a whole-batch submit has no point to interleave' });
   }
   return out;
 }

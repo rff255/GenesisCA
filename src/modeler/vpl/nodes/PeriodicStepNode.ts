@@ -1,7 +1,16 @@
 import type { NodeTypeDef } from '../types';
 
-/** Periodic Step — an agent event root whose DO chain runs only on generations
- *  where `generation % period === phase`.
+/** Agent Periodic Step — a PER-AGENT event root whose DO chain runs, FOR EVERY
+ *  AGENT, only on generations where `generation % period === phase`.
+ *
+ *  ## PER AGENT, not global — and the label says so
+ *  It lowers to a gate INSIDE the per-agent behaviour loop, so its chain runs
+ *  once per live agent on a firing generation, with a `self` exactly like the
+ *  Behaviour Step. The GLOBAL counterpart — "run this ONCE per firing generation
+ *  to add substrate / spawn agents / test an indicator" — is a different root:
+ *  **Population Periodic Event** on the Agents graph, **Grid Periodic Event** on
+ *  the Cells graph. The unqualified name "Periodic Step" read as global to users,
+ *  which is exactly the confusion the `Agent` prefix removes.
  *
  *  ## Why a root and not "just wire the modulo yourself"
  *  A periodic automaton must gate its state update AND its rewrite on the SAME
@@ -35,8 +44,8 @@ import type { NodeTypeDef } from '../types';
  *  an existing one when present and creates at most one when absent. */
 export const PeriodicStepNode: NodeTypeDef = {
   type: 'periodicStep',
-  label: 'Periodic Step',
-  description: 'Agent entry point that runs its chain only every Nth generation (generation % Period === Phase). Several are allowed per graph — e.g. two at Period 2, phases 0 and 1, alternate state updates and rewrites. Outputs Step Index = ⌊generation / Period⌋.',
+  label: 'Agent Periodic Step',
+  description: 'Runs PER AGENT — its chain runs for EVERY agent, but only every Nth generation (generation % Period === Phase). Several are allowed per graph — e.g. two at Period 2, phases 0 and 1, alternate state updates and rewrites. Outputs Step Index = ⌊generation / Period⌋. For a GLOBAL periodic event (once per firing generation, no self — add substrate, spawn agents, test an indicator) use Population Periodic Event instead.',
   category: 'event',
   // Event roots are white (the CA-grid standard: Step / Init / Behaviour Step).
   color: '#ffffff',
