@@ -45,6 +45,14 @@ for (const f of files) {
   result[f] = {
     'js.stepCode': sha(r.js.stepCode),
     'js.fullCode': sha(r.js.fullCode),
+    // The CELL graph's GLOBAL once-per-event functions — the Grid Init Event and
+    // every Grid Periodic Event. JS-on-CPU on EVERY compile target (the WASM /
+    // WebGPU step compilers never see those roots), so they show up on NO other
+    // surface here: without these two lines a regression in their param list or
+    // their value-out preamble passes this gate silently. Same reasoning as
+    // agent.divisionCode / agent.initCode below.
+    'js.gridInitCode': sha(r.js.gridInitCode ?? ''),
+    'js.gridPeriodicCode': sha(r.js.gridPeriodicCode ?? ''),
     'js.error': r.js.error,
     'wasm.bytes': sha(r.wasm.bytesJoined),
     'wasm.bytesLen': r.wasm.bytesLen,
@@ -59,6 +67,8 @@ for (const f of files) {
     // silently. See docs/IMPACT_MAP_DIVISION_LIFECYCLE.md §5.5.
     'agent.divisionCode': sha(r.agent.divisionCode),
     'agent.initCode': sha(r.agent.initCode),
+    // Population Periodic Events — the same argument, one root later.
+    'agent.periodicCode': sha(r.agent.periodicCode ?? ''),
     'agent.error': r.agent.error,
     'agent.wasm.bytes': sha(r.agent.wasm.bytesJoined),
     'agent.wasm.error': r.agent.wasm.error,

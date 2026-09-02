@@ -231,8 +231,10 @@ genesis-ca/
 │   │       ├── explicitControls.ts     # Explicit Controls: the ONE resolver (eligibility / descriptors / chain walk / the element option lists / applyInterfaceEdit / groups) consumed by BOTH the interface editor and the closed instance
 │   │       ├── nodeMorph.ts            # "Morph into": the curated retype table (Math ⇄ Math Expression ⇄ Compare ⇄ Logical Expression ⇄ Logic) + how each config/port maps; the engine lives in GraphEditor.morphNode
 │   │       ├── NodeExplorer.tsx        # Right-side searchable node list panel
-│   │       ├── nodes/                # 151 node types (one file each) + registry.ts
+│   │       ├── nodes/                # 153 node types (one file each) + registry.ts
 │   │       │   ├── nodeValidation.ts  # detectMissingConfig() — drives warning badges
+│   │       │   ├── GridPeriodicEventNode.ts   # Cells: the GLOBAL periodic root (runs ONCE per firing generation, not per cell)
+│   │       │   ├── AgentPeriodicEventNode.ts  # Agents: the GLOBAL periodic root (once per firing, NO self — spawn/sweep/stop)
 │   │       │   └── colorScalePresets.ts # Named palettes (Viridis/Magma/Rainbow/…) for Color Scale + Linked mappings
 │   │       ├── widgets/              # Shared inline editors (InlineWidgets.tsx, GradientStopsEditor.tsx, CategoricalPaletteEditor.tsx, ExpressionFormula.tsx)
 │   │       └── compiler/
@@ -321,6 +323,7 @@ genesis-ca/
 │   ├── bench-spatial-index.mjs       # C11: shipped hash vs a per-radius hash vs an exact octree range query (+ --stats: every shipped model's radius/density)
 │   ├── test-archetypes.mjs           # C7 (P6): the New-model seeds — Empty IS EMPTY_MODEL, per-card coherence, migration+resolution
 │   ├── check-no-unseeded-random.mjs  # C7 (P7): no Math.random() on a simulation-semantic path (allowlist + stale-entry check)
+│   ├── test-global-periodic.mjs      # Global Periodic Events: the two roots RUN — the grid fn over a real WASM module's memory (and the WASM step reads its write), the agent fn spawning through the real engine primitives (5 source-mutation negative controls)
 │   ├── test-macro-references.mjs     # M1: macro reference collection + closure + the .gcamacro round trip (5 source-mutation negative controls)
 │   ├── test-explicit-controls.mjs    # Explicit Controls: the schema/resolver/clone fix, the 3 control classes, groups, chaining, and that M1/M2/the clipboard need no new pass (8 source-mutation negative controls)
 │   ├── test-sprite-sheet.mjs         # Sprite-sheet gridding: geometry, back-compat vs an independent legacy transcription, the selection, the decode signature
@@ -402,7 +405,7 @@ The app is functional with these major systems:
 ### Visual Programming Language (VPL)
 - `src/modeler/vpl/GraphEditor.tsx` — React Flow-based node graph editor
 - `src/modeler/vpl/CaNode.tsx` — Custom node component with per-type config UI
-- `src/modeler/vpl/nodes/` — 154 node types (151 selectable from the Add Node menu + 3 hidden macro boundary nodes), each in its own file with `compile()` method. Canonical list: `ALL_NODES` in [registry.ts](src/modeler/vpl/nodes/registry.ts). Async-only nodes (6): SetNeighborhoodAttribute, SetNeighborAttributeByIndex, MarkCellUpdated, SetFacingOrientation, SetNeighborOrientationByIndex, MoveSelfToNeighbor. Includes `StopEventNode` (flow input only, text widget for stop message — compiles to `if (_stopFlag[0] === 0) _stopFlag[0] = <1-based idx>;` first-match-wins; WASM emitter mirrors this via `i32.store` at `layout.stopFlagOffset`).
+- `src/modeler/vpl/nodes/` — 156 node types (153 selectable from the Add Node menu + 3 hidden macro boundary nodes), each in its own file with `compile()` method. Canonical list: `ALL_NODES` in [registry.ts](src/modeler/vpl/nodes/registry.ts). Async-only nodes (6): SetNeighborhoodAttribute, SetNeighborAttributeByIndex, MarkCellUpdated, SetFacingOrientation, SetNeighborOrientationByIndex, MoveSelfToNeighbor. Includes `StopEventNode` (flow input only, text widget for stop message — compiles to `if (_stopFlag[0] === 0) _stopFlag[0] = <1-based idx>;` first-match-wins; WASM emitter mirrors this via `i32.store` at `layout.stopFlagOffset`).
 - Five "event" entry-point nodes: GenerationStep (per-gen logic), InitEvent (runs once PER CELL on simulator Reset — see Variegated Cells section), **GridInit** (runs ONCE GLOBALLY on Reset — free-form procedural seeding; see the "Grid Init Event" section), InputMapping C→A (brush), OutputMapping A→C (color pass)
 - `src/modeler/vpl/compiler/compile.ts` — Two-pass compiler: hoists values, then emits flow
 - Multi-output nodes (InputColor, GetColorConstant, MacroNode, ColorScale, FilterNeighbors, JoinNeighbors, GetFacingLabels, BreakDownNeighborIndex, InitEvent, GetCellPosition, GroupOperator with position output) use `_v${nodeId}_${portId}` naming
@@ -5013,7 +5016,7 @@ cubic graph. **Never claim faithfulness to a specific paper for this model.**
      bond/rest under charge). The old 220 × 220 left 4.6 units per node against a bond rest
      of 5 — SATURATED, and no repulsion strength can open a box with no room in it.
   3. **CADENCE + NEWBORN PLACEMENT.** The WHOLE rule (priority roll, state, rewrite) hangs
-     off ONE **Periodic Step at period 2**, so the generation in between is pure relaxation
+     off ONE **Agent Periodic Step at period 2**, so the generation in between is pure relaxation
      and state can never drift out of phase with structure — gating only the rewrite would
      quietly build a DIFFERENT automaton. Period 2 is the measured knee: 1 / 2 / 3 / 4
      relaxation passes per rewrite give live nnb/bond 0.59 / 0.65 / 0.68 / 0.71, and every
@@ -5061,7 +5064,7 @@ feeding the other: `σᵢ' = f(σᵢ, #On in the bonded 1-ring)` and
   cadence.** Charge on at `k = −10`, cutoff `28` = 4 × bond rest; the world sized to the cap
   by the shared rule (`ceil(sqrt(400 × (7 × 1.45)²))` → **220**, was 110, i.e. 55 units² per
   agent against a need of ~103 — the couplers were choosing partners inside a jam). **And
-  `layoutIterations: 2` rather than a Periodic Step — the split is deliberate.** A GROWING
+  `layoutIterations: 2` rather than an Agent Periodic Step — the split is deliberate.** A GROWING
   graph must outrun its own rewriting, which is rule semantics, so the flagship uses cadence;
   SDCA has a FIXED population that simply needs to settle, which is solver relaxation, so it
   uses the engine knob and keeps one generation meaning one rule step (its hysteresis band is
@@ -5103,7 +5106,7 @@ never claim more fidelity than the measured result below.**
   drains in PARALLEL and two ADJACENT splitters corrupt each other (the mother's Transfer needs
   its edge to `b` to still exist at drain time), so one generation can only split an
   INDEPENDENT SET. The model therefore spends **PERIOD = 1 + K generations per reference tick**:
-  a Periodic Step at phase 0 does census → next state (+ mutation) → **latch**, then K
+  an Agent Periodic Step at phase 0 does census → next state (+ mutation) → **latch**, then K
   **DIVISION ROUNDS** each split the still-latched winners and CLEAR their latch, so the losers
   win a later round *against the adjacency the winners just rewrote*. That IS znah's
   mutated-adjacency drain, executed in rounds instead of index order.
@@ -5147,11 +5150,11 @@ never claim more fidelity than the measured result below.**
   inequality always resolves. The agent attribute's DEFAULT is `PRIO_UNFLAGGED`, which is also
   what stops a daughter dividing in a later round of the tick it was born in — the analogue of
   the reference freezing its flag array.
-- **THE DIVISION ROUNDS ARE HAND-GATED (`generation % PERIOD != 0`), NOT K Periodic Steps.**
+- **THE DIVISION ROUNDS ARE HAND-GATED (`generation % PERIOD != 0`), NOT K Agent Periodic Steps.**
   The flow walk INLINES a node's body once per incoming path, so K periodic roots pointing at
   one split chain would emit K copies of it. One `getGeneration → Math(%) → Compare(!=) → If`
   hung off the behaviour root's DONE continuation, one copy. The state tick stays a real
-  Periodic Step (phase 0), so the cadence is still visible in the C2 pipeline panel.
+  Agent Periodic Step (phase 0), so the cadence is still visible in the C2 pipeline panel.
 - **THE FIDELITY RESULT — measured, and much stronger than the first port's.** With the drain,
   N(t) matches the reference cycle for cycle for **every mutation-free published rule**, up to
   whichever side hits a node cap first. The gap this closed, K=1 → K=8 (100 cycles, cap 20 000):
@@ -5382,7 +5385,7 @@ The paragraph below records what Tier K measured while the model shipped.
   and **`Rule 26145` (60 → 3298)** — i.e. including the rules whose flagged nodes CAN be
   adjacent, which the pre-drain port could not follow. The reference is transcribed into the
   tier as a SEPARATE implementation (the ground truth, not a mirror of anything under test).
-  **ALL BUDGETS ARE READ OFF THE SHIPPED FILE** (`PERIOD` from the state tick's Periodic Step,
+  **ALL BUDGETS ARE READ OFF THE SHIPPED FILE** (`PERIOD` from the state tick's Agent Periodic Step,
   cross-checked against the division gate's `% PERIOD`), the Cubic-GRA/Tier-K precedent, so a
   cadence retune cannot silently shorten a check. **Negative-controlled twice**: a source
   mutant that collapses the cadence to a SINGLE division round makes `meduza` diverge at cycle
@@ -6118,7 +6121,7 @@ A universal node's `compile()` has no idea which ROOT it sits under, but it must
 
 ---
 
-## Rule Cadence — `Get Generation` (universal) + `Periodic Step` (agents) — branch `GRA`
+## Rule Cadence — `Get Generation` (universal) + `Agent Periodic Step` (agents) — branch `GRA`
 
 Gives the rule graph control over **when** it runs. Cadence is *model semantics* — "rewrite the graph every 10th generation, update states on the others" is a property of the automaton, not an engine knob — so it lives in the graph. (The one thing that deliberately does NOT: how many times the *solver* iterates per generation. That is numerical relaxation, an engine knob, the same category as `positionalIterations`.) Design authority: [docs/IMPACT_MAP_GRAPH_LAYOUT_CADENCE.md](docs/IMPACT_MAP_GRAPH_LAYOUT_CADENCE.md) §1.6/§3; phase report [docs/HANDOFF_GLC_L2_CADENCE.md](docs/HANDOFF_GLC_L2_CADENCE.md).
 
@@ -6155,31 +6158,65 @@ A **universal** value node (Cells AND Agents; not Overseer, which has its own `o
 
 The `genCounter` buffer is created UNCONDITIONALLY (4 bytes) because posCommit bumps it unconditionally — only the behaviour/OM **bind-group entry** is gated on `usesGeneration` (a declared-but-unused storage global is stripped by Naga, which would mismatch the reflected layout — the same rule as `usesSpawn`/`usesStop`/`usesForceScatter`).
 
-### `Periodic Step` ([PeriodicStepNode.ts](src/modeler/vpl/nodes/PeriodicStepNode.ts)) — the sugar
-An agent event root (`period` + `phase` + a `Step Index` = ⌊generation/period⌋ output) whose chain runs only when `generation % period === phase`. **Multiple per graph** — deliberately NOT in `SINGLETON_NODE_TYPES`. Two at period 2, phases 0 and 1, reproduce the classic "states on even ticks, rewrites on odd" alternation; gating the state update and the rewrite on the SAME tick is what makes a periodic automaton faithful, and that is the argument for the root over hand-wired modulo boilerplate.
+### `Agent Periodic Step` ([PeriodicStepNode.ts](src/modeler/vpl/nodes/PeriodicStepNode.ts)) — the sugar
+**The type id stays `periodicStep`** (ids are never renamed); only the LABEL moved, in the Global Periodic Events round — the unqualified "Periodic Step" read as GLOBAL to users when it is emphatically per-agent. An agent event root (`period` + `phase` + a `Step Index` = ⌊generation/period⌋ output) whose chain runs only when `generation % period === phase`. **Multiple per graph** — deliberately NOT in `SINGLETON_NODE_TYPES`. Two at period 2, phases 0 and 1, reproduce the classic "states on even ticks, rewrites on odd" alternation; gating the state update and the rewrite on the SAME tick is what makes a periodic automaton faithful, and that is the argument for the root over hand-wired modulo boilerplate.
 
 **Implemented as a pure pre-compile LOWERING** ([periodicExpand.ts](src/modeler/vpl/compiler/periodicExpand.ts)) into `Get Generation → Math(%) → Compare(==) → If/Then` hung off ONE `behaviourStep`, sequenced — the P1 census pattern, so **zero per-target emit**, all three targets by construction, and the capability gates + WASM/WebGPU supported-type sets never see a `periodicStep` node. Rules it keeps: deterministic synthetic ids; **ONE shared `Get Generation`** fanned out to every gate (accessor-CSE is OFF in async agent mode, so duplicates would not merge); `Step Index` synthesized only when consumed; **at most ONE `behaviourStep` in the output** (an existing one is REUSED, so the singleton the three agent compilers look up still holds); branch order = **the unconditional chain first, then the gates**, stated explicitly with a `sequence` rather than left to edge-array order. Hot-path no-op when the graph has none.
 
 **The worker's DEV ABI-arity assertion had to learn about the asymmetry (fixed):** it asserted `fn.length === args.length`, which the param-gated/arg-always split breaks by exactly one slot — so a shipped agent model with NO cadence node posted `ABI ARITY DESYNC` on every load. It now accepts `params === args` OR `params === args - 1` and nothing else, so the dangerous direction (`params > args`) is still an error. Found only by an in-browser smoke run on the shipped `Cubic GRA` — every headless gate was green, because none of them exercises the worker's runtime assertions.
 
-**A silent-clamp bug this surfaced (fixed):** both agent gates early-outed on `nodes.find(behaviourStep)` over the **PRE-flatten** graph. A graph made of Periodic Steps alone has no `behaviourStep` node yet — so it compiled perfectly and was then rejected by the gate, silently clamping to JS. The early-out now accepts `behaviourStep || periodicStep`; the post-flatten lookup remains the real check.
+**A silent-clamp bug this surfaced (fixed):** both agent gates early-outed on `nodes.find(behaviourStep)` over the **PRE-flatten** graph. A graph made of Agent Periodic Steps alone has no `behaviourStep` node yet — so it compiled perfectly and was then rejected by the gate, silently clamping to JS. The early-out now accepts `behaviourStep || periodicStep`; the post-flatten lookup remains the real check.
 
-**Scope**: Periodic Step is agent-only (`requirements.bondGraph`). A CELL rule composes the same gate by hand from Get Generation, which is universal.
+**Scope**: Agent Periodic Step is agent-only (`requirements.bondGraph`) and PER AGENT. A CELL rule composes the same gate by hand from Get Generation, which is universal — or uses the **Grid Periodic Event**, the GLOBAL root added later (see "Global Periodic Events" below, which is also where the per-agent/global naming split is recorded).
 
 ### Verification
-[scripts/test-rule-cadence.mjs](scripts/test-rule-cadence.mjs) (107 checks): cells run on JS **and a REAL instantiated WASM module** in Node (2D + 3D, bit-identical); the OFF path emits no param / no WGSL field and keeps `generationOffset` last; the lowering's structure, multiplicity, ordering and clamping; cadence **by value** on the agent JS loop (period 10 fires on exactly 0/10/20/30; two phases alternate; three periods coexist while the unconditional chain still runs every generation); the pinned init/division semantics **run** and asserted; the agent WASM/WebGPU gates + emit; and the ABI arity contract. A permanent `[synthetic] Rule cadence (Get Generation + 5 Periodic Steps)` entry in [scripts/parity-agent-wasm.mjs](scripts/parity-agent-wasm.mjs) carries a **per-step VALUE invariant** that recomputes each gate's schedule independently (parity alone would pass if both targets fired unconditionally) — negative-controlled by making every gate always-on.
+[scripts/test-rule-cadence.mjs](scripts/test-rule-cadence.mjs) (107 checks): cells run on JS **and a REAL instantiated WASM module** in Node (2D + 3D, bit-identical); the OFF path emits no param / no WGSL field and keeps `generationOffset` last; the lowering's structure, multiplicity, ordering and clamping; cadence **by value** on the agent JS loop (period 10 fires on exactly 0/10/20/30; two phases alternate; three periods coexist while the unconditional chain still runs every generation); the pinned init/division semantics **run** and asserted; the agent WASM/WebGPU gates + emit; and the ABI arity contract. A permanent `[synthetic] Rule cadence (Get Generation + 5 Agent Periodic Steps)` entry in [scripts/parity-agent-wasm.mjs](scripts/parity-agent-wasm.mjs) carries a **per-step VALUE invariant** that recomputes each gate's schedule independently (parity alone would pass if both targets fired unconditionally) — negative-controlled by making every gate always-on.
 
 **THE residency test (real GPU, in-browser)**: a residency-eligible WebGPU-agent model whose rule counts how many times the generation CHANGED, run as ONE 20-generation resident batch (`residentEligible: true`) — `changes 20`, `sum 190` (= Σ 0..19 exactly), `lastGen 19`, and a period-10 gate last firing at 10, all 8 agents agreeing, 0 errors; a second batch continued to `changes 40 / sum 780 / lastGen 39 / p10 30`. **Negative-controlled**: with the posCommit bump removed (uniform-equivalent) the SAME run reads `changes 1 / sum 0 / lastGen 0 / p10 0` — one frozen value. Cell WebGPU was verified on the real device too (`useWebGPUStatus ready:true`, all 256 cells === 4 after 5 generations).
 
-**An audit invariant this widened**: `_generation` is appended AFTER the 3D block (dead last on every ABI kind), so `audit-agent-layout.mjs`'s "2D is a strict prefix of 3D" check reports a false divergence for any cadence-using model — which nothing exercised until `Cubic GRA` shipped a Periodic Step in L3. The audit now strips a trailing `_generation` before the prefix comparison AND separately asserts that, when present, it is LAST on both sides (negative-controlled: making it 3D-only fails exactly that assertion).
+**An audit invariant this widened**: `_generation` is appended AFTER the 3D block (dead last on every ABI kind), so `audit-agent-layout.mjs`'s "2D is a strict prefix of 3D" check reports a false divergence for any cadence-using model — which nothing exercised until `Cubic GRA` shipped an Agent Periodic Step in L3. The audit now strips a trailing `_generation` before the prefix comparison AND separately asserts that, when present, it is LAST on both sides (negative-controlled: making it 3D-only fails exactly that assertion).
 
 ---
+
+## Global Periodic Events — `Grid Periodic Event` + `Population Periodic Event` (branch `tasks_batch_02-09`)
+
+The once-per-firing-generation counterpart to the PER-AGENT `Agent Periodic Step`: a root whose chain runs **ONCE GLOBALLY** — not per cell, not per agent, **no `self`** — on generations where `generation % Period === Phase`. What the Grid Init Event and the Agent Init Event are to Reset, these are to a cadence: *periodically add substrate, spawn a wave of agents, sweep the population, or read an indicator and fire a Stop Event.* **`gridPeriodic`** lives on the Cells graph, **`agentPeriodic`** on the Agents graph.
+
+**THE RENAME THAT CAME WITH THEM.** `periodicStep`'s label became **`Agent Periodic Step`** (the type id is unchanged — ids are never renamed). The user's report is the whole justification: *"it got me very confused into thinking that it was a global periodic step"*. The two names are deliberately **first-word-distinct** — "Agent Periodic **Step**" vs "**Population** Periodic **Event**" — because the confusion was about SCANNING a name, so a shared prefix would have reproduced it.
+
+### The architecture — the Grid Init Event's, verbatim
+Each root compiles to **ONE JS function the worker executes**, on JS, WASM and WebGPU alike. The WASM/WebGPU **step** compilers only walk the `step` / `initEvent` / mapping (and behaviour) roots, so they never see `gridPeriodic` or `agentPeriodic` — **no per-target emit, no supported-type set to widen, no capability gate to change**, and ALL-TARGET delivery holds by construction rather than by care. `AGENT_WASM_CPU_ROOT_TYPES` gains `agentPeriodic`, which is what makes `gen-capability-docs` classify it `exempt` on both agent targets (the generated `agentGapsWasm` / `agentGapsWebgpu` stay **0**).
+
+### `CompileResult.gridPeriodicCodes` / `AgentCompileResult.periodicCodes`
+Both are `PeriodicEventCode[]` = `{ period, phase, code }` — **an ARRAY, because neither root is a singleton** (several cadences per graph is the point, as for Agent Periodic Step). The cadence is resolved by the SHARED **`periodicParams`** clamp (period ≥ 1, phase folded into `[0, period)`) at COMPILE time and shipped with the code, so **the worker never re-derives it** — one definition, two consumers, and a hand-edited `period: 0` can never divide by zero. They ride the init/recompile messages as `gridPeriodicCodes` / `agentPeriodicCodes`.
+
+### Ordering — the TOP of the generation, and both consequences are deliberate
+`runPeriodicEvents()` fires at the top of `runOneGeneration`, **before the agent step and before the cell step**:
+- **Cells**: what the event writes is visible to THAT generation's rule (add substrate, then let the rule consume it in the same generation).
+- **Agents**: `runAgentStep` captures its loop bound AFTER this runs, so **a newborn behaves and integrates the SAME generation** — like an Agent-Init-Event agent, and unlike a Behaviour-Step spawn (which lands past an already-captured bound and waits a generation). The node's own doc says so.
+
+### The grid half — the buffer discipline is `runGridInit`'s
+Sync mode seeds the write buffer from the read buffer, runs the due fns, then copies write → read (so cells the event never touches persist); async shares one buffer; under the WebGPU `attrWriteAliased` optimisation both copies are self-copies, which is correct because the event writes FINAL values. A firing sets `colorsDirty`, and under **Skip Isolated Empty Cells** it calls `rebuildActiveSetFromGrid()` + `sieColorDirtyAll = true` (the event may write ANY cell, including one outside the active set — the paint/gridInit rule).
+
+**⚠ THE `gpuOwnsAttrs` STALE-MIRROR CASE, handled explicitly.** On the WebGPU grid target `readAttrs` is stale after a step. `runGridPeriodicEvents` deliberately does NOT read back itself (it is synchronous; the readback is async) — **the CALLER owns it**: the `webgpuActive` batch branch tests `gridPeriodicDue()` first, and only on a firing does `await ensureCpuAttrsFresh()` → run → `uploadAttrs` + `gpuOwnsAttrs = false`. So an evolved GPU board is never clobbered by a stale mirror, and **the round trip costs nothing on the generations that do not fire** — which is the whole reason `gridPeriodicDue()` exists as a separate cheap predicate (one modulo per event).
+
+### The agent half — the Agent Init Event's ABI, REUSED
+`agentPeriodic` compiles against **`buildAgentInitParams`** (the `'init'` ABI kind) and is called through the SAME `buildAgentInitArgs` with the SAME module-level **grow-only** spawn closures (`agentBehaviourCreate` / `agentBehaviourAddToWorld`) and the SAME leak sweep the behaviour graph uses. **That reuse is the design**: it adds NO ABI kind, no `deriveAgentAbi` arm, no worker arg builder and no `test-agent-abi` shape — the root is entirely off the ABI-mirror surface, and Create Agent → set-by-handle → Add Agent To World works with zero new machinery. `compile.ts` maps it to `agentRoot: 'init'` for exactly this reason. Its extra `seedIndexBase` value-out is `highWater` at the firing (so a spawn loop can number its own batch). The worker's DEV arity assert gained a FIFTH `!arityOk(` site for the new fn list (pinned by `test-rule-cadence`).
+
+### ⚠ RESIDENCY IS A CORRECTNESS TERM
+A GPU-resident batch encodes N generations into ONE submit with **no CPU touch point between them** — which is precisely what a per-generation CPU event needs. So `residencyModelBlockers` gained the key **`periodicEvents`**, fed by `usesPeriodicEvents` (**ONE term covering BOTH roots**, since either one needs the same per-generation pause), and the worker's `agentResidentEligible` facts object sets it from `gridPeriodicFns.length > 0 || agentPeriodicFns.length > 0`. **Without it the resident batch silently skips every firing** — no error, no log, just a model that quietly stops adding substrate. Class-F (a speed path forfeited), never an error, and surfaced in the C1 / C3 readouts like every other blocker.
+
+### The enumeration sweep (the documented agent-root list, plus the cell-root sites)
+`MULTI_OUTPUT_TYPES` + `AGENT_ROOT_TYPES` + the `agentRoot` derivation (compile.ts) · `NEVER_INVARIANT` (loopInvariant) · `GENERATION_NODE_TYPES` (generationUse — both roots emit `stepIndex`, so they force `_generation` to be threaded) · `LATTICE_ONLY_TYPES` + the selfless-root validation walk (nodeValidation) · `ROOT_TYPES` / `CONTROL_FLOW` / `NODE_LABEL` (geometryTaint) · `LOWERED_AWAY` (targetDiagnosis) · `AGENT_WASM_CPU_ROOT_TYPES` (agentWasm) · `SCALAR_CONFIG_KEYS` (explicitControls — `period` / `phase` are bindable) · the CaNode cadence config block · `generationPipeline` (two new rows, `periodic.grid` / `periodic.agent`, at the top of the PER GENERATION section) · `showCode` (driver skeleton + a section per compiled event) · `compileHarness` + `check-compile-identity` (`js.gridPeriodicCode` / `agent.periodicCode` as NEW hashed keys — the cell `js.gridInitCode` joined them, closing a pre-existing blind spot: a JS-on-CPU root appears on NO other surface). **`patchAllNodes` and the clipboard need nothing** — neither root stores a model-element id.
+
+### Verification
+[scripts/test-global-periodic.mjs](scripts/test-global-periodic.mjs) — the editor surface + the rename, the cadence clamp, then the claims that matter: the compiled grid fn RUN with the worker's exact buffer discipline over views into a **REAL instantiated WASM module's memory**, after which the **WASM `step` reads the periodic's write** (the shared-bytes claim the whole architecture rests on); the compiled agent fn RUN through the shared `buildAgentAbiArgs('init', …)` against a REAL `createAgentStore` with a replica of the grow-only closures (exact positions, per-newborn attribute writes through the handle, bounded by `maxAgents` with no wrap, the leak sweep); the ABI-reuse claim compared against `buildAgentInitParams`; the residency blocker; and the hot-path no-op. **Negative-controlled by SOURCE MUTATION — 5 mutations, 5 caught**: emit the raw generation as `stepIndex`, emit constants instead of the LIVE grid dims, ignore the `periodicParams` clamp, compile the population root against the LOOP ABI, and drop the residency blocker.
 
 ## Layout Iterations — the solver-relaxation knob (branch `GRA`, L3)
 
 **`CenterBasedConfig.layoutIterations`** runs the agent FORCE INTEGRATOR N times per generation. Absent / 1 ⇒ **exactly today's engine, byte-for-byte**. Resolved by ONE clamped resolver, `layoutIterationsOf(cfg)` ([centerBased.ts](src/model/centerBased.ts)), which every surface reads so the CPU and GPU paths cannot disagree about the count (clamps to `[1, MAX_LAYOUT_ITERATIONS = 32]`, floors, and treats non-finite / non-number as 1 — a hand-edited `.gcaproj` cannot smuggle a count in). Edited in **Properties → Bond-Graph Agents → Solver**.
 
-**Why an engine knob and NOT a graph node** (Impact Map §1.6): how many times the *solver* iterates is numerical relaxation, not rule logic — the same category as the existing `positionalIterations`. Putting it in the graph would be like exposing an ODE's step count as a node. The rule's OWN cadence ("rewrite every Nth generation") IS model semantics and lives in the graph, as L2's `Periodic Step`. The two compose: relaxation passes per rewrite = `period × layoutIterations`.
+**Why an engine knob and NOT a graph node** (Impact Map §1.6): how many times the *solver* iterates is numerical relaxation, not rule logic — the same category as the existing `positionalIterations`. Putting it in the graph would be like exposing an ODE's step count as a node. The rule's OWN cadence ("rewrite every Nth generation") IS model semantics and lives in the graph, as L2's `Agent Periodic Step`. The two compose: relaxation passes per rewrite = `period × layoutIterations`.
 
 ### THE invariant — once per generation stays once per generation
 The loop is kept TIGHT around **[force pass → position commit]** and nothing else, so the **structural phase** — the bond request-queue drain, division, death, auto-bond — still runs exactly ONCE, after it. Draining per iteration would REPLAY every queued Form / Break / Rewire and corrupt the graph silently, with no error anywhere; that is the easiest way to break this feature and it is pinned twice (a source invariant + O6 on the shipped model). Also outside the loop: the spatial hash build, the compiled behaviour, and the graph-force reset.

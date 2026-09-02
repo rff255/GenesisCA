@@ -799,6 +799,15 @@ export const SCALAR_CONFIG_KEYS: ReadonlyMap<string, ReadonlyMap<string, ScalarK
     ['period', num('Period', '1')],
     ['phase', num('Phase')],
   ])],
+  // The two GLOBAL periodic roots carry the same cadence pair.
+  ['gridPeriodic', new Map<string, ScalarKeySpec>([
+    ['period', num('Period', '1')],
+    ['phase', num('Phase')],
+  ])],
+  ['agentPeriodic', new Map<string, ScalarKeySpec>([
+    ['period', num('Period', '1')],
+    ['phase', num('Phase')],
+  ])],
   ['getAgentsInView', new Map<string, ScalarKeySpec>([
     ['halfAngle', num('Half-angle°', '60')],
     ['headingSource', sel('Heading', HEADING_SOURCES, 'velocity')],

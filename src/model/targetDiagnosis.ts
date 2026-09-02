@@ -295,7 +295,7 @@ const LOWERED_AWAY = new Set([
   'makeVector', 'breakVector', 'vectorOp', 'makeColor', 'breakColor',
   // roots compiled SEPARATELY on the CPU on every engine — never in the
   // behaviour cone the gate checks, so they can never be a reject reason.
-  'agentInit', 'divisionEvent', 'agentOutputMapping', 'agentInputMapping', 'behaviourStep',
+  'agentInit', 'agentPeriodic', 'divisionEvent', 'agentOutputMapping', 'agentInputMapping', 'behaviourStep',
 ]);
 function unsupportedAgentTypes(model: CAModel, table: ReadonlySet<string>): string[] {
   const out = new Set<string>();

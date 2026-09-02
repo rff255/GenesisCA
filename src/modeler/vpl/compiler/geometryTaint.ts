@@ -217,7 +217,7 @@ const GEOMETRY_ONLY_SINKS = new Set([
 /** Pure control flow — never a sink; it only routes. */
 const CONTROL_FLOW = new Set([
   'conditional', 'sequence', 'switch', 'loop', 'forEachInArray', 'forEachBond',
-  'behaviourStep', 'periodicStep', 'agentInit', 'divisionEvent', 'agentOutputMapping',
+  'behaviourStep', 'periodicStep', 'agentInit', 'agentPeriodic', 'divisionEvent', 'agentOutputMapping',
   'agentInputMapping',
 ]);
 
@@ -276,7 +276,8 @@ const NODE_LABEL: Record<string, string> = {
   readCellsUnder: 'Read Cells Under', affectCellsUnder: 'Affect Cells Under',
   secreteToField: 'Secrete To Field', forEachBond: 'For Each Bond',
   forEachInArray: 'For Each In Array', behaviourStep: 'Behaviour Step',
-  periodicStep: 'Periodic Step', agentInit: 'Agent Init Event',
+  periodicStep: 'Agent Periodic Step', agentInit: 'Agent Init Event',
+  agentPeriodic: 'Population Periodic Event',
   divisionEvent: 'Division Event', agentOutputMapping: 'Agent Output Mapping',
   agentInputMapping: 'Agent Input Mapping',
   getRadius: 'Get Radius', getAgentRadius: 'Get Agent Radius',
@@ -695,7 +696,7 @@ export function analyzeGeometryTaint(model: CAModel): GeometryTaintResult {
     return grew;
   }
 
-  const ROOT_TYPES = new Set(['behaviourStep', 'periodicStep', 'agentInit', 'divisionEvent', 'agentOutputMapping', 'agentInputMapping']);
+  const ROOT_TYPES = new Set(['behaviourStep', 'periodicStep', 'agentInit', 'agentPeriodic', 'divisionEvent', 'agentOutputMapping', 'agentInputMapping']);
   const roots = nodes.filter(n => ROOT_TYPES.has(n.data?.nodeType ?? ''));
 
   // Iterate value taint ⇄ flow walk until neither grows (both are monotone, so

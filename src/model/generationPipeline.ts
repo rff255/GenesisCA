@@ -184,22 +184,41 @@ function walkNodes(
 interface GraphContent {
   cell: Set<string>;
   agent: Set<string>;
-  /** Every Periodic Step's resolved cadence, via the lowering's OWN clamp. */
+  /** Every Agent Periodic Step's resolved cadence, via the lowering's OWN clamp. */
   cadences: Array<{ period: number; phase: number }>;
+  /** Every Grid Periodic Event's resolved cadence (the CELL graph's GLOBAL root). */
+  gridCadences: Array<{ period: number; phase: number }>;
+  /** Every Population Periodic Event's resolved cadence (the AGENT graph's GLOBAL root). */
+  agentCadences: Array<{ period: number; phase: number }>;
 }
 
 function graphContent(model: CAModel): GraphContent {
   const cell = new Set<string>();
   const agent = new Set<string>();
   const cadences: Array<{ period: number; phase: number }> = [];
-  walkNodes(model.graphNodes, model, t => { cell.add(t); });
+  const gridCadences: Array<{ period: number; phase: number }> = [];
+  const agentCadences: Array<{ period: number; phase: number }> = [];
+  walkNodes(model.graphNodes, model, (t, cfg) => {
+    cell.add(t);
+    if (t === 'gridPeriodic') gridCadences.push(periodicParams(cfg as unknown as Record<string, unknown>));
+  });
   walkNodes(model.agentGraphNodes, model, (t, cfg) => {
     agent.add(t);
     if (t === 'periodicStep') {
       cadences.push(periodicParams(cfg as unknown as Record<string, unknown>));
     }
+    if (t === 'agentPeriodic') agentCadences.push(periodicParams(cfg as unknown as Record<string, unknown>));
   });
-  return { cell, agent, cadences };
+  return { cell, agent, cadences, gridCadences, agentCadences };
+}
+
+/** "every 10th generation (phase 0)" / "2 cadences: ×10 (phase 0), ×3 (phase 1)". */
+function describeCadences(cs: Array<{ period: number; phase: number }>): string {
+  if (cs.length === 1) {
+    const c = cs[0]!;
+    return c.period === 1 ? 'every generation' : `every ${c.period}th generation (phase ${c.phase})`;
+  }
+  return `${cs.length} cadences: ${cs.map(c => `×${c.period} (phase ${c.phase})`).join(', ')}`;
 }
 
 const hasAny = (set: Set<string>, ...types: string[]) => types.some(t => set.has(t));
@@ -279,10 +298,32 @@ export function describeGenerationPipeline(model: CAModel): PipelinePhase[] {
   }
 
   // =========================================================================
-  // PER GENERATION — agents first (the closed agent↔grid loop: the agent
-  // gathers the field as of the previous cell step, deposits, THEN the cell CA
-  // steps and incorporates the deposit).
+  // PER GENERATION — the GLOBAL periodic events first (they run at the TOP of
+  // the generation so a substrate write / a spawn is visible to THIS
+  // generation's rules), then agents, then the cell CA (the closed agent↔grid
+  // loop: the agent gathers the field as of the previous cell step, deposits,
+  // THEN the cell CA steps and incorporates the deposit).
   // =========================================================================
+  if (gridOn) {
+    push({
+      id: 'periodic.grid', title: 'Your Grid Periodic Event', owner: 'graph', tempo: 'generation',
+      active: content.cell.has('gridPeriodic'),
+      capability: 'a Grid Periodic Event node in the Cells graph',
+      detail: content.gridCadences.length > 0
+        ? `runs ONCE globally on ${describeCadences(content.gridCadences)}`
+        : 'runs ONCE globally every Nth generation — before both layers step',
+    });
+  }
+  if (agentsOn) {
+    push({
+      id: 'periodic.agent', title: 'Your Population Periodic Event', owner: 'graph', tempo: 'generation',
+      active: content.agent.has('agentPeriodic'),
+      capability: 'a Population Periodic Event node in the Agents graph',
+      detail: content.agentCadences.length > 0
+        ? `runs ONCE globally (not per agent) on ${describeCadences(content.agentCadences)}`
+        : 'runs ONCE globally (not per agent) every Nth generation — before the behaviour',
+    });
+  }
   if (agentsOn) {
     const syncAttrs = cfg?.agentUpdateMode === 'sync';
     const bonds = resolveMaxBonds(cfg);

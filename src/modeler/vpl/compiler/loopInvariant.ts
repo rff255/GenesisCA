@@ -168,6 +168,12 @@ const NEVER_INVARIANT = new Set<string>([
   'agentInit',
   'agentOutputMapping',
   'agentInputMapping',
+  // The GLOBAL periodic roots (Grid Periodic Event / Population Periodic Event) —
+  // same entry-point safety parity: their value-outs are emitted as preamble
+  // consts, so listing them here keeps a pure consumer from being hoisted above
+  // the declaration.
+  'gridPeriodic',
+  'agentPeriodic',
 ]);
 
 export function classifyLoopInvariant(

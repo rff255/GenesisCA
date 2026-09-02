@@ -17,10 +17,14 @@
  *     instantiated or reachable. An over-eager `true` costs one unread param;
  *     a false negative would emit code referencing an undeclared identifier.
  *     Erring toward `true` is the safe direction.
- *  2. **`periodicStep` counts.** The Periodic Step lowering synthesizes a
- *     `getGeneration`, so a graph holding only Periodic Steps still needs the
- *     generation threaded. The predicate runs BEFORE the lowering, so it must
+ *  2. **`periodicStep` counts.** The Agent Periodic Step lowering synthesizes a
+ *     `getGeneration`, so a graph holding only Agent Periodic Steps still needs
+ *     the generation threaded. The predicate runs BEFORE the lowering, so it must
  *     count the pre-lowering node type.
+ *  3. **The GLOBAL periodic roots count** (`gridPeriodic` / `agentPeriodic`).
+ *     They are NOT lowered — the worker decides when they fire — but their
+ *     `stepIndex` value-out is emitted as `Math.floor(_generation / Period)`, so
+ *     the param must be threaded whenever such a root exists.
  *
  * The ARG side (the worker) never consults this: it ALWAYS passes the generation.
  * Extra trailing args to a JS function are ignored, whereas a missing one reads
@@ -31,7 +35,11 @@
 import type { CAModel, GraphNode } from '../../../model/types';
 
 /** The node types whose presence means the generation must be threaded. */
-const GENERATION_NODE_TYPES: ReadonlySet<string> = new Set(['getGeneration', 'periodicStep']);
+const GENERATION_NODE_TYPES: ReadonlySet<string> = new Set([
+  'getGeneration', 'periodicStep',
+  // The global periodic roots emit `stepIndex = ⌊_generation / Period⌋`.
+  'gridPeriodic', 'agentPeriodic',
+]);
 
 function scan(nodes: ReadonlyArray<GraphNode> | undefined): boolean {
   if (!nodes) return false;

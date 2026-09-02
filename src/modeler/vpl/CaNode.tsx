@@ -2507,7 +2507,10 @@ function CaNodeComponent({ id, data, selected }: NodeProps) {
           );
         })()}
 
-        {nodeData.nodeType === 'periodicStep' && (
+        {/* Cadence config — shared by the PER-AGENT Agent Periodic Step and the two
+            GLOBAL periodic roots (Grid Periodic Event / Population Periodic Event).
+            All three resolve through the same `periodicParams` clamp. */}
+        {(nodeData.nodeType === 'periodicStep' || nodeData.nodeType === 'gridPeriodic' || nodeData.nodeType === 'agentPeriodic') && (
           <>
             <label style={{ fontSize: '0.6rem', color: '#999' }}>Period (generations)</label>
             <InlineNumberInput data-ctl-key="period"

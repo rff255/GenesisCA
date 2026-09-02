@@ -2,9 +2,11 @@ import type { NodeTypeDef } from '../types';
 import { StepNode } from './StepNode';
 import { InitEventNode } from './InitEventNode';
 import { GridInitEventNode } from './GridInitEventNode';
+import { GridPeriodicEventNode } from './GridPeriodicEventNode';
 import { SetCellAtPositionNode } from './SetCellAtPositionNode';
 import { BehaviourStepNode } from './BehaviourStepNode';
 import { PeriodicStepNode } from './PeriodicStepNode';
+import { AgentPeriodicEventNode } from './AgentPeriodicEventNode';
 import { GetSelfPositionNode } from './GetSelfPositionNode';
 import { GetSelfHandleNode } from './GetSelfHandleNode';
 import { GetRadiusNode } from './GetRadiusNode';
@@ -160,6 +162,9 @@ const ALL_NODES: NodeTypeDef[] = [
   // Grid Init Event — the global, once-per-Reset counterpart to the per-cell
   // Init Event (free-form seeding: loop + Set Cell (at Position)).
   GridInitEventNode,
+  // Grid Periodic Event — the GLOBAL periodic sibling of the Grid Init Event
+  // (runs ONCE per firing generation, not per cell).
+  GridPeriodicEventNode,
   InputColorNode,
   OutputMappingNode,
   StopEventNode,
@@ -188,9 +193,12 @@ const ALL_NODES: NodeTypeDef[] = [
   // Bond-Graph Agents — agent rule-graph event roots + read/request nodes
   // (gated by requirements.bondGraph; visible only on the Agents sub-tab).
   BehaviourStepNode,
-  // L2 — rule cadence: N per graph, lowered into the single Behaviour Step
-  // (periodicExpand.ts), so the compilers never see it.
+  // L2 — rule cadence, PER AGENT: N per graph, lowered into the single Behaviour
+  // Step (periodicExpand.ts), so the compilers never see it.
   PeriodicStepNode,
+  // The GLOBAL periodic sibling of the Agent Init Event — ONE run per firing
+  // generation, no self, JS-on-CPU on every agent target.
+  AgentPeriodicEventNode,
   DivisionEventNode,
   // Agent Output Mapping (A→C) — the agent analogue of OutputMapping; roots a
   // per-agent colour/exhibition pass (Standalone or the synthesized Linked one).

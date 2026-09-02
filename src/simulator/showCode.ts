@@ -220,6 +220,9 @@ function inputChannelBlock(mapping: Mapping | undefined, model: CAModel): string
 export interface AgentCodeBundle {
   behaviourCode?: string;
   initCode?: string;
+  /** Population Periodic Events (GLOBAL, once per firing generation) — they share
+   *  the Agent Init Event's ABI kind, so the document prints the SAME signature. */
+  periodicCodes?: Array<{ period: number; phase: number; code: string }>;
   divisionCode?: string;
   outputMappingCodes?: Array<{ mappingId: string; code: string }>;
   inputMappingCodes?: Array<{ mappingId: string; code: string }>;
@@ -724,6 +727,7 @@ function sectionDriver(model: CAModel, result: CompileResult): string {
   const agents = isAgentModel(model);
   const hasInit = !!result.initCode;
   const hasGridInit = !!result.gridInitCode;
+  const gridPeriodics = result.gridPeriodicCodes ?? [];
   const hasOM = (result.outputMappingCodes ?? []).length > 0;
   const linked = (model.indicators ?? []).some(i => i.kind === 'linked');
   const perGen = (model.indicators ?? []).some(i => i.kind === 'standalone' && (i.accumulationMode ?? 'per-generation') === 'per-generation');
@@ -782,6 +786,23 @@ function sectionDriver(model: CAModel, result: CompileResult): string {
   L.push('');
   L.push('// ---- ONE GENERATION -------------------------------------------------');
   L.push('function runGeneration() {');
+  if (gridPeriodics.length > 0 || agents) {
+    if (gridPeriodics.length > 0) {
+      L.push('  // GLOBAL periodic events run at the TOP of the generation, BEFORE both');
+      L.push('  // layers — so a substrate write / a spawn is visible to THIS generation.');
+      for (const gp of gridPeriodics) {
+        L.push(`  if (generation % ${gp.period} === ${gp.phase}) {   // Grid Periodic Event`);
+        if (!isAsync) L.push('    copy(readBuffers -> writeBuffers);    // SYNC: preserve untouched cells');
+        L.push('    gridPeriodicFn(...loopArgs);');
+        if (!isAsync) L.push('    copy(writeBuffers -> readBuffers);');
+        L.push('  }');
+      }
+    }
+    if (agents) {
+      L.push('  // Population Periodic Events (if any) fire here too — once, not per agent,');
+      L.push('  // through the Agent Init Event ABI (Create Agent -> Add Agent To World).');
+    }
+  }
   if (agents) {
     L.push('  // AGENTS STEP FIRST, then the cell step (Decision D-FIELD): agents SAMPLE the');
     L.push('  // field as of the previous cell step, then DEPOSIT into the cell READ buffers,');
@@ -1161,6 +1182,13 @@ function sectionAgentCompiled(model: CAModel, agent: AgentCodeBundle): string {
         'by reading the field must see the seeded substrate.'],
       buildAgentAbiParams('init', shape), agent.initCode);
   }
+  for (const p of agent.periodicCodes ?? []) {
+    add(`Population Periodic Event - ONCE globally, when generation % ${p.period} === ${p.phase}`,
+      ['Runs at the TOP of the generation, before the per-agent behaviour. No self:',
+        'it takes the Agent Init Event ABI (Create Agent -> Add Agent To World).',
+        'The WORKER tests the cadence, so the function itself is unconditional.'],
+      buildAgentAbiParams('init', shape), p.code);
+  }
   if (agent.divisionCode) {
     add('Agent Division Event — once per DAUGHTER, inside the structural phase',
       ['A single-agent function (no loop): call it for each daughter of each division.'],
@@ -1233,6 +1261,15 @@ function sectionCompiled(model: CAModel, result: CompileResult): string {
       banner('Grid Init Event — ONCE globally, on Reset'),
       comment(['same argument list as the step function; there is no per-cell loop.']),
       result.gridInitCode,
+    ].join('\n'));
+  }
+  for (const gp of result.gridPeriodicCodes ?? []) {
+    parts.push([
+      '',
+      banner(`Grid Periodic Event — ONCE globally, when generation % ${gp.period} === ${gp.phase}`),
+      comment(['same argument list as the step function; there is no per-cell loop.',
+        'the WORKER tests the cadence, so the function itself is unconditional.']),
+      gp.code,
     ].join('\n'));
   }
   for (const ic of result.inputColorCodes ?? []) {

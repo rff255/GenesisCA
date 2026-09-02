@@ -276,6 +276,10 @@ section('2. Phase ORDER matches the documented loops');
 const EXPECTED_ORDER_BOTH = [
   // reset roots (worker reset handler: runInit → runGridInit → runAgentInit)
   'init.cell', 'init.grid', 'init.agent',
+  // the GLOBAL periodic roots — worker `runPeriodicEvents()`, at the TOP of the
+  // generation, BEFORE the agent step (so a spawned agent behaves the same
+  // generation) and BEFORE the cell step (so added substrate is seen at once).
+  'periodic.grid', 'periodic.agent',
   // agent generation (runAgentStep)
   'agent.forceReset', 'agent.spatialHash', 'agent.primeAttrs',
   'agent.behaviour', 'agent.commitAttrs',

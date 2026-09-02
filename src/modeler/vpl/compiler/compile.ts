@@ -23,7 +23,7 @@ import { expandMultiAttrs } from './multiAttrExpand';
 import { expandForceToAgents } from './forceToAgentsExpand';
 import { expandNeighbourCensus } from './censusExpand';
 import { expandDensityRadius } from './densityExpand';
-import { expandPeriodicSteps } from './periodicExpand';
+import { expandPeriodicSteps, periodicParams } from './periodicExpand';
 import { cellUsesGeneration, agentUsesGeneration } from './generationUse';
 import { agentUsesDivisionSibling, agentUsesDivisionRequests } from './divisionUse';
 import { expandComposites } from './expandComposites';
@@ -92,6 +92,9 @@ function buildAdjacency(graphNodes: GraphNode[], graphEdges: GraphEdge[]) {
 const MULTI_OUTPUT_TYPES = new Set(['inputColor', 'initEvent', 'getColorConstant', 'macro', 'colorScale', 'categoricalColor', 'breakDownNeighborIndex', 'getFacingLabels', 'getAllFacingLabels', 'getCellPosition', 'behaviourStep', 'divisionEvent', 'getSelfPosition', 'forEachBond', 'fieldGradient', 'getAgentPosition', 'getAgentOffset', 'getVelocity', 'senseHemifield',
   // Grid Init Event's value-outs (width/height/depth) resolve via `_v<id>_<port>`.
   'gridInit',
+  // The GLOBAL periodic roots — Grid Periodic Event (width/height/depth/stepIndex)
+  // and Population Periodic Event (world size / stepIndex / seedIndexBase).
+  'gridPeriodic', 'agentPeriodic',
   // Get Grid Dimensions (universal — cells AND agents): width/height/depth.
   'getGridDimensions',
   // Generic Agent Platform spawn/init: the Agent Init Event's value-outs
@@ -108,7 +111,7 @@ const MULTI_OUTPUT_TYPES = new Set(['inputColor', 'initEvent', 'getColorConstant
  *  per-AGENT function (the agent ABI — `_agentX`, `_fieldW`, …); anything else is
  *  a per-CELL function (`W`/`H`/`D`, `r_<attr>`, …). Drives `CompileContext.agentGraph`
  *  so a UNIVERSAL node (one available on both graphs) can emit against the right ABI. */
-const AGENT_ROOT_TYPES = new Set(['behaviourStep', 'divisionEvent', 'agentInit', 'agentOutputMapping', 'agentInputMapping']);
+const AGENT_ROOT_TYPES = new Set(['behaviourStep', 'divisionEvent', 'agentInit', 'agentPeriodic', 'agentOutputMapping', 'agentInputMapping']);
 
 /** Check if a node's data uses multi-output variable naming */
 function isMultiOutput(data: { nodeType: string; config: Record<string, string | number | boolean> }): boolean {
@@ -470,7 +473,12 @@ function compileRoot(
     inlineNbr: model ? sparseSteppingEnabled(model) : false,
     // Generic Agent Platform: tag the agent root so the by-id setters relax the
     // live-agent guard in the init context (staged agents are alive=0 until Add).
-    agentRoot: rootNode.data.nodeType === 'agentInit' ? 'init'
+    // The Population Periodic Event REUSES the Agent Init Event's ABI kind: it is
+    // the same SELFLESS, once-per-firing shape (spawn closures + `_agentMaxAgents`,
+    // no `idx`), so the by-id setters relax their guard identically and every
+    // per-agent reader degrades to its typed default the same way. Sharing the kind
+    // is what keeps the new root off the ABI-mirror surface entirely.
+    agentRoot: (rootNode.data.nodeType === 'agentInit' || rootNode.data.nodeType === 'agentPeriodic') ? 'init'
       : rootNode.data.nodeType === 'behaviourStep' ? 'behaviour'
       : rootNode.data.nodeType === 'divisionEvent' ? 'division'
       // An Agent Input Mapping root's ABI depends on its mapping's BRUSH KIND:
@@ -1663,6 +1671,20 @@ function buildLinkedIndicatorCode(model: CAModel): {
 // Public API
 // ---------------------------------------------------------------------------
 
+/** One compiled GLOBAL periodic event — a once-per-firing function plus the
+ *  cadence the WORKER tests. The firing predicate lives in the worker (not in the
+ *  emitted code) so a firing generation costs one modulo, and a non-firing one
+ *  costs nothing at all — not even a call. `period ≥ 1` and `phase ∈ [0, period)`
+ *  are already resolved by the shared `periodicParams` clamp, so the worker never
+ *  has to defend against a divide-by-zero or a dead phase. */
+export interface PeriodicEventCode {
+  /** Resolved cadence: fires when `generation % period === phase`. */
+  period: number;
+  phase: number;
+  /** The compiled function source (`(function(...){...})`). */
+  code: string;
+}
+
 export interface CompileResult {
   stepCode: string;
   /** Per-cell init function code, emitted when the graph contains an Init
@@ -1676,6 +1698,13 @@ export interface CompileResult {
    *  writes the CPU/wasm attribute buffers, then the worker syncs / uploads).
    *  Empty string when no Grid Init Event node is present. */
   gridInitCode: string;
+  /** Grid Periodic Event functions — the GLOBAL once-per-FIRING-generation
+   *  counterpart of the Grid Init Event (NOT loop-wrapped; no per-cell `idx`).
+   *  ONE entry per `gridPeriodic` root, each carrying its resolved cadence. The
+   *  worker fires an entry on a generation where `generation % period === phase`,
+   *  BEFORE the agent + cell steps, on every compile target (see
+   *  runPeriodicEvents). Empty when the graph has no Grid Periodic Event. */
+  gridPeriodicCodes: PeriodicEventCode[];
   inputColorCodes: Array<{ mappingId: string; code: string }>;
   outputMappingCodes: Array<{ mappingId: string; code: string }>;
   /** Parallel to stop-event-node index. When `_stopFlag[0] === n+1`, the
@@ -1691,7 +1720,7 @@ export function compileGraph(
   model?: CAModel,
 ): CompileResult {
   if (!model) {
-    return { stepCode: '', initCode: '', gridInitCode: '', inputColorCodes: [], outputMappingCodes: [], stopMessages: [], error: 'Model required for SoA compilation.' };
+    return { stepCode: '', initCode: '', gridInitCode: '', gridPeriodicCodes: [], inputColorCodes: [], outputMappingCodes: [], stopMessages: [], error: 'Model required for SoA compilation.' };
   }
 
   // Expand macro instances up front so everything downstream sees one FLAT
@@ -1702,7 +1731,7 @@ export function compileGraph(
   {
     const expanded = expandMacros(graphNodes, graphEdges, model);
     if (expanded.error) {
-      return { stepCode: '', initCode: '', gridInitCode: '', inputColorCodes: [], outputMappingCodes: [], stopMessages: [], error: expanded.error };
+      return { stepCode: '', initCode: '', gridInitCode: '', gridPeriodicCodes: [], inputColorCodes: [], outputMappingCodes: [], stopMessages: [], error: expanded.error };
     }
     graphNodes = expanded.nodes;
     graphEdges = expanded.edges;
@@ -1716,7 +1745,7 @@ export function compileGraph(
   {
     const dangling = detectDanglingRefs(graphNodes, model, graphEdges);
     if (dangling) {
-      return { stepCode: '', initCode: '', gridInitCode: '', inputColorCodes: [], outputMappingCodes: [], stopMessages: [], error: dangling };
+      return { stepCode: '', initCode: '', gridInitCode: '', gridPeriodicCodes: [], inputColorCodes: [], outputMappingCodes: [], stopMessages: [], error: dangling };
     }
   }
 
@@ -1738,7 +1767,7 @@ export function compileGraph(
   {
     const shape = detectCompositeShapeMismatch(graphNodes, graphEdges, model);
     if (shape) {
-      return { stepCode: '', initCode: '', gridInitCode: '', inputColorCodes: [], outputMappingCodes: [], stopMessages: [], error: shape };
+      return { stepCode: '', initCode: '', gridInitCode: '', gridPeriodicCodes: [], inputColorCodes: [], outputMappingCodes: [], stopMessages: [], error: shape };
     }
   }
 
@@ -1772,7 +1801,7 @@ export function compileGraph(
   ({ nodes: graphNodes, edges: graphEdges } = injectLinkedOutputMappings(graphNodes, graphEdges, model));
 
   if (graphNodes.length === 0) {
-    return { stepCode: '', initCode: '', gridInitCode: '', inputColorCodes: [], outputMappingCodes: [], stopMessages: [], error: 'No nodes in graph.' };
+    return { stepCode: '', initCode: '', gridInitCode: '', gridPeriodicCodes: [], inputColorCodes: [], outputMappingCodes: [], stopMessages: [], error: 'No nodes in graph.' };
   }
 
   const isAsync = model.properties.updateMode === 'asynchronous';
@@ -2468,11 +2497,56 @@ export function compileGraph(
     ].join('\n');
   }
 
+  // --- Grid Periodic Events (GLOBAL once-per-FIRING-generation functions) ------
+  //     The periodic sibling of the Grid Init Event, and structurally identical to
+  //     it: same `omParams` signature, NOT loop-wrapped, no per-cell `idx`, the
+  //     grid dims as value-outs. The ONE difference is `stepIndex` (⌊gen/period⌋)
+  //     and that the WORKER decides when to call it — the cadence never enters the
+  //     emitted code, so a non-firing generation costs nothing.
+  //     N per model, each with its own cadence.
+  const gridPeriodicCodes: PeriodicEventCode[] = [];
+  for (const gpNode of graphNodes.filter(n => n.data.nodeType === 'gridPeriodic')) {
+    const { period, phase } = periodicParams(gpNode.data.config);
+    const { valueLines, preLoopValueLines, flowLines, scratchNodes } = compileRoot(
+      gpNode, 'do', nodeMap, inputToSource, inputToSources, flowOutputToTargets, loopInvariant, fusion, graphNodes, graphEdges, model,
+    );
+    const scratchDecls = scratchNodes.map(s => buildScratchDecl(s, model));
+    const pId = gpNode.id;
+    // Local Variables (cell scope) as global scratch — the Grid Init Event's rule.
+    // Not loop-wrapped, so the scalar `let`s + array fills run ONCE per firing.
+    const pv = buildVariableJS(model.variables || []);
+    gridPeriodicCodes.push({
+      period, phase,
+      code: [
+        `(function(${omParams}) {`,
+        ...scratchDecls,
+        ...viewerHoistLines,
+        ...pv.preLoop,
+        ...pv.inLoopReset.map(l => '  ' + l.trimStart()),
+        // Value-outs BEFORE the (loop-invariant) preLoopValueLines so a hoisted
+        // `width / 2` sees them defined — the Grid Init Event's ordering rule.
+        `  const _v${pId}_width = W;`,
+        `  const _v${pId}_height = H;`,
+        ...(is3d ? [`  const _v${pId}_depth = D;`] : []),
+        // `_generation` is guaranteed threaded: the root's presence makes
+        // `cellUsesGeneration` true (generationUse.ts rule 3).
+        `  const _v${pId}_stepIndex = Math.floor(_generation / ${period});`,
+        '  let _rs = _rngState[0] || 0x12345678;',
+        ...preLoopValueLines,
+        ...valueLines,
+        '',
+        ...flowLines,
+        '  _rngState[0] = _rs;',
+        '})',
+      ].join('\n'),
+    });
+  }
+
   const error = asyncValidationError
     ?? variegatedValidationError
     ?? (!stepNode ? 'No Step node found. Add a Step node as the entry point.' : undefined);
 
-  return { stepCode, initCode, gridInitCode, inputColorCodes, outputMappingCodes, stopMessages, error };
+  return { stepCode, initCode, gridInitCode, gridPeriodicCodes, inputColorCodes, outputMappingCodes, stopMessages, error };
 }
 
 // ===========================================================================
@@ -2496,6 +2570,13 @@ export interface AgentCompileResult {
   behaviourCode: string;
   /** Reserved (agent Init Event) — empty in v1. */
   initCode: string;
+  /** Population Periodic Events — the GLOBAL once-per-FIRING-generation agent
+   *  functions. ONE entry per `agentPeriodic` root, each with its resolved
+   *  cadence. They REUSE the Agent Init Event's ABI ('init' kind: the spawn
+   *  closures + `_agentMaxAgents`, no `idx`), so nothing new crosses the
+   *  ABI-mirror surface. JS-on-CPU on every agent target — the WASM / WebGPU
+   *  behaviour compilers never see this root. Empty when the graph has none. */
+  periodicCodes: PeriodicEventCode[];
   /** The single-agent Division Event function (runs per daughter). Empty when
    *  there's no divisionEvent root. */
   divisionCode: string;
@@ -2698,12 +2779,12 @@ export function compileAgentGraph(
    *  graph's stop-message count so `[...cellStops, ...agentStops]` aligns 1-based. */
   stopIdxBase = 0,
 ): AgentCompileResult {
-  if (!model) return { behaviourCode: '', initCode: '', divisionCode: '', stopMessages: [], outputMappingCodes: [], inputMappingCodes: [], dividePartitions: [], error: 'Model required.' };
+  if (!model) return { behaviourCode: '', initCode: '', periodicCodes: [], divisionCode: '', stopMessages: [], outputMappingCodes: [], inputMappingCodes: [], dividePartitions: [], error: 'Model required.' };
 
   // Flatten macros, strip reroutes — same front-end pipeline the cell compiler runs.
   {
     const expanded = expandMacros(agentNodes, agentEdges, model);
-    if (expanded.error) return { behaviourCode: '', initCode: '', divisionCode: '', stopMessages: [], outputMappingCodes: [], inputMappingCodes: [], dividePartitions: [], error: expanded.error };
+    if (expanded.error) return { behaviourCode: '', initCode: '', periodicCodes: [], divisionCode: '', stopMessages: [], outputMappingCodes: [], inputMappingCodes: [], dividePartitions: [], error: expanded.error };
     agentNodes = expanded.nodes;
     agentEdges = expanded.edges;
   }
@@ -2712,13 +2793,13 @@ export function compileAgentGraph(
   // missing, not emit reads of undeclared identifiers.
   {
     const dangling = detectDanglingRefs(agentNodes, model, agentEdges);
-    if (dangling) return { behaviourCode: '', initCode: '', divisionCode: '', stopMessages: [], outputMappingCodes: [], inputMappingCodes: [], dividePartitions: [], error: dangling };
+    if (dangling) return { behaviourCode: '', initCode: '', periodicCodes: [], divisionCode: '', stopMessages: [], outputMappingCodes: [], inputMappingCodes: [], dividePartitions: [], error: dangling };
   }
   ({ nodes: agentNodes, edges: agentEdges } = collapseReroutes(agentNodes, agentEdges));
   // …and the same composite SHAPE gate, at the same point (see the cell note).
   {
     const shape = detectCompositeShapeMismatch(agentNodes, agentEdges, model);
-    if (shape) return { behaviourCode: '', initCode: '', divisionCode: '', stopMessages: [], outputMappingCodes: [], inputMappingCodes: [], dividePartitions: [], error: shape };
+    if (shape) return { behaviourCode: '', initCode: '', periodicCodes: [], divisionCode: '', stopMessages: [], outputMappingCodes: [], inputMappingCodes: [], dividePartitions: [], error: shape };
   }
   // Neighbour State Census → the gather + one Count Matching per CONSUMED state
   // port (+ Array Length for `total`), so it reuses the existing emitters on every
@@ -2828,7 +2909,7 @@ export function compileAgentGraph(
 
   const behaviourNode = agentNodes.find(n => n.data.nodeType === 'behaviourStep');
   if (!behaviourNode) {
-    return { behaviourCode: '', initCode: '', divisionCode: '', stopMessages, outputMappingCodes: [], inputMappingCodes: [], dividePartitions, error: 'No Behaviour Step node in the agent graph.' };
+    return { behaviourCode: '', initCode: '', periodicCodes: [], divisionCode: '', stopMessages, outputMappingCodes: [], inputMappingCodes: [], dividePartitions, error: 'No Behaviour Step node in the agent graph.' };
   }
 
   const { nodeMap, inputToSource, inputToSources, flowOutputToTargets } = buildAdjacency(agentNodes, agentEdges);
@@ -2882,7 +2963,7 @@ export function compileAgentGraph(
       // One-hop Create Agent handle exemption (newborn spawn config, not a race).
       if (nodeMap.get(src.nodeId)?.data.nodeType === 'createAgent') continue;
       const label = getNodeDef(node.data.nodeType)?.label ?? node.data.nodeType;
-      return { behaviourCode: '', initCode: '', divisionCode: '', stopMessages, outputMappingCodes: [], inputMappingCodes: [], dividePartitions,
+      return { behaviourCode: '', initCode: '', periodicCodes: [], divisionCode: '', stopMessages, outputMappingCodes: [], inputMappingCodes: [], dividePartitions,
         error: `"${label}" writes another agent's state, which races that agent's own update in Synchronous agent mode. Switch to Asynchronous agent mode (Model Properties > Bond-Graph Agents), or target a Create Agent handle (spawn configuration).` };
     }
   }
@@ -3067,6 +3148,53 @@ export function compileAgentGraph(
     ].join('\n');
   }
 
+  // --- Population Periodic Events (GLOBAL once-per-FIRING-generation functions) --
+  //     The periodic sibling of the Agent Init Event, compiled against the SAME
+  //     'init' ABI kind (selfless: the spawn closures + `_agentMaxAgents`, no
+  //     `idx`) — so Create Agent → set-by-handle → Add Agent To World works here
+  //     verbatim and NOTHING new crosses the ABI-mirror surface. The WORKER owns
+  //     the firing decision, so the cadence never enters the emitted code.
+  //     N per graph, each with its own cadence.
+  const periodicCodes: PeriodicEventCode[] = [];
+  for (const pNode of agentNodes.filter(n => n.data.nodeType === 'agentPeriodic')) {
+    const { period, phase } = periodicParams(pNode.data.config);
+    const pv = compileRoot(
+      pNode, 'do', nodeMap, inputToSource, inputToSources, flowOutputToTargets,
+      loopInvariant, fusion, agentNodes, agentEdges, model,
+    );
+    const pScratch = pv.scratchNodes.map(s => buildScratchDecl(s, model));
+    const pId = pNode.id;
+    const pVars = buildVariableJS(model.agentVariables || []);
+    periodicCodes.push({
+      period, phase,
+      code: [
+        `(function(${buildAgentInitParams(model)}) {`,
+        ...pScratch,
+        ...viewerHoistLines,
+        ...pVars.preLoop,
+        // Local Variable scalar `let`s + array fills — ONCE per firing (no loop).
+        ...pVars.inLoopReset.map(l => l.trimStart()).map(l => '  ' + l),
+        // Value-out preamble — the Agent Init Event's, plus `stepIndex`.
+        `  const _v${pId}_worldWidth = _fieldW;`,
+        `  const _v${pId}_worldHeight = _fieldH;`,
+        // worldDepth derived from the threaded field dims (`_fieldD` is NOT in the
+        // 'init' ABI) — the Agent Init Event's own trick, so no ABI change.
+        ...(is3d ? [`  const _v${pId}_worldDepth = (_fieldW > 0 && _fieldH > 0) ? Math.round(_fieldTotal / (_fieldW * _fieldH)) : 1;`] : []),
+        `  const _v${pId}_seedIndexBase = _agentSeedBase;`,
+        // `_generation` is guaranteed threaded: the root's presence makes
+        // `agentUsesGeneration` true (generationUse.ts rule 3).
+        `  const _v${pId}_stepIndex = Math.floor(_generation / ${period});`,
+        '  let _rs = _rngState[0] || 0x12345678;',
+        ...pv.preLoopValueLines,
+        ...pv.valueLines,
+        '',
+        ...pv.flowLines,
+        '  _rngState[0] = _rs;',
+        '})',
+      ].join('\n'),
+    });
+  }
+
   // --- Agent Output Mappings — compile EVERY `agentOutputMapping` root in the
   // augmented agent graph (user-placed for a STANDALONE mapping, or synthesized by
   // injectAgentLinkedOutputMappings for a LINKED one) into a per-agent colour-pass
@@ -3194,7 +3322,7 @@ export function compileAgentGraph(
   }
 
   return {
-    behaviourCode, initCode, divisionCode, stopMessages, outputMappingCodes, inputMappingCodes, dividePartitions,
+    behaviourCode, initCode, periodicCodes, divisionCode, stopMessages, outputMappingCodes, inputMappingCodes, dividePartitions,
     error: omErrors.length > 0 ? omErrors.join('\n') : undefined,
   };
 }

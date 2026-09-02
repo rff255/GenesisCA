@@ -34,7 +34,13 @@ import { compileAgentGraphWebGPUForModel, isAgentGraphWebGPUSupported } from '..
 import { compileOverseerGraph } from '../modeler/vpl/compiler/overseer/compile';
 
 export interface CompileAllResult {
-  js: { stepCode: string; fullCode: string; error: string | null };
+  /** `gridInitCode` + `gridPeriodicCode` are the CELL graph's GLOBAL, once-per-
+   *  event functions. Like the agent division/init pair they are JS-on-CPU on
+   *  EVERY compile target, so they appear on NO other surface here - hashing them
+   *  separately is what keeps the byte-identity gate from having a blind spot over
+   *  them (the D1 reasoning, applied to the cell side). They are kept OUT of
+   *  `fullCode` deliberately: that hash predates them and must not move. */
+  js: { stepCode: string; fullCode: string; gridInitCode: string; gridPeriodicCode: string; error: string | null };
   wasm: { total: number; bytesLen: number; bytesJoined: string; error: string | null };
   webgpu: { shaderCode: string; error: string | null };
   /** Bond-Graph Agents: the compiled agent behaviour loop (JS) + the PR6b-1 WASM
@@ -50,6 +56,10 @@ export interface CompileAllResult {
      *  blind spot over the whole `division` / `init` ABI (Impact Map §5.5). */
     divisionCode: string;
     initCode: string;
+    /** The GLOBAL Population Periodic Event functions (JS-on-CPU on every agent
+     *  target, like division/init) - joined so the byte-identity gate covers them
+     *  too. Empty for a model with no `agentPeriodic` root. */
+    periodicCode: string;
     error: string | null;
     wasm: { supported: boolean; bytesLen: number; bytesJoined: string; supportedTypes: string[]; error: string | null };
     /** PR7/G1+G2 — the WebGPU agent behaviour SHADER (WGSL source). `supported`
@@ -68,11 +78,11 @@ export interface CompileAllResult {
 
 export function compileAll(model: CAModel): CompileAllResult {
   const out: CompileAllResult = {
-    js: { stepCode: '', fullCode: '', error: null },
+    js: { stepCode: '', fullCode: '', gridInitCode: '', gridPeriodicCode: '', error: null },
     wasm: { total: 0, bytesLen: 0, bytesJoined: '', error: null },
     webgpu: { shaderCode: '', error: null },
     agent: {
-      behaviourCode: '', divisionCode: '', initCode: '', error: null,
+      behaviourCode: '', divisionCode: '', initCode: '', periodicCode: '', error: null,
       wasm: { supported: false, bytesLen: 0, bytesJoined: '', supportedTypes: [], error: null },
       webgpu: { supported: false, shaderCode: '', supportedTypes: [], error: null, omShaders: [], omSupported: true },
     },
@@ -82,11 +92,14 @@ export function compileAll(model: CAModel): CompileAllResult {
   // OM/IC/init emits (e.g. setCellLooks colour writes) are searchable.
   try {
     const js = compileGraph(model.graphNodes, model.graphEdges, model) as {
-      stepCode?: string; initCode?: string; error?: string;
+      stepCode?: string; initCode?: string; gridInitCode?: string; error?: string;
+      gridPeriodicCodes?: Array<{ period: number; phase: number; code: string }>;
       inputColorCodes?: Array<{ code: string }>; outputMappingCodes?: Array<{ code: string }>;
     };
     out.js.stepCode = js.stepCode || '';
     const parts = [js.stepCode || '', js.initCode || ''];
+    out.js.gridInitCode = js.gridInitCode || '';
+    out.js.gridPeriodicCode = (js.gridPeriodicCodes || []).map(gp => '// period=' + gp.period + ' phase=' + gp.phase + '\n' + gp.code).join('\n');
     for (const ic of js.inputColorCodes || []) parts.push(ic.code);
     for (const om of js.outputMappingCodes || []) parts.push(om.code);
     out.js.fullCode = parts.join('\n');
@@ -121,6 +134,7 @@ export function compileAll(model: CAModel): CompileAllResult {
     out.agent.behaviourCode = ag.behaviourCode || '';
     out.agent.divisionCode = ag.divisionCode || '';
     out.agent.initCode = ag.initCode || '';
+    out.agent.periodicCode = (ag.periodicCodes || []).map(c => '// period=' + c.period + ' phase=' + c.phase + '\n' + c.code).join('\n');
     out.agent.error = ag.error || null;
   } catch (e) {
     out.agent.error = String((e as Error)?.message || e);

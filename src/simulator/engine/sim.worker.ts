@@ -147,6 +147,13 @@ interface InteractionTablePayload {
   mins?: number[];
 }
 
+/** One GLOBAL periodic event as it crosses the wire — the compiled function source
+ *  plus the cadence the WORKER tests. Mirrors `PeriodicEventCode` in compile.ts
+ *  (the worker deliberately keeps no compiler import). `period ≥ 1` and
+ *  `phase ∈ [0, period)` are already clamped by the compiler's shared
+ *  `periodicParams`, so a divide-by-zero / dead phase is impossible here. */
+interface PeriodicEventCodeMsg { period: number; phase: number; code: string }
+
 interface InitMsg {
   type: 'init';
   width: number;
@@ -174,6 +181,10 @@ interface InitMsg {
   /** Optional GLOBAL Grid Init Event function source (NOT loop-wrapped). Runs
    *  once on Reset + first load, after the per-cell init, to seed the grid. */
   gridInitCode?: string;
+  /** GLOBAL Grid Periodic Event functions — one per `gridPeriodic` root, each with
+   *  its resolved cadence. Fired at the TOP of a generation where
+   *  `generation % period === phase`, before the agent + cell steps. */
+  gridPeriodicCodes?: PeriodicEventCodeMsg[];
   /** "Skip Isolated Empty Cells" config (docs/PLAN_LARGE_GRID_PERF.md). Absent /
    *  disabled → the worker maintains no active set + the step runs the full loop. */
   skipIsolatedEmpty?: SkipIsolatedEmptyConfig;
@@ -238,6 +249,9 @@ interface InitMsg {
    *  in later PRs. Absent ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ agents are inert (seed + render only). */
   agentBehaviourCode?: string;
   agentInitCode?: string;
+  /** GLOBAL Population Periodic Event functions — one per `agentPeriodic` root,
+   *  each with its resolved cadence. They take the Agent Init Event's ABI. */
+  agentPeriodicCodes?: PeriodicEventCodeMsg[];
   agentDivisionCode?: string;
   agentColorViewer?: string;
   /** Agent Output Mappings: one per-agent colour-pass fn source per linked agent
@@ -395,7 +409,7 @@ interface PaintManualMsg {
   activeViewer: string;
 }
 interface ResetMsg { type: 'reset'; activeViewer: string; reqId?: number }
-interface RecompileMsg { type: 'recompile'; stepCode: string; initCode?: string; gridInitCode?: string; skipIsolatedEmpty?: SkipIsolatedEmptyConfig; inputColorCodes: Array<{ mappingId: string; code: string }>; outputMappingCodes: Array<{ mappingId: string; code: string }>; stopMessages?: string[]; updateMode: string; asyncScheme: string; wasmStepBytes?: Uint8Array; wasmStepError?: string; wasmExports?: string[]; viewerIds?: Record<string, number>; webgpuShaderCode?: string; webgpuShaderError?: string; webgpuEntryPoints?: WebGPUEntryPoints; webgpuLayout?: WebGPULayout; webgpuStopCheckInterval?: number; variegated?: VariegatedPayload; interactionTables?: InteractionTablePayload[]; agentBehaviourCode?: string; agentInitCode?: string; agentDivisionCode?: string; agentColorViewer?: string; agentOutputMappingCodes?: Array<{ mappingId: string; code: string }>; agentInputMappingCodes?: Array<{ mappingId: string; code: string; channels: number; spawner?: boolean }>; agentHasSprites?: boolean; agentBondReqSlots?: number; agentFieldGates?: AgentFieldGates; agentDividePartitions?: DividePartitionSpec[]; agentUsesDivisionSibling?: boolean; agentUsesDivisionRequests?: boolean; centerBased?: CenterBasedConfig; agentUsesField?: boolean; agentUsesDensity?: boolean; rulesReadComputedIndicator?: boolean; agentResidencyClean?: boolean; agentTarget?: 'js' | 'wasm' | 'webgpu'; agentWasmBytes?: Uint8Array; agentWasmViewerGuardIds?: string[]; agentLayoutExtras?: AgentLayoutExtras; agentWasmLayoutSig?: { maxHashBins: number; totalBytes: number }; agentWebgpuBehaviourShader?: string; agentWebgpuForceShader?: string; agentWebgpuMaxAgents?: number; agentWebgpuMaxHashBins?: number; agentWebgpuLayout?: AgentWebGPULayout; agentRenderLayout?: AgentWebGPULayout; agentWebgpuUsesI32Write?: boolean; agentWebgpuUsage?: { usesBondStore?: boolean; usesBondStoreWrite?: boolean; usesIndicators?: boolean; usesAux?: boolean; usesSpawn?: boolean; usesStop?: boolean; usesForceScatter?: boolean; usesGeneration?: boolean; usesSpriteWrite?: boolean }; agentWebgpuOmShaders?: AgentOMShaderInput[] }
+interface RecompileMsg { type: 'recompile'; stepCode: string; initCode?: string; gridInitCode?: string; gridPeriodicCodes?: PeriodicEventCodeMsg[]; skipIsolatedEmpty?: SkipIsolatedEmptyConfig; inputColorCodes: Array<{ mappingId: string; code: string }>; outputMappingCodes: Array<{ mappingId: string; code: string }>; stopMessages?: string[]; updateMode: string; asyncScheme: string; wasmStepBytes?: Uint8Array; wasmStepError?: string; wasmExports?: string[]; viewerIds?: Record<string, number>; webgpuShaderCode?: string; webgpuShaderError?: string; webgpuEntryPoints?: WebGPUEntryPoints; webgpuLayout?: WebGPULayout; webgpuStopCheckInterval?: number; variegated?: VariegatedPayload; interactionTables?: InteractionTablePayload[]; agentBehaviourCode?: string; agentInitCode?: string; agentPeriodicCodes?: PeriodicEventCodeMsg[]; agentDivisionCode?: string; agentColorViewer?: string; agentOutputMappingCodes?: Array<{ mappingId: string; code: string }>; agentInputMappingCodes?: Array<{ mappingId: string; code: string; channels: number; spawner?: boolean }>; agentHasSprites?: boolean; agentBondReqSlots?: number; agentFieldGates?: AgentFieldGates; agentDividePartitions?: DividePartitionSpec[]; agentUsesDivisionSibling?: boolean; agentUsesDivisionRequests?: boolean; centerBased?: CenterBasedConfig; agentUsesField?: boolean; agentUsesDensity?: boolean; rulesReadComputedIndicator?: boolean; agentResidencyClean?: boolean; agentTarget?: 'js' | 'wasm' | 'webgpu'; agentWasmBytes?: Uint8Array; agentWasmViewerGuardIds?: string[]; agentLayoutExtras?: AgentLayoutExtras; agentWasmLayoutSig?: { maxHashBins: number; totalBytes: number }; agentWebgpuBehaviourShader?: string; agentWebgpuForceShader?: string; agentWebgpuMaxAgents?: number; agentWebgpuMaxHashBins?: number; agentWebgpuLayout?: AgentWebGPULayout; agentRenderLayout?: AgentWebGPULayout; agentWebgpuUsesI32Write?: boolean; agentWebgpuUsage?: { usesBondStore?: boolean; usesBondStoreWrite?: boolean; usesIndicators?: boolean; usesAux?: boolean; usesSpawn?: boolean; usesStop?: boolean; usesForceScatter?: boolean; usesGeneration?: boolean; usesSpriteWrite?: boolean }; agentWebgpuOmShaders?: AgentOMShaderInput[] }
 interface UpdateLookupTableMsg {
   type: 'updateLookupTable';
   attrId: string;
@@ -1156,6 +1170,11 @@ let centerBasedConfig: CenterBasedConfig | null = null;
  *  Null until the agent compile path ships it (PR-A2.5/A3). */
 let agentBehaviourFn: Function | null = null;
 let agentInitFn: Function | null = null;
+/** GLOBAL Population Periodic Events — one compiled fn per `agentPeriodic` root
+ *  with its resolved cadence. They take the AGENT INIT ABI ('init' kind), so they
+ *  are called through `buildAgentInitArgs` with the SAME grow-only spawn closures
+ *  the behaviour graph uses. JS-on-CPU on every agent target. */
+let agentPeriodicFns: Array<{ period: number; phase: number; fn: Function }> = [];
 /** Unified spawning ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â the STABLE grow-only Create Agent + Add Agent To World host
  *  closures for the BEHAVIOUR graph (mid-step spawning, the same idiom as the Init
  *  Event). They're module-level (not per-step) so the WASM `env.agentCreate` /
@@ -3327,6 +3346,9 @@ function agentResidentEligible(): boolean {
     usesStop: !!rt.usesStop,
     usesIndicators: !!rt.indicatorsBuf,   // indicator accumulation needs per-gen sync
     usesSpriteWrite: !!rt.usesSpriteWrite, // the CPU ticks sprite frames per generation
+    // GLOBAL periodic events are per-generation CPU functions on BOTH layers —
+    // derived from what the worker actually COMPILED, not re-scanned.
+    usesPeriodicEvents: gridPeriodicFns.length > 0 || agentPeriodicFns.length > 0,
     hasStopMessages: stopMessages.length > 0,
     bondSlots: s.maxBonds,                // the ACTUAL allocation, not a re-derivation
   }).length === 0;
@@ -4036,6 +4058,12 @@ let initFn: Function | null = null;
  *  before the first colour pass. Executed on every compile target (it writes the
  *  CPU/wasm attribute buffers; the worker then syncs / uploads). See runGridInit. */
 let gridInitFn: Function | null = null;
+
+/** GLOBAL Grid Periodic Events — one compiled fn per `gridPeriodic` root with its
+ *  resolved cadence. `runPeriodicEvents()` fires the due ones at the TOP of every
+ *  generation, on EVERY compile target (the WASM / WebGPU step compilers never see
+ *  the root). Empty ⇒ the whole mechanism is a single `.length === 0` test. */
+let gridPeriodicFns: Array<{ period: number; phase: number; fn: Function }> = [];
 
 /** Per-table Float64Array of length `rowCount * colCount` (row-major). Keyed by
  *  attribute id. Rebuilt on init / recompile / updateLookupTable. */
@@ -5864,6 +5892,7 @@ function compileFns(
   omCodes: Array<{ mappingId: string; code: string }> = [],
   initCode: string = '',
   gridInitCode: string = '',
+  gridPeriodicCodes: PeriodicEventCodeMsg[] = [],
 ): void {
   try {
     // eslint-disable-next-line no-eval
@@ -5877,6 +5906,17 @@ function compileFns(
     // eslint-disable-next-line no-eval
     gridInitFn = gridInitCode ? (eval(gridInitCode) as Function) : null;
   } catch { gridInitFn = null; }
+  // GLOBAL Grid Periodic Events. A failed compile drops THAT event (loudly) and
+  // leaves the rest running — the same posture as an input/output mapping.
+  gridPeriodicFns = [];
+  for (const gp of gridPeriodicCodes) {
+    try {
+      // eslint-disable-next-line no-eval
+      gridPeriodicFns.push({ period: gp.period, phase: gp.phase, fn: eval(gp.code) as Function });
+    } catch (e) {
+      self.postMessage({ type: 'error', message: '[gridPeriodic] Grid Periodic Event compile failed: ' + ((e as Error)?.message || e) });
+    }
+  }
   inputColorFns = [];
   for (const ic of icCodes) {
     try {
@@ -5897,7 +5937,7 @@ function compileFns(
  *  behaviour function runs once per LIVE agent each generation over `idx <
  *  highWater`. Absent code ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ null (agents seed + render but don't behave, the
  *  PR-A2 state). */
-function compileAgentFns(behaviourCode?: string, initCode?: string, divisionCode?: string, outputMappingCodes?: Array<{ mappingId: string; code: string }>, inputMappingCodes?: Array<{ mappingId: string; code: string; channels: number; spawner?: boolean }>): void {
+function compileAgentFns(behaviourCode?: string, initCode?: string, divisionCode?: string, outputMappingCodes?: Array<{ mappingId: string; code: string }>, inputMappingCodes?: Array<{ mappingId: string; code: string; channels: number; spawner?: boolean }>, periodicCodes?: PeriodicEventCodeMsg[]): void {
   try {
     // eslint-disable-next-line no-eval
     agentBehaviourFn = behaviourCode ? (eval(behaviourCode) as Function) : null;
@@ -5925,6 +5965,14 @@ function compileAgentFns(behaviourCode?: string, initCode?: string, divisionCode
     // eslint-disable-next-line no-eval
     agentInitFn = initCode ? (eval(initCode) as Function) : null;
   } catch (e) { agentInitFn = null; self.postMessage({ type: 'error', message: '[agents] init compile failed: ' + ((e as Error)?.message || e) }); }
+  // GLOBAL Population Periodic Events (same 'init' ABI as the Agent Init Event).
+  agentPeriodicFns = [];
+  for (const p of (periodicCodes || [])) {
+    try {
+      // eslint-disable-next-line no-eval
+      agentPeriodicFns.push({ period: p.period, phase: p.phase, fn: eval(p.code) as Function });
+    } catch (e) { self.postMessage({ type: 'error', message: '[agents] periodic event compile failed: ' + ((e as Error)?.message || e) }); }
+  }
   try {
     // eslint-disable-next-line no-eval
     agentDivisionFn = divisionCode ? (eval(divisionCode) as Function) : null;
@@ -5966,6 +6014,17 @@ function compileAgentFns(behaviourCode?: string, initCode?: string, divisionCode
       const want = buildAgentInitArgs(s, () => 0, () => {}, 0).length;
       if (!arityOk(agentInitFn.length, want)) {
         self.postMessage({ type: 'error', message: `[agents] ABI ARITY DESYNC: init fn declares ${agentInitFn.length} params but buildAgentInitArgs passes ${want} (buildAgentInitParamsÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬ÂbuildAgentInitArgs out of lockstep ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â the B1 hazard).` });
+      }
+    }
+    // Population Periodic Events REUSE the 'init' ABI kind, so they are checked
+    // against the SAME builder - a new root that quietly took a different shape
+    // would surface here instead of reading a shifted arg list at runtime.
+    if (agentPeriodicFns.length > 0) {
+      const wantP = buildAgentInitArgs(s, () => 0, () => {}, 0).length;
+      for (const p of agentPeriodicFns) {
+        if (!arityOk(p.fn.length, wantP)) {
+          self.postMessage({ type: 'error', message: `[agents] ABI ARITY DESYNC: periodic event fn declares ${p.fn.length} params but buildAgentInitArgs passes ${wantP} (the Population Periodic Event shares the Agent Init Event's ABI kind).` });
+        }
       }
     }
     // The Agent INPUT Mapping is the FOURTH ABI pair (buildAgentInputParams <->
@@ -6103,6 +6162,160 @@ function runGridInit(): boolean {
     }
   }
   return true;
+}
+
+// ---------------------------------------------------------------------------
+// GLOBAL periodic events (Grid Periodic Event / Population Periodic Event)
+//
+// The periodic siblings of the two Init roots, and they follow the SAME
+// architecture: ONE JS function the worker executes, so the WASM / WebGPU step
+// compilers never see the root and every compile target works by construction.
+//
+// FIRING: `generation % period === phase`, tested against the generation being
+// computed NOW — the same value the per-agent `Agent Periodic Step` gate reads,
+// so the two cadences agree. They run at the TOP of the generation, BEFORE the
+// agent step and BEFORE the cell step, so anything written is visible to THIS
+// generation's rules (the ordering reason the agent field deposit precedes the
+// cell step).
+//
+// A non-firing generation costs one modulo per event; a model with none costs a
+// `.length === 0` test.
+// ---------------------------------------------------------------------------
+
+/** Does any GRID periodic event fire on the current generation? Hoisted out so
+ *  the WebGPU-grid branch can decide whether to pay the readback/upload round
+ *  trip WITHOUT compiling anything, and pay it only on a firing generation. */
+function gridPeriodicDue(): boolean {
+  if (gridPeriodicFns.length === 0 || !gridCellsEnabled) return false;
+  for (const p of gridPeriodicFns) if (generation % p.period === p.phase) return true;
+  return false;
+}
+
+/** Run the GRID periodic events due this generation.
+ *
+ *  Buffer discipline MIRRORS `runGridInit` exactly — sync mode seeds the write
+ *  buffer from the read buffer (so cells the event doesn't touch persist), the fn
+ *  writes specific `w_<attr>` cells, then write → read. Async mode shares one
+ *  buffer. Under the WebGPU-grid `attrWriteAliased` optimisation write === read,
+ *  and both copies are self-copies — correct, because the event writes FINAL
+ *  values (the documented gridInit/paint reasoning).
+ *
+ *  ⚠ THE CALLER OWNS GPU RESIDENCY. On the WebGPU grid target `readAttrs` is
+ *  stale after a step (`gpuOwnsAttrs`), so the caller must read back BEFORE and
+ *  upload AFTER — see the `webgpuActive` batch branch. This function deliberately
+ *  does not do it: it is synchronous, and the readback is async. */
+function runGridPeriodicEvents(): boolean {
+  if (gridPeriodicFns.length === 0 || !gridCellsEnabled) return false;
+  let ran = false;
+  const isSync = updateMode !== 'asynchronous';
+  for (const p of gridPeriodicFns) {
+    if (generation % p.period !== p.phase) continue;
+    if (!ran && isSync) {
+      for (const attr of cellAttrs) {
+        (writeAttrs[attr.id] as Uint8Array).set(readAttrs[attr.id] as Uint8Array);
+      }
+    }
+    ran = true;
+    try {
+      (p.fn as (...a: unknown[]) => void)(...buildLoopArgs());
+    } catch (e) {
+      self.postMessage({ type: 'error', message: '[gridPeriodic] Grid Periodic Event failed: ' + ((e instanceof Error) ? e.message : String(e)) });
+    }
+  }
+  if (!ran) return false;
+  if (isSync) {
+    for (const attr of cellAttrs) {
+      (readAttrs[attr.id] as Uint8Array).set(writeAttrs[attr.id] as Uint8Array);
+    }
+  }
+  colorsDirty = true;
+  // "Skip Isolated Empty Cells": the event can write ARBITRARY cells, including
+  // ones outside the active set — rebuild it (the paint/gridInit rule), and force
+  // the next colour pass FULL, since a written cell that stays INACTIVE would
+  // otherwise keep its stale colour through the sparse batch-tail pass.
+  if (activeSet) { rebuildActiveSetFromGrid(); sieColorDirtyAll = true; }
+  return true;
+}
+
+/** Run the AGENT (population) periodic events due this generation.
+ *
+ *  Selfless, once-per-firing — the Agent Init Event's shape, compiled against the
+ *  SAME 'init' ABI kind and called through the SAME `buildAgentInitArgs`. Spawning
+ *  reuses the module-level GROW-ONLY closures the behaviour graph uses (never a
+ *  fork), so a Create appends at `highWater` and can never hand back a free-list
+ *  hole; a Created-but-never-Added slot is leak-swept exactly as elsewhere.
+ *
+ *  Because this runs at the TOP of the generation, a newborn is already inside
+ *  `runAgentStep`'s loop bound — so it behaves and integrates THIS generation,
+ *  exactly like an Agent-Init-Event agent (and unlike a Behaviour-Step spawn,
+ *  which lands past the already-captured bound).
+ *
+ *  The CPU store is authoritative here: a model carrying a periodic event is not
+ *  GPU-residency eligible (`residencyModelBlockers` key `periodicEvents`), and the
+ *  per-generation GPU path reads the store back every generation — so
+ *  `agentStoreStale` can never be set when this runs. */
+function runAgentPeriodicEvents(): boolean {
+  if (agentPeriodicFns.length === 0 || !agentStore || !simulateAgents) return false;
+  const s = agentStore;
+  let ran = false;
+  let overflowed = false;
+  for (const p of agentPeriodicFns) {
+    if (generation % p.period !== p.phase) continue;
+    if (!ran) { spawnCreatedList.length = 0; spawnCreatedSet.clear(); }
+    ran = true;
+    const seedBase = s.highWater;   // the seedIndexBase value-out, per firing
+    const hwBefore = s.highWater;
+    try {
+      (p.fn as (...a: unknown[]) => void)(
+        ...buildAgentInitArgs(s, agentBehaviourCreate, agentBehaviourAddToWorld, seedBase));
+    } catch (e) {
+      self.postMessage({ type: 'error', message: '[agents] periodic event failed: ' + ((e instanceof Error) ? e.message : String(e)) });
+    }
+    // A Create that returned -1 (the ceiling) leaves highWater pinned at maxAgents.
+    if (s.highWater >= s.maxAgents && hwBefore >= s.maxAgents) overflowed = true;
+  }
+  if (!ran) return false;
+  // Leak sweep: free any Created-but-not-Added slot (still staged at alive=0).
+  for (const id of spawnCreatedList) if (!s.alive[id]) freeStagedSlot(s, id);
+  spawnCreatedList.length = 0; spawnCreatedSet.clear();
+  // A Set Agent Position on a fresh handle must survive the first integration —
+  // sync xNext from x for every live agent (the Agent Init Event's own tail).
+  const is3dWorld = s.worldDepth > 1;
+  for (let i = 0; i < s.highWater; i++) {
+    if (s.alive[i]) { s.xNext[i] = s.x[i]!; s.yNext[i] = s.y[i]!; if (is3dWorld) s.zNext[i] = s.z[i]!; }
+  }
+  // The CPU store moved — the next GPU dispatch must re-upload it.
+  agentGpuUploadPending = true;
+  if (overflowed) {
+    self.postMessage({ type: 'agentOverflow', message: `Agent capacity reached during a Periodic Event (maxAgents=${s.maxAgents}). Some Create Agent calls were skipped.` });
+  }
+  return true;
+}
+
+/** Drain a Stop Event raised INSIDE a periodic root.
+ *
+ *  A Stop Event compiles to a write into the SHARED `_stopFlag` — the very flag
+ *  `runStep` CLEARS at its top. Periodic events fire BEFORE the cell step, so
+ *  without draining here the cell step would wipe a stop the event just raised
+ *  and the run would sail past it. Exactly the hazard `drainAgentStop` exists
+ *  for (the agent step has the same ordering), and the same remedy: capture it
+ *  now, let the caller SURFACE it after generation++ so the paused generation
+ *  matches the cell-stop semantics. Returns the 1-based index, 0 for none. */
+function drainPeriodicStop(): number {
+  if (stopMessages.length === 0) return 0;
+  const v = stopFlag[0] ?? 0;
+  stopFlag[0] = 0;
+  return v;
+}
+
+/** Fire every GLOBAL periodic event due this generation (grid then agents), and
+ *  return any Stop Event they raised (0 = none — see drainPeriodicStop).
+ *  The JS/WASM-grid entry point; the WebGPU-grid branch calls the two halves
+ *  itself so it can wrap the grid half in the GPU readback/upload round trip. */
+function runPeriodicEvents(): number {
+  const ranGrid = runGridPeriodicEvents();
+  const ranAgent = runAgentPeriodicEvents();
+  return (ranGrid || ranAgent) ? drainPeriodicStop() : 0;
 }
 
 /** "Skip Isolated Empty Cells": (re)build the active-set STRUCTURE from the model
@@ -7075,7 +7288,7 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
       // offsets; JS-target step also reads through the same Float64Array /
       // Int32Array views (single source of truth).
       initVariegation(msg.variegated, msg.interactionTables);
-      compileFns(msg.stepCode, msg.inputColorCodes, msg.outputMappingCodes || [], msg.initCode || '', msg.gridInitCode || '');
+      compileFns(msg.stepCode, msg.inputColorCodes, msg.outputMappingCodes || [], msg.initCode || '', msg.gridInitCode || '', msg.gridPeriodicCodes || []);
       // Bond-Graph Agents ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â allocate the co-resident agent engine (additive on
       // top of the always-present grid). The agent behaviour/init functions are
       // compiled by compileAgentFns; absent in PR-A2 (agents seed + render only).
@@ -7116,7 +7329,7 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
       pendingAgentWebgpuUsage = msg.agentWebgpuUsage ?? {};
       pendingAgentWebgpuOmShaders = msg.agentWebgpuOmShaders ?? [];
       initAgents();
-      compileAgentFns(msg.agentBehaviourCode, msg.agentInitCode, msg.agentDivisionCode, (msg as InitMsg).agentOutputMappingCodes, (msg as InitMsg).agentInputMappingCodes);
+      compileAgentFns(msg.agentBehaviourCode, msg.agentInitCode, msg.agentDivisionCode, (msg as InitMsg).agentOutputMappingCodes, (msg as InitMsg).agentInputMappingCodes, (msg as InitMsg).agentPeriodicCodes);
       instantiateAgentWasmIfNeeded();
       buildAgentWebGPUIfNeeded();
       // (The Agent Init Event runs BELOW, after the cell Init Event ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â a
@@ -7259,6 +7472,31 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
               sinceDrain = 0;
             }
             sinceDrain++;
+            // ── GLOBAL periodic events (WebGPU GRID branch) ───────────────
+            // THE STALE-MIRROR CASE. After a GPU step the live cell state is
+            // GPU-resident and the CPU `readAttrs` mirror is stale, so a grid
+            // periodic event that writes cells must (a) read the attrs back
+            // first — or it would compute from stale values — and (b) upload
+            // after, or the write is silently discarded by the next dispatch.
+            // Both are paid ONLY on a firing generation (the `gridPeriodicDue`
+            // test is one modulo per event), which is why the round trip is
+            // gated here rather than folded into runGridPeriodicEvents.
+            let periodicRan = false;
+            if (gridPeriodicDue()) {
+              if (gpuOwnsAttrs) await ensureCpuAttrsFresh();
+              if (runGridPeriodicEvents()) {
+                // It RAN — so a Stop Event it raised must be drained below,
+                // independently of whether the upload below can happen.
+                periodicRan = true;
+                if (webgpuRuntime) { uploadAttrs(webgpuRuntime, readAttrs); gpuOwnsAttrs = false; }
+              }
+            }
+            // The AGENT half needs no round trip (the agent SoA is its own
+            // buffer set, and a periodic-event model is never GPU-resident).
+            if (runAgentPeriodicEvents()) periodicRan = true;
+            // A Stop Event raised inside a periodic root must be captured BEFORE
+            // the cell step clears the shared flag (see drainPeriodicStop).
+            const periodicStopIdx = periodicRan ? drainPeriodicStop() : 0;
             // Bond-Graph Agents on a WebGPU grid (PR5 ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â independent targets,
             // C-D1). ONE generation = the closed agentÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬Âgrid loop, same ordering
             // as the JS/WASM branch (agents step BEFORE the cell step), but with
@@ -7327,14 +7565,14 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
                 gpuOwnsAttrs = false;
               }
             }
-            // Agent Stop Event ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â CAPTURE before the cell step (runStepWebGPU resets +
+            // A pre-cell-step Stop Event (a PERIODIC ROOT or the agent step) ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â CAPTURE before the cell step (runStepWebGPU resets +
             // finalizeStepWebGPU overwrites the shared flag from the GPU control
             // buffer), SURFACE after generation++.
-            const agentStopIdx = (agentStore && simulateAgents) ? drainAgentStop() : 0;
+            const preCellStopIdx = periodicStopIdx || ((agentStore && simulateAgents) ? drainAgentStop() : 0);
             if (simulateCells && gridCellsEnabled) runStepWebGPU();      // Layers panel / agents-only: freeze the cell step
             // agents-only / frozen grid: the agent step IS the generation.
             else if (agentStore && simulateAgents) advanceGeneration();
-            if (agentStopIdx !== 0) { stoppedByEvent = stopMessages[agentStopIdx - 1] ?? `Stop event #${agentStopIdx - 1}`; stopFlag[0] = 0; break; }
+            if (preCellStopIdx !== 0) { stoppedByEvent = stopMessages[preCellStopIdx - 1] ?? `Stop event #${preCellStopIdx - 1}`; stopFlag[0] = 0; break; }
             const isLast = i === msg.count - 1;
             const shouldCheck = stopMessages.length > 0 && (k === 1 || isLast || (i % k) === (k - 1));
             if (shouldCheck) {
@@ -7475,19 +7713,24 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
               if (cancellable && stepCancelRequested) break;
               pacer.reset();
             }
+            // GLOBAL periodic events at the TOP of the generation. The grid is
+            // JS/WASM in this branch (only the AGENTS are on the GPU), so the grid
+            // half needs no residency round trip; the agent half runs on the CPU
+            // store, which the per-generation GPU path keeps fresh every gen.
+            const periodicStopIdx = runPeriodicEvents();
             if (simulateAgents) {
               const ran = await runAgentStepWebGPU();
               if (!ran) runAgentStep();   // GPU bailed (hash overflow / failure) ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ JS this step
               // runAgentStep advances sprites itself; the GPU path doesn't, so do it here.
               else if (hasAgentSprites && agentStore) advanceAgentSprites(agentStore);
             }
-            // Agent Stop Event ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â CAPTURE before the cell step (runStep resets the
+            // A pre-cell-step Stop Event (a PERIODIC ROOT or the agent step) ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â CAPTURE before the cell step (runStep resets the
             // shared flag), SURFACE after generation++.
-            const agentStopIdx = (agentStore && simulateAgents) ? drainAgentStop() : 0;
+            const preCellStopIdx = periodicStopIdx || ((agentStore && simulateAgents) ? drainAgentStop() : 0);
             if (stepFn && simulateCells && gridCellsEnabled) runStep(true);
             // agents-only / frozen grid: the agent step IS the generation.
             else if (simulateAgents) advanceGeneration();
-            if (agentStopIdx !== 0) { stoppedByEvent = stopMessages[agentStopIdx - 1] ?? `Stop event #${agentStopIdx - 1}`; stopFlag[0] = 0; break; }
+            if (preCellStopIdx !== 0) { stoppedByEvent = stopMessages[preCellStopIdx - 1] ?? `Stop event #${preCellStopIdx - 1}`; stopFlag[0] = 0; break; }
             const rawStop = stopFlag[0] ?? 0;
             if (rawStop !== 0) {
               const idx = rawStop - 1;
@@ -7521,6 +7764,12 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
       // synchronous single-step path and the chunked multi-generation path below
       // cannot drift. Returns the stop message when a Stop Event fired, else null.
       const runOneGeneration = (): string | null => {
+        // GLOBAL periodic events (Grid / Population) fire at the TOP of the
+        // generation, before BOTH layers — so a substrate write or a spawn is
+        // visible to this generation's rules. The grid target here is JS/WASM
+        // (the WebGPU branch above never reaches this), so `readAttrs` is CPU-
+        // authoritative and no residency round trip is needed.
+        const periodicStopIdx = runPeriodicEvents();
         // Bond-Graph AgentsÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â one generation = the closed agentÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬Âgrid loop:
         //  (gather) agents SampleField the grid as of the previous cell step,
         //  (behave) run behaviourStep + integrate forces + the structural phase,
@@ -7532,16 +7781,16 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
         // Layers panel (req 1): freeze either layer at runtime. Freezing agents
         // also stops their cell-field deposit (it lives inside runAgentStep).
         if (agentStore && simulateAgents) runAgentStep();
-        // Agent Stop Event ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â CAPTURE it before the cell step (runStep resets the
+        // A pre-cell-step Stop Event (a PERIODIC ROOT or the agent step) ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â CAPTURE it before the cell step (runStep resets the
         // shared flag at its top, which would clobber it), but SURFACE it after
         // generation++ so the paused generation matches the cell-stop semantics.
-        const agentStopIdx = (agentStore && simulateAgents) ? drainAgentStop() : 0;
+        const preCellStopIdx = periodicStopIdx || ((agentStore && simulateAgents) ? drainAgentStop() : 0);
         if (stepFn && simulateCells && gridCellsEnabled) runStep(true);
         // generation++ lives inside the CELL step ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â when the cell step didn't
         // run (agents-only model, or the Layers panel froze the grid) an agent
         // step still IS a generation, or the counter sits at 0 forever.
         else if (agentStore && simulateAgents) advanceGeneration();
-        if (agentStopIdx !== 0) { stopFlag[0] = 0; return stopMessages[agentStopIdx - 1] ?? `Stop event #${agentStopIdx - 1}`; }
+        if (preCellStopIdx !== 0) { stopFlag[0] = 0; return stopMessages[preCellStopIdx - 1] ?? `Stop event #${preCellStopIdx - 1}`; }
         const rawStop = stopFlag[0] ?? 0;
         if (rawStop !== 0) {
           const idx = rawStop - 1;
@@ -7872,7 +8121,7 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
         viewerIdMap = (msg as RecompileMsg).viewerIds!;
         syncActiveViewerToMemory();
       }
-      compileFns(msg.stepCode, msg.inputColorCodes, (msg as RecompileMsg).outputMappingCodes || [], (msg as RecompileMsg).initCode || '', (msg as RecompileMsg).gridInitCode || '');
+      compileFns(msg.stepCode, msg.inputColorCodes, (msg as RecompileMsg).outputMappingCodes || [], (msg as RecompileMsg).initCode || '', (msg as RecompileMsg).gridInitCode || '', (msg as RecompileMsg).gridPeriodicCodes || []);
       // Dropped-table WebGPU model: a soft recompile keeps the (dropped) layout,
       // so if this graph edit ADDED a neighbour read to a CPU-executed function
       // (init / gridInit / OM / inputColor), that function would index a table
@@ -7930,7 +8179,7 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
         // ABI sides have to flip together or every trailing arg shifts.
         agentUsesDivisionSibling = !!rc.agentUsesDivisionSibling;
         agentUsesDivisionRequests = !!rc.agentUsesDivisionRequests;
-        compileAgentFns(rc.agentBehaviourCode, rc.agentInitCode, rc.agentDivisionCode, rc.agentOutputMappingCodes, rc.agentInputMappingCodes);
+        compileAgentFns(rc.agentBehaviourCode, rc.agentInitCode, rc.agentDivisionCode, rc.agentOutputMappingCodes, rc.agentInputMappingCodes, rc.agentPeriodicCodes);
         // PR6b-1 / PR7: re-resolve the agent target + stash the per-target payload.
         // If the WASM backing requirement changes (JS/WebGPU ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬Â WASM, since wasm
         // needs the store on a WebAssembly.Memory), re-init the store so its arrays
