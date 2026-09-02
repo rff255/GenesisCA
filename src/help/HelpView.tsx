@@ -1163,6 +1163,63 @@ export function HelpView() {
             clearing the name removes the label.
           </p>
 
+          <h3 className={styles.h3}>Dissolve Node</h3>
+          <p className={styles.p}>
+            The same idea as dissolving a reroute, for an ordinary node:
+            <strong> right-click a node &rarr; &quot;Dissolve Node&quot;</strong> removes it
+            but <strong>keeps the connections</strong>. Everything it fed is rewired
+            straight to whatever was feeding it, wherever the two ends can legally connect.
+          </p>
+          <ul className={styles.list}>
+            <li>For a <strong>flow</strong> node this splices it out of the chain &mdash; the
+              node before it runs the node after it. It is the exact inverse of holding a
+              wire to insert a node into it.</li>
+            <li>For a <strong>value</strong> node the consumer lands on the first input whose
+              source it can accept &mdash; so dissolving a Math node in
+              <em> Get Attribute &rarr; Math &rarr; Compare</em> leaves
+              <em> Get Attribute &rarr; Compare</em>.</li>
+            <li>A node with <strong>several outputs</strong> relinks all of them, so
+              dissolving an <em>If / Then / Else</em> makes both branches (and its DONE
+              chain) run unconditionally rather than leaving them orphaned.</li>
+            <li>Where <strong>no legal pairing</strong> exists (the types don&rsquo;t match, or
+              nothing was feeding the node) the consumer is simply left unwired &mdash;
+              GenesisCA never invents a connection you could not have drawn yourself.</li>
+            <li>Not offered for event roots (Generation Step, Behaviour Step&hellip;) or for a
+              macro&rsquo;s own Input / Output nodes. <strong>Ctrl+Z</strong> restores the node
+              and its original wiring in one step.</li>
+          </ul>
+
+          <h3 className={styles.h3}>Morph Into</h3>
+          <p className={styles.p}>
+            Picked the wrong node type, or outgrew it? <strong>Right-click a node &rarr;
+            &quot;Morph into&quot;</strong> lists the types it can become. The node is
+            converted <strong>in place</strong> &mdash; it keeps its position, its name and,
+            wherever the ports still fit, its wires. Available conversions:
+          </p>
+          <ul className={styles.list}>
+            <li><strong>Math &harr; Math Expression</strong> &mdash; turn a Math node into the
+              equivalent formula (and back, when the formula is a single operation).</li>
+            <li><strong>Compare &harr; Logical Expression</strong> &mdash; grow a comparison
+              into a boolean formula you can extend with AND / OR / NOT.</li>
+            <li><strong>Logic &rarr; Logical Expression</strong>, and
+              <strong> Logical Expression &rarr; Logic</strong> when the formula is one
+              AND / OR / XOR / NOT.</li>
+            <li><strong>Math &harr; Compare</strong> &mdash; compute with the two operands
+              instead of comparing them, or the reverse.</li>
+            <li><strong>Math Expression &harr; Logical Expression</strong> &mdash; the two
+              formula nodes are twins, so every port, name and the formula text carry over.</li>
+          </ul>
+          <p className={styles.p}>
+            Two things worth knowing. An operand that is <strong>not wired</strong> is baked
+            into the new formula as its value, so <em>Compare X &gt; 3</em> becomes the
+            formula <code>a &gt; 3</code> on a node with a single input. And a wire that no
+            longer fits the new node is <strong>dropped, never re-aimed</strong> at a
+            different port &mdash; e.g. morphing Math into Compare narrows its output to a
+            yes/no value, so a consumer that needs a number lets go. Some conversions are
+            hidden when they would not be meaningful (a Compare set to <em>Neighbor Index</em>
+            offers none). <strong>Ctrl+Z</strong> undoes a morph completely.
+          </p>
+
           <h3 className={styles.h3}>Inline Port Widgets</h3>
           <p className={styles.p}>
             Input ports on many nodes (Math, Compare, Logic, Loop, Set Attribute, Set Color
