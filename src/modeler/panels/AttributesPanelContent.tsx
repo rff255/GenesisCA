@@ -13,7 +13,7 @@ import { VariablesPanelSection } from './VariablesPanelSection';
 import { MODEL_ELEMENT_DRAG_MIME } from '../vpl/modelElementDrag';
 import type { ModelElementDragPayload } from '../vpl/modelElementDrag';
 import { setCurrentModelElementDrag, subscribeActiveGraphKind, getActiveGraphKind } from '../vpl/graphState';
-import { typeDisplayName } from '../../model/typeLabels';
+import { typeDisplayName, typeBadgeLabel } from '../../model/typeLabels';
 import { resolveMaxBonds } from '../../model/centerBased';
 import { vectorDimsForModel, vectorComponentLabels } from '../vpl/compiler/vectorAttr';
 import { NumberField, InlineNumberInput } from '../vpl/widgets/InlineWidgets';
@@ -390,7 +390,7 @@ export function AttributesPanelContent({ mode = 'list' }: PanelContentProps = {}
                 title={`Drag to canvas to add a node that uses '${attr.name}'`}
               >
                 <span className={styles.listItemName}>{attr.name}</span>
-                <span className={styles.listItemBadge}>{typeDisplayName(attr.type)}</span>
+                <span className={styles.listItemBadge}>{typeBadgeLabel(attr.type, attr.vectorDims)}</span>
                 <button
                   className={styles.dragHandle}
                   title="Drag to reorder"
@@ -450,7 +450,7 @@ export function AttributesPanelContent({ mode = 'list' }: PanelContentProps = {}
                 title={`Drag to canvas to add a node that uses '${attr.name}'`}
               >
                 <span className={styles.listItemName}>{attr.name}</span>
-                <span className={styles.listItemBadge}>{typeDisplayName(attr.type)}</span>
+                <span className={styles.listItemBadge}>{typeBadgeLabel(attr.type, attr.vectorDims)}</span>
                 <button
                   className={styles.dragHandle}
                   title="Drag to reorder"
@@ -508,7 +508,7 @@ export function AttributesPanelContent({ mode = 'list' }: PanelContentProps = {}
                   onClick={() => selectBond(attr.id)}
                 >
                   <span className={styles.listItemName}>{attr.name}</span>
-                  <span className={styles.listItemBadge}>{typeDisplayName(attr.type)}</span>
+                  <span className={styles.listItemBadge}>{typeBadgeLabel(attr.type, attr.vectorDims)}</span>
                   <button
                     className={styles.dragHandle}
                     title="Drag to reorder"

@@ -24,3 +24,16 @@ const TYPE_DISPLAY_NAMES: Record<string, string> = {
 export function typeDisplayName(t: string): string {
   return TYPE_DISPLAY_NAMES[t] ?? t;
 }
+
+/**
+ * The type name for a LIST-ROW badge, which (unlike a dropdown option) is the
+ * only place a user sees an element's type at a glance. Identical to
+ * `typeDisplayName` for every scalar type; a `vector` additionally carries its
+ * dimensionality — `Vector (2D)` / `Vector (3D)` — because 2D and 3D vectors are
+ * genuinely different shapes and the Data Type dropdown already names them that
+ * way. Shared by the Attributes and Local Variables lists so the two agree.
+ */
+export function typeBadgeLabel(t: string, vectorDims?: number): string {
+  if (t === 'vector') return `Vector (${vectorDims === 3 ? '3D' : '2D'})`;
+  return typeDisplayName(t);
+}

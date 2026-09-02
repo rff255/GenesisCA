@@ -15,7 +15,7 @@ export { compileGraph, compileAgentGraph } from '../src/modeler/vpl/compiler/com
 export { compileGraphWasm } from '../src/modeler/vpl/compiler/wasm/compile.ts';
 export { compileGraphWebGPU } from '../src/modeler/vpl/compiler/webgpu/compile.ts';
 export { computeLayoutFromModel, buildViewerIds } from '../src/modeler/vpl/compiler/wasm/layout.ts';
-export { lowerVectorAttrs, VECTOR_LOWERED } from '../src/modeler/vpl/compiler/vectorAttr.ts';
+export { lowerVectorAttrs, VECTOR_LOWERED, expandVectorVariables, vectorPortDims } from '../src/modeler/vpl/compiler/vectorAttr.ts';
 export { migrateForHarness } from '../src/dev/compileHarness.ts';
 `;
 const dir = mkdtempSync(join(tmpdir(), 'gca-vac-'));
@@ -326,6 +326,151 @@ console.log(`${fail === 0 ? 'VECTOR-ATTR JS CELL COMPILE ✓' : `${fail} CELL FA
   dc('VECTOR_LOWERED includes the newly-lowered nodes', ['getNeighborAttributeByIndex', 'getNeighborAttributeByTag', 'getAgentAttribute', 'setNeighborAttributeByIndex', 'setNeighborhoodAttribute', 'setAttribute', 'moveSelfToNeighbor'].every(t => m.VECTOR_LOWERED.has(t)));
   dc('VECTOR_LOWERED excludes array-of-vectors / updateAttribute', !m.VECTOR_LOWERED.has('getNeighborsAttribute') && !m.VECTOR_LOWERED.has('getAgentsAttribute') && !m.VECTOR_LOWERED.has('filterNeighbors') && !m.VECTOR_LOWERED.has('updateAttribute'));
   console.log(`VECTOR TRANSFORM UNIT (tag-index bake + move slots + VECTOR_LOWERED) ${fail === 0 ? '✓' : '✗'}`);
+}
+
+// ── TIER V: vector LOCAL VARIABLE **runtime values** on JS + a REAL instantiated
+// WASM module + the WGSL emit shape. The blocks above assert the emitted SHAPE;
+// this one asserts the NUMBERS, which is the only thing that catches a component
+// swap, a collapsed pair, or an `initialValue` that never reached the components.
+//
+// Two models, because they exercise different halves of the lowering:
+//   (a) INIT   — read the variable WITHOUT writing it: proves `expandVectorVariables`
+//                split `initialValue` "5,7" into per-component seeds (X=5, Y=7).
+//   (b) RW     — Set Variable ← Make Vector(3,4), then Get Variable → Break Vector:
+//                proves the Set/Get round trip keeps the components DISTINCT and in
+//                order, and that the read sees the post-write value (flow order).
+//   (c) ACC    — the canonical accumulator: acc(1,10) + delta(3,4) via Vector Op,
+//                written back through the variable. Asymmetric on purpose so an
+//                x/y swap or a collapsed pair cannot pass.
+{
+  const TOTAL = 4, W = 2, H = 2;
+  const cellBufs = (ids) => {
+    const b = {
+      total: TOTAL, W, H, D: 1, WH: W * H, modelAttrs: {}, colors: new Uint8ClampedArray(TOTAL * 4),
+      activeViewer: '', _indicators: {}, _linkedResults: {}, _rngState: new Uint32Array([0x12345678]),
+      _stopFlag: new Uint32Array(1), glyphCodes: new Uint32Array(0), glyphColors: new Uint32Array(0),
+      _lookupTables: {}, _facePatternLookup: new Int32Array(0),
+      r_orientation: new Int32Array(TOTAL), w_orientation: new Int32Array(TOTAL),
+      order: null, _skipped: new Uint8Array(0), _activeList: null, _activeCount: -1,
+    };
+    for (const id of ids) { b['r_' + id] = new Float64Array(TOTAL); b['w_' + id] = new Float64Array(TOTAL); }
+    return b;
+  };
+  const outAttrs = [
+    { id: 'ox', name: 'OX', type: 'float', description: '', isModelAttribute: false, defaultValue: '0' },
+    { id: 'oy', name: 'OY', type: 'float', description: '', isModelAttribute: false, defaultValue: '0' },
+  ];
+  const mkVarModel = (nodes, edges, initial) => m.migrateForHarness({
+    schemaVersion: 1,
+    properties: { name: 'VecVarRun', dimension: '2d', gridWidth: W, gridHeight: H, gridDepth: 1, topology: '2d-grid', boundaryTreatment: 'torus', updateMode: 'synchronous' },
+    attributes: outAttrs, modelAttributes: [], neighborhoods: [], indicators: [], mappings: [],
+    variables: [{ id: 'acc', name: 'Acc', kind: 'scalar', dataType: 'vector', vectorDims: 2, initialValue: initial }],
+    graphNodes: nodes, graphEdges: edges, macroDefs: [],
+  });
+
+  /** Build one of the three graphs. `mode`: 'init' | 'rw' | 'acc'. */
+  const buildVarGraph = (mode) => {
+    const VN = [], VE = [];
+    const vn = (t, c = {}) => { const n = { id: nid('rv'), type: 'caNode', position: { x: 0, y: 0 }, data: { nodeType: t, config: c } }; VN.push(n); return n; };
+    const ve = (s, sp, tt, tp, cat) => VE.push({ id: nid('e'), source: s.id, target: tt.id, sourceHandle: `output_${cat}_${sp}`, targetHandle: `input_${cat}_${tp}` });
+    const stp = vn('step');
+    const setOX = vn('setAttribute', { attributeId: 'ox' });
+    const setOY = vn('setAttribute', { attributeId: 'oy' });
+    let head = stp, headPort = 'do';
+    if (mode !== 'init') {
+      // Set Variable ← (Make Vector, or acc + delta through Vector Op).
+      const setAcc = vn('setVariable', { variableId: 'acc' });
+      if (mode === 'rw') {
+        const mkv = vn('makeVector', { _port_x: '3', _port_y: '4' });
+        ve(mkv, 'vector', setAcc, 'value', 'value');
+      } else {
+        const cur = vn('getVariable', { variableId: 'acc' });
+        const delta = vn('makeVector', { _port_x: '3', _port_y: '4' });
+        const add = vn('vectorOp', { op: 'add' });
+        ve(cur, 'value', add, 'a', 'value');
+        ve(delta, 'vector', add, 'b', 'value');
+        ve(add, 'result', setAcc, 'value', 'value');
+      }
+      ve(head, headPort, setAcc, 'do', 'flow');
+      head = setAcc; headPort = 'next';
+    }
+    // Read the variable back and split it into the two scalar out-attributes.
+    const get = vn('getVariable', { variableId: 'acc' });
+    const brk = vn('breakVector');
+    ve(get, 'value', brk, 'vector', 'value');
+    ve(brk, 'x', setOX, 'value', 'value');
+    ve(brk, 'y', setOY, 'value', 'value');
+    ve(head, headPort, setOX, 'do', 'flow');
+    ve(setOX, 'next', setOY, 'do', 'flow');
+    return { VN, VE };
+  };
+
+  // (initial, mode) → the expected (X, Y) after ONE step.
+  const CASES = [
+    { mode: 'init', initial: '5,7', ex: 5, ey: 7, label: 'initialValue "5,7" seeds the components' },
+    { mode: 'rw', initial: '0,0', ex: 3, ey: 4, label: 'Set(3,4) then Get round-trips distinct components' },
+    { mode: 'acc', initial: '1,10', ex: 4, ey: 14, label: 'accumulate acc(1,10) + delta(3,4)' },
+  ];
+  let tierFail = 0;
+  const vr = (n, c, got) => { if (!c) { fail++; tierFail++; console.log(`FAIL varrun ${n}${got !== undefined ? ' — got ' + got : ''}`); } };
+
+  for (const cs of CASES) {
+    const { VN, VE } = buildVarGraph(cs.mode);
+    const mdl = mkVarModel(VN, VE, cs.initial);
+
+    // ── JS: run the compiled step and read the written out-attributes.
+    const js = m.compileGraph(mdl.graphNodes, mdl.graphEdges, mdl);
+    vr(`JS compiles (${cs.label})`, !js.error, js.error);
+    if (!js.error) {
+      const params = /\(function\(([^)]*)\)/.exec(js.stepCode)[1].split(',').map(s => s.trim());
+      const bufs = cellBufs(['ox', 'oy']);
+      const miss = params.filter(p => !(p in bufs));
+      vr(`JS params resolvable (${cs.label})`, miss.length === 0, miss.join(','));
+      if (!miss.length) {
+        (0, eval)(js.stepCode)(...params.map(p => bufs[p]));
+        vr(`JS ${cs.label}: X == ${cs.ex}`, bufs.w_ox[0] === cs.ex, bufs.w_ox[0]);
+        vr(`JS ${cs.label}: Y == ${cs.ey}`, bufs.w_oy[0] === cs.ey, bufs.w_oy[0]);
+        vr(`JS ${cs.label}: the components did NOT collapse`, bufs.w_ox[0] !== bufs.w_oy[0]);
+        vr(`JS ${cs.label}: every cell agrees`, [...bufs.w_ox].every(v => v === cs.ex) && [...bufs.w_oy].every(v => v === cs.ey));
+      }
+    }
+
+    // ── WASM: a REAL instantiated module over the same model.
+    const layout = m.computeLayoutFromModel(mdl);
+    const wa = m.compileGraphWasm(mdl.graphNodes, mdl.graphEdges, mdl, layout, m.buildViewerIds(mdl));
+    vr(`WASM compiles (${cs.label})`, !wa.error, wa.error);
+    if (!wa.error) {
+      const mem = new WebAssembly.Memory({ initial: layout.pages });
+      const env = { mem, pow: Math.pow, exp: Math.exp, log: Math.log, sin: Math.sin, cos: Math.cos, tan: Math.tan, tanh: Math.tanh, fmod: (a, b) => a % b };
+      const { instance } = await WebAssembly.instantiate(wa.bytes, { env });
+      instance.exports.step(TOTAL);
+      const ox = new Float64Array(mem.buffer, layout.attrWriteOffset['ox'], TOTAL);
+      const oy = new Float64Array(mem.buffer, layout.attrWriteOffset['oy'], TOTAL);
+      vr(`WASM ${cs.label}: X == ${cs.ex}`, ox[0] === cs.ex, ox[0]);
+      vr(`WASM ${cs.label}: Y == ${cs.ey}`, oy[0] === cs.ey, oy[0]);
+      vr(`JS ↔ WASM bit-identical (${cs.label})`, ox[0] === cs.ex && oy[0] === cs.ey);
+    }
+
+    // ── WebGPU: the emit must reference BOTH component scratch vars and no bare one.
+    const wg = m.compileGraphWebGPU(mdl.graphNodes, mdl.graphEdges, mdl);
+    vr(`WGSL compiles (${cs.label})`, !wg.error, wg.error);
+    if (!wg.error) {
+      const sh = wg.shaderCode || '';
+      vr(`WGSL ${cs.label}: declares both variable components`, /_var_acc_vx/.test(sh) && /_var_acc_vy/.test(sh));
+      vr(`WGSL ${cs.label}: no bare _var_acc`, !/_var_acc\b(?!_v)/.test(sh.replace(/_var_acc_v[xyz]/g, '')));
+    }
+  }
+
+  // The variable expansion itself, by value — the seeds the UI's per-component
+  // Initial Value editor writes must be what the components are initialised to.
+  const exp = m.expandVectorVariables([{ id: 'acc', name: 'Acc', kind: 'scalar', dataType: 'vector', vectorDims: 3, initialValue: '5,7,9' }]);
+  vr('expandVectorVariables → 3 float components', exp.length === 3 && exp.every(v => v.dataType === 'float' && v.kind === 'scalar'));
+  vr('component ids are _vx/_vy/_vz', exp.map(v => v.id).join(',') === 'acc_vx,acc_vy,acc_vz');
+  vr('component initialValues split 5 / 7 / 9', exp.map(v => v.initialValue).join(',') === '5,7,9');
+  vr('an ARRAY-kind vector is NOT expanded (scalar-only type)',
+    m.expandVectorVariables([{ id: 'a', name: 'A', kind: 'array', dataType: 'vector', length: 4, initialValue: '0,0' }]).length === 1);
+
+  console.log(`VECTOR LOCAL VARIABLE RUNTIME VALUES (JS + real WASM + WGSL) ${tierFail === 0 ? '✓' : '✗'}`);
 }
 
 rmSync(dir, { recursive: true, force: true });

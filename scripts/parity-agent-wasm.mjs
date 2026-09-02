@@ -1251,6 +1251,92 @@ function buildVectorRotateModel() {
   };
 }
 
+// Synthetic: a vector AGENT VARIABLE — the canonical per-agent accumulator (one
+// named vector instead of hand-maintained sumX / sumY floats). `expandVectorVariables`
+// splits it into `<id>_vx`/`_vy` float scratch variables and `lowerVectorAttrs`
+// rewrites Get/Set Variable into Make/Break Vector over those components, so this
+// keeps permanent JS↔WASM coverage for the VARIABLE half of the vector-storage
+// lowering (the ATTRIBUTE half is covered by the rotate/field synthetics).
+//
+// Per agent, per step:
+//   acc (initial 5,7)  →  acc + (myX, 2·myY)  via Vector Op add  →  Set Variable
+//   Break Vector(acc)  →  vx / vy attributes  (asymmetric, so an x/y swap or a
+//                                              collapsed pair cannot pass)
+//   Vector Op length(acc) → vlen             (a consumer of the WHOLE vector)
+// The three outputs are stored, so the invariant can recompute them from the
+// store's own x/y WITHOUT re-deriving anything the emit produced — parity alone
+// would pass happily if BOTH targets dropped the initial value or swapped the
+// components identically.
+function buildVectorVarModel() {
+  const used = new Set();
+  const nid = (p) => { let id; do { id = p + Math.random().toString(36).slice(2, 8); } while (used.has(id)); used.add(id); return id; };
+  const aN = [], aEd = [];
+  const an = (t, c) => { const n = { id: nid('a'), type: 'caNode', position: { x: 0, y: 0 }, data: { nodeType: t, config: c } }; aN.push(n); return n; };
+  const aE = (s, sp, tt, tp, cat) => aEd.push({ id: nid('e'), source: s.id, target: tt.id, sourceHandle: `output_${cat}_${sp}`, targetHandle: `input_${cat}_${tp}` });
+  const bs = an('behaviourStep', {});
+  // delta = (myX, 2·myY) — asymmetric between the two components on purpose.
+  const dy2 = an('arithmeticOperator', { operation: '*', _port_y: '2' });
+  aE(bs, 'myY', dy2, 'x', 'value');
+  const delta = an('makeVector', {});
+  aE(bs, 'myX', delta, 'x', 'value');
+  aE(dy2, 'result', delta, 'y', 'value');
+  // acc = acc + delta   (Get Variable → Vector Op → Set Variable)
+  const cur = an('getVariable', { variableId: 'acc' });
+  const add = an('vectorOp', { op: 'add' });
+  aE(cur, 'value', add, 'a', 'value');
+  aE(delta, 'vector', add, 'b', 'value');
+  const setAcc = an('setVariable', { variableId: 'acc' });
+  aE(add, 'result', setAcc, 'value', 'value');
+  aE(bs, 'do', setAcc, 'do', 'flow');
+  // Read the variable back and store both components + its length.
+  const rd = an('getVariable', { variableId: 'acc' });
+  const brk = an('breakVector', {});
+  aE(rd, 'value', brk, 'vector', 'value');
+  const sx = an('setAttribute', { attributeId: 'vx' });
+  aE(brk, 'x', sx, 'value', 'value');
+  aE(setAcc, 'next', sx, 'do', 'flow');
+  const sy = an('setAttribute', { attributeId: 'vy' });
+  aE(brk, 'y', sy, 'value', 'value');
+  aE(sx, 'next', sy, 'do', 'flow');
+  const len = an('vectorOp', { op: 'length' });
+  aE(rd, 'value', len, 'a', 'value');
+  const sl = an('setAttribute', { attributeId: 'vlen' });
+  aE(len, 'value', sl, 'value', 'value');
+  aE(sy, 'next', sl, 'do', 'flow');
+  return {
+    schemaVersion: 1,
+    properties: { name: 'Vector Variable Parity Test', dimension: '2d', gridWidth: 24, gridHeight: 24, gridDepth: 1, topology: '2d-grid', boundaryTreatment: 'torus', useWasm: false, useWebGPU: false },
+    topologyMode: { gridCells: false, agents: true },
+    centerBased: { enabled: true, maxAgents: 100, maxBonds: 0, worldWidth: 24, worldHeight: 24, seedCount: 40, seedPattern: 'scatter', defaultRadius: 0.5, growthRate: 0, repulsionStiffness: 2, adhesionStiffness: 0, interactionRange: 1.5, drag: 1, timeStep: 0.1, momentum: 0, maxSpeed: 0, neighbourQueryRadius: 8, useBondingPhysics: false, autoBond: false, agentTarget: 'wasm', agentUpdateMode: 'async',
+      agentCapabilities: { motion: 'force', body: true, collision: 'off', bonds: 'off', autoBond: false, growth: false, division: false, lifespan: false, populationBirth: false, populationDeath: false, sensing: false, sensingHeadingSource: 'velocity', orientation: false, fieldCoupling: false, appearance: true } },
+    attributes: [], modelAttributes: [], neighborhoods: [],
+    agentAttributes: ['vx', 'vy', 'vlen'].map(id => ({ id, name: id, type: 'float', defaultValue: '0' })),
+    variables: [],
+    agentVariables: [{ id: 'acc', name: 'Acc', kind: 'scalar', dataType: 'vector', vectorDims: 2, initialValue: '5,7' }],
+    indicators: [], mappings: [],
+    graphNodes: [], graphEdges: [], agentGraphNodes: aN, agentGraphEdges: aEd, macroDefs: [],
+  };
+}
+
+/** A Local Variable is per-agent, per-STEP scratch: it is reset to `initialValue`
+ *  at the top of every step, so after ANY number of steps the stored components
+ *  must be exactly (5 + x, 7 + 2y) for THIS step's position — recomputed here from
+ *  the store's own x/y, so a dropped initial value, a swapped component pair or a
+ *  variable that wrongly persisted across steps is caught even when BOTH targets
+ *  agree. `vlen` must be the length of that same pair. */
+function vectorVarInvariant(st) {
+  const a = st.attrRead;
+  for (let i = 0; i < st.highWater; i++) {
+    if (!st.alive[i]) continue;
+    const ex = 5 + st.x[i], ey = 7 + 2 * st.y[i];
+    if (a.vx[i] !== ex) return `agent ${i}: vx ${a.vx[i]} !== 5 + x ${ex}`;
+    if (a.vy[i] !== ey) return `agent ${i}: vy ${a.vy[i]} !== 7 + 2y ${ey}`;
+    if (a.vx[i] === a.vy[i]) return `agent ${i}: the two components collapsed (${a.vx[i]})`;
+    if (a.vlen[i] !== Math.sqrt(ex * ex + ey * ey)) return `agent ${i}: vlen ${a.vlen[i]} !== |(${ex}, ${ey})|`;
+  }
+  return null;
+}
+
 // Synthetic: Get Curvature + For Each Bond currentLength over a BONDED population
 // (a `setup` hook forms the bonds — chain + cross links, so bondCount ≥ 2 and the
 // curvature branch actually runs; agents are re-positioned to irregular values,
@@ -1849,6 +1935,10 @@ entries.push({
   raw: buildSpriteModel(), invariant: spriteInvariant,
 });
 entries.push({ name: '[synthetic] Vector Op rotate2d + rotateAxis (lowered, 3D)', raw: buildVectorRotateModel() });
+entries.push({
+  name: '[synthetic] Vector AGENT VARIABLE (accumulator: Get/Set Variable + Break + length)',
+  raw: buildVectorVarModel(), invariant: vectorVarInvariant,
+});
 entries.push({ name: '[synthetic] Curvature + bond currentLength (bonded, hypot↔sqrt)', raw: buildCurvatureModel(), setup: setupCurvatureStores });
 entries.push({
   name: '[synthetic] Group operand ports (wired compare / compareHigh / x)',
