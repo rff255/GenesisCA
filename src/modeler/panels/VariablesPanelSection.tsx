@@ -6,7 +6,7 @@ import type { PanelMode } from '../ModelerDetailContext';
 import { MODEL_ELEMENT_DRAG_MIME } from '../vpl/modelElementDrag';
 import type { ModelElementDragPayload } from '../vpl/modelElementDrag';
 import { setCurrentModelElementDrag, subscribeActiveGraphKind, getActiveGraphKind } from '../vpl/graphState';
-import { typeDisplayName } from '../../model/typeLabels';
+import { typeDisplayName, typeBadgeLabel } from '../../model/typeLabels';
 import { NumberField, InlineNumberInput } from '../vpl/widgets/InlineWidgets';
 import { vectorDimsForModel, vectorComponentLabels } from '../vpl/compiler/vectorAttr';
 import styles from './PanelContent.module.css';
@@ -121,7 +121,7 @@ export function VariablesPanelSection({ mode = 'list', selectedId, onSelect }: {
             >
               <span className={styles.listItemName}>{v.name}</span>
               <span className={styles.listItemBadge}>
-                {v.kind === 'array' ? `${typeDisplayName(v.dataType)}[${v.length ?? '?'}]` : typeDisplayName(v.dataType)}
+                {v.kind === 'array' ? `${typeDisplayName(v.dataType)}[${v.length ?? '?'}]` : typeBadgeLabel(v.dataType, v.vectorDims)}
               </span>
               <button className={styles.dragHandle} title="Drag to reorder"
                 onPointerDown={reorder.startDrag(v.id)}

@@ -963,11 +963,26 @@ export function HelpView() {
               generations. Treat it as scratch for one cell&apos;s computation.</li>
             <li><strong>Kinds</strong> &mdash; <em>scalar</em> (a single value) or
               <em>array</em> (fixed length, all elements reset to the initial value). Data
-              type is binary / integer / decimal / tag.</li>
-            <li><strong>Get Variable</strong> &mdash; reads the current value (scalar) or the
-              underlying array (array variables &mdash; iterate it like any array source:
-              Aggregate, Group Reduce, Get Array Element, For Each In Array).</li>
-            <li><strong>Set Variable</strong> &mdash; assigns to a scalar variable.</li>
+              type is binary / integer / decimal / tag / <strong>vector</strong>.</li>
+            <li><strong>Vector variables</strong> &mdash; a scalar variable can hold a whole
+              2D/3D <strong>vector</strong> (pick <em>Vector (2D)</em> / <em>Vector (3D)</em> in
+              the variable&apos;s Data Type dropdown; the Initial Value row becomes one field per
+              component). This is the natural shape for a per-cell / per-agent{' '}
+              <em>accumulator</em> &mdash; sum a force over the neighbours into ONE variable
+              instead of hand-maintaining <code>sumX</code> / <code>sumY</code> floats. Get / Set
+              Variable then carry a single <em>vector</em> port, so they wire straight to{' '}
+              <strong>Make Vector</strong> / <strong>Break Vector</strong> /{' '}
+              <strong>Vector Op</strong>. Under the hood the variable is split into its scalar
+              float components before compiling, so it runs natively on all three targets with no
+              extra cost. <em>Vector (3D)</em> is offered only in a 3D model, and a vector is a
+              scalar-only type &mdash; switching Kind to <em>array</em> resets it to Decimal
+              (there are no arrays of vectors).</li>
+            <li><strong>Get Variable</strong> &mdash; reads the current value (scalar &mdash;
+              including a whole vector) or the underlying array (array variables &mdash; iterate
+              it like any array source: Aggregate, Group Reduce, Get Array Element, For Each In
+              Array).</li>
+            <li><strong>Set Variable</strong> &mdash; assigns to a scalar variable (a vector
+              variable takes a whole vector on one wire).</li>
             <li><strong>Set Array Element</strong> &mdash; writes <code>variable[index] =
               value</code> into an array variable (out-of-range writes are silently skipped).</li>
           </ul>
