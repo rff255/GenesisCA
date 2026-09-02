@@ -4076,7 +4076,8 @@ export function HelpView() {
             The simulator has a <strong>bottom transport bar</strong> carrying only
             simulation <em>time</em>: save / load state (each also carrying its CSV
             sibling on hover or right-click), the two adjacent speed readouts
-            (Target FPS, Gens/Frame), and playback (Play/Pause/Step/Reset). Hover or
+            (Target FPS, Gens/Frame), and playback (one Play/Pause button that
+            alternates its icon, plus Step and Reset). Hover or
             click a speed readout to open a vertical slider popover
             (Esc, an outside click, or moving away closes it; the &infin; checkbox keeps
             its meaning, and grabbing the slider while &infin; is on unticks it).
