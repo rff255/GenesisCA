@@ -1,9 +1,13 @@
 import type { NodeTypeDef } from '../types';
+import { agentRootHasSelf } from '../types';
 import { is3dModelLike } from '../compiler/niCodec';
 
 /** Get Agent Position — a specific agent's position by id (Bond-Graph Agents),
  *  with an absolute / relative `mode`:
- *  - ABSOLUTE (default): the raw (X, Y[, Z]) of the agent at `Agent`.
+ *  - ABSOLUTE (default): the raw (X, Y[, Z]) of the agent at `Agent` — which is
+ *    OPTIONAL and defaults to SELF when unwired (the project convention; see
+ *    "Agent action TARGETING" in CLAUDE.md). `Get Self Position` stays the
+ *    dedicated self reader.
  *  - RELATIVE: the torus-SHORTEST displacement (X, Y[, Z]) from a REFERENCE agent
  *    to `Agent` — `target − reference`, folded to the shortest path across a torus
  *    seam (reuses the engine wrap, reading `_fieldW`/`_fieldH`/`_fieldBoundaryTorus`,
@@ -18,12 +22,12 @@ export const GetAgentPositionNode: NodeTypeDef = {
   type: 'getAgentPosition',
   label: 'Get Agent Position',
   agentLabel: 'Get Position (by ID)',
-  description: "Outputs a specific agent's (X, Y, Z) by id — absolute, or (relative mode) the torus-shortest vector from a reference agent (default self).",
+  description: "Outputs an agent's (X, Y, Z) — absolute (SELF when the Agent input is empty, else that agent by id), or (relative mode) the torus-shortest vector from a reference agent (default self).",
   category: 'data',
   color: '#5e35b1',
   requirements: { bondGraph: true },
   ports: [
-    { id: 'agentId', label: 'Agent', kind: 'input', category: 'value', dataType: 'integer' },
+    { id: 'agentId', label: 'Agent (self)', kind: 'input', category: 'value', dataType: 'integer' },
     { id: 'refId', label: 'Reference', kind: 'input', category: 'value', dataType: 'integer' },
     { id: 'x', label: 'X', kind: 'output', category: 'value', dataType: 'float' },
     { id: 'y', label: 'Y', kind: 'output', category: 'value', dataType: 'float' },
@@ -37,9 +41,13 @@ export const GetAgentPositionNode: NodeTypeDef = {
   },
   defaultConfig: { mode: 'absolute' },
   compile: (nodeId, config, inputs, _boundary, ctx) => {
-    // -1 = the empty sentinel (Pick Random Agent on an empty set / unwired).
-    // Range-guarded → 0s instead of `_agentX[-1]` = undefined → NaN position
-    // math (WASM would read adjacent memory bytes).
+    // -1 = the empty sentinel (Pick Random Agent on an empty set / an unwired
+    // RELATIVE-mode input). Range-guarded → 0s instead of `_agentX[-1]` =
+    // undefined → NaN position math (WASM would read adjacent memory bytes).
+    // NB relative mode keeps the sentinel deliberately: with `refId` already
+    // defaulting to self, an unwired `Agent` there would be self−self = the SAME
+    // zero vector the failed guard produces, so "unwired = self" holds
+    // observationally either way and the emitted code is left untouched.
     const a = `((${inputs['agentId'] || '-1'}) | 0)`;
     if ((config.mode as string) === 'relative') {
       // target − reference, folded to the torus-shortest path (mirrors
@@ -70,7 +78,18 @@ export const GetAgentPositionNode: NodeTypeDef = {
         + `if(__oy${nodeId}>__hH)__oy${nodeId}-=__H;else if(__oy${nodeId}<-__hH)__oy${nodeId}+=__H;}}`
         + `const ${V}_x=__ox${nodeId},${V}_y=__oy${nodeId};\n`;
     }
-    // absolute (default / mode absent) — range-guarded reads.
+    // absolute (default / mode absent). Unwired ⇒ SELF (unguarded — `idx` is
+    // live by construction, the Get Velocity precedent); in a selfless root
+    // (`init` / `spawner`) there is no `idx`, so degrade to the 0s a failed
+    // guard would have produced. See GetAgentAttributeNode for the rationale.
+    if (!inputs['agentId']) {
+      if (!agentRootHasSelf(ctx?.agentRoot)) {
+        return `const _v${nodeId}_x=0; const _v${nodeId}_y=0;${ctx?.is3d ? ` const _v${nodeId}_z=0;` : ''}\n`;
+      }
+      return `const _v${nodeId}_x=_agentX[idx]; const _v${nodeId}_y=_agentY[idx];`
+        + `${ctx?.is3d ? ` const _v${nodeId}_z=_agentZ[idx];` : ''}\n`;
+    }
+    // A WIRED id is range-guarded.
     const ok = `__gaOk${nodeId}`;
     const z = ctx?.is3d ? ` const _v${nodeId}_z=${ok}?_agentZ[__ga${nodeId}]:0;` : '';
     return `const __ga${nodeId}=${a}; const ${ok}=__ga${nodeId}>=0&&__ga${nodeId}<highWater;`

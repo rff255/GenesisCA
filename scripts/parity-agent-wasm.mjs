@@ -2942,6 +2942,120 @@ entries.push({
   name: '[synthetic] Torus seam (Get Nearby Agents across the wrap)',
   raw: buildTorusSeamModel(), setup: setupTorusSeamStores, invariant: torusSeamInvariant,
 });
+// ---------------------------------------------------------------------------
+// BY-ID READERS, UNWIRED = SELF — Get Attribute / Position / Radius (by ID).
+//
+// Each of the three carries an OPTIONAL `Agent` id whose UNWIRED state means the
+// CURRENT agent (the project's targeting convention), and a WIRED one that stays
+// range-guarded. This fixture places BOTH shapes of all three side by side and
+// stores their six results, so a target that confused the two arms diverges.
+//
+// Parity alone cannot see the interesting failures — "both targets read self for
+// the WIRED port", or "both fall back to the -1 sentinel for the UNWIRED one"
+// agree perfectly across JS and WASM. Hence the VALUE invariant, which recomputes
+// all six numbers from the store's OWN energy / radius / x arrays.
+//
+// The wired reads deliberately target `self + 1`, so the LAST agent's id is out
+// of range and must resolve to 0 through the guard — the one arm a "just read
+// self when it looks empty" mistake would silently turn into a real value.
+const BYID_N = 20;
+function buildByIdReaderModel() {
+  const used = new Set();
+  const nid = (p) => { let id; do { id = p + Math.random().toString(36).slice(2, 8); } while (used.has(id)); used.add(id); return id; };
+  const aN = [], aEd = [];
+  const an = (t, c) => { const n = { id: nid('a'), type: 'caNode', position: { x: 0, y: 0 }, data: { nodeType: t, config: c } }; aN.push(n); return n; };
+  const aE = (s, sp, tt, tp, cat) => aEd.push({ id: nid('e'), source: s.id, target: tt.id, sourceHandle: `output_${cat}_${sp}`, targetHandle: `input_${cat}_${tp}` });
+
+  const bs = an('behaviourStep', {});
+  const gsh = an('getSelfHandle', {});
+  // The wired target: self + 1 (out of range for the last agent → guard → 0).
+  const tgt = an('arithmeticOperator', { operation: '+', _port_y: '1' });
+  aE(gsh, 'value', tgt, 'x', 'value');
+
+  /** reader node (its `Agent` port wired or not) → Set Attribute(dst). */
+  const store = (reader, readerPort, dst, wired) => {
+    if (wired) aE(tgt, 'result', reader, 'agentId', 'value');
+    const set = an('setAttribute', { attributeId: dst });
+    aE(reader, readerPort, set, 'value', 'value');
+    return set;
+  };
+  const chain = [
+    store(an('getAgentAttribute', { attributeId: 'energy' }), 'value', 'selfE', false),
+    store(an('getAgentPosition', { mode: 'absolute' }), 'x', 'selfX', false),
+    store(an('getAgentRadius', {}), 'value', 'selfR', false),
+    store(an('getAgentAttribute', { attributeId: 'energy' }), 'value', 'byE', true),
+    store(an('getAgentPosition', { mode: 'absolute' }), 'x', 'byX', true),
+    store(an('getAgentRadius', {}), 'value', 'byR', true),
+  ];
+  aE(bs, 'do', chain[0], 'do', 'flow');
+  for (let i = 0; i < chain.length - 1; i++) aE(chain[i], 'next', chain[i + 1], 'do', 'flow');
+
+  const attr = (id, name) => ({ id, name, type: 'float', defaultValue: '0' });
+  return {
+    schemaVersion: 1,
+    properties: { name: 'By-Id Reader Self-Default Parity Test', dimension: '2d', gridWidth: 40, gridHeight: 40, gridDepth: 1, topology: '2d-grid', boundaryTreatment: 'torus', useWasm: false, useWebGPU: false },
+    topologyMode: { gridCells: false, agents: true },
+    centerBased: { enabled: true, maxAgents: 64, maxBonds: 0, worldWidth: 40, worldHeight: 40, seedCount: BYID_N, seedPattern: 'scatter', defaultRadius: 0.5, growthRate: 0, repulsionStiffness: 0, adhesionStiffness: 0, interactionRange: 1.5, drag: 1, timeStep: 0.1, momentum: 0, maxSpeed: 0, neighbourQueryRadius: 8, useBondingPhysics: false, autoBond: false, agentTarget: 'wasm', agentUpdateMode: 'async',
+      agentCapabilities: { motion: 'static', body: true, collision: 'off', bonds: 'off', autoBond: false, growth: false, division: false, lifespan: false, populationBirth: false, populationDeath: false, sensing: false, sensingHeadingSource: 'velocity', orientation: false, fieldCoupling: false, appearance: true } },
+    attributes: [], modelAttributes: [], neighborhoods: [],
+    agentAttributes: [
+      attr('energy', 'Energy'),
+      attr('selfE', 'Self Energy'), attr('selfX', 'Self X'), attr('selfR', 'Self Radius'),
+      attr('byE', 'By-Id Energy'), attr('byX', 'By-Id X'), attr('byR', 'By-Id Radius'),
+    ],
+    bondAttributes: [],
+    variables: [], agentVariables: [], indicators: [], mappings: [],
+    graphNodes: [], graphEdges: [], agentGraphNodes: aN, agentGraphEdges: aEd, macroDefs: [],
+  };
+}
+/** Give every agent a DISTINCT, exactly-representable energy / radius / x, none
+ *  of them 0 — so "read self", "read the neighbour" and "fell back to the
+ *  sentinel" are three different numbers for every agent. The rule writes none
+ *  of these three, and motion is static, so they hold across every step. */
+function setupByIdReaderStores(stores) {
+  for (const s of stores) {
+    for (let i = 0; i < s.highWater; i++) {
+      const x = 1 + i * 1.5, y = 2 + i * 0.5;
+      s.x[i] = x; s.xNext[i] = x; s.y[i] = y; s.yNext[i] = y;
+      s.radius[i] = 0.5 + i * 0.25;
+      s.targetRadius[i] = s.radius[i];
+      s.attrRead.energy[i] = i + 1;
+      if (s.attrWrite.energy !== s.attrRead.energy) s.attrWrite.energy[i] = i + 1;
+    }
+  }
+}
+/** THE VALUE INVARIANT — recompute all six reads from the store's own arrays.
+ *  Catches the mutations parity cannot: an unwired read that still emits the -1
+ *  sentinel (selfE/selfX/selfR would read 0), and a wired read that ignores its
+ *  id (byE/byX/byR would equal the self values). Also asserts the fixture really
+ *  DISCRIMINATES, so a green run is evidence and not a vacuous pass. */
+function byIdReaderInvariant(st) {
+  const hw = st.highWater;
+  const A = st.attrRead;
+  let distinct = 0, guarded = 0;
+  for (let i = 0; i < hw; i++) {
+    if (!st.alive[i]) continue;
+    const E = A.energy[i], R = st.radius[i], X = st.x[i];
+    if (A.selfE[i] !== E) return `agent ${i}: selfE ${A.selfE[i]} !== own energy ${E} (an UNWIRED Get Attribute (by ID) must read SELF, not the -1 sentinel → 0)`;
+    if (A.selfX[i] !== X) return `agent ${i}: selfX ${A.selfX[i]} !== own x ${X} (an UNWIRED Get Position (by ID) must read SELF)`;
+    if (A.selfR[i] !== R) return `agent ${i}: selfR ${A.selfR[i]} !== own radius ${R} (an UNWIRED Get Radius (by ID) must read SELF)`;
+    const j = i + 1;
+    const ok = j >= 0 && j < hw;
+    if (!ok) guarded++;
+    const eE = ok ? A.energy[j] : 0, eX = ok ? st.x[j] : 0, eR = ok ? st.radius[j] : 0;
+    if (A.byE[i] !== eE) return `agent ${i}: byE ${A.byE[i]} !== energy[${j}] ${eE} (a WIRED Agent id must read THAT agent; self would say ${E})`;
+    if (A.byX[i] !== eX) return `agent ${i}: byX ${A.byX[i]} !== x[${j}] ${eX} (self would say ${X})`;
+    if (A.byR[i] !== eR) return `agent ${i}: byR ${A.byR[i]} !== radius[${j}] ${eR} (self would say ${R})`;
+    if (eE !== E && eX !== X && eR !== R) distinct++;
+  }
+  if (distinct < 2) return 'the fixture does not distinguish self from by-id — the invariant would be vacuous';
+  if (guarded === 0) return 'no wired read falls out of range — the guard arm is untested';
+  return null;
+}
+entries.push({
+  name: '[synthetic] By-id READERS unwired = self (Attribute / Position / Radius)',
+  raw: buildByIdReaderModel(), setup: setupByIdReaderStores, invariant: byIdReaderInvariant,
+});
 entries.push({ name: '[synthetic] Flow diamond (conditional → shared getRandom chain)', raw: buildDiamondModel() });
 entries.push({ name: '[synthetic] RNG draw order (branch draw + post-branch draws)', raw: buildRngOrderModel() });
 entries.push({ name: '[synthetic] Branch scope (value used inside AND after a branch)', raw: buildBranchScopeModel() });

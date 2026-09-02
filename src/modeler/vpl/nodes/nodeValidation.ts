@@ -79,21 +79,26 @@ function inputParamIssues(
  *  adjacent-memory read on WASM, out of the engine), so the range guard resolves it
  *  to a READ OF 0 or a SKIPPED WRITE — plausible, wrong, and reported nowhere.
  *
- *  That is a genuinely easy trap: on the Agents graph a `Get Attribute (by ID)`
- *  reads "Get Attribute", so it is routinely dropped in where `Get Self Attribute`
- *  was meant, and it then feeds 0 into everything downstream. Each message names
- *  the self-reading alternative, so the badge is a fix and not just a complaint.
+ *  ⚠ ONLY nodes whose unwired id has NO other meaning belong here. The project
+ *  convention is that an optional `Agent` id means SELF when unwired (see "Agent
+ *  action TARGETING" in CLAUDE.md), and the whole optional-id family follows it:
+ *  `getAgentAttribute` / `getAgentPosition` / `getAgentRadius` / `getVelocity` /
+ *  `setAttribute` / `setVelocity` / `setTargetRadius` / `killAgent` /
+ *  `setAgentSprite` are all deliberately ABSENT because unwired is a documented,
+ *  useful default there — NOT a silent no-op. (The three READERS were listed here
+ *  until their unwired id was made to mean self; the badge was the right answer to
+ *  a silent read of 0, and the SEMANTICS are the better one.)
  *
- *  `getVelocity` / `setVelocity` / `setAttribute` / `setTargetRadius` / `killAgent`
- *  / `setAgentSprite` are deliberately ABSENT: their unwired id means SELF, which
- *  is a documented, useful default (see "Agent action TARGETING" in CLAUDE.md). */
+ *  What remains is the set with no self meaning at all: an OFFSET to yourself is
+ *  identically zero, and defaulting a by-id WRITE to self would silently retarget
+ *  existing graphs (today an unwired one writes nothing — the spawn-handle idiom,
+ *  where the id arrives from Create Agent). Each message names the alternative, so
+ *  the badge is a fix and not just a complaint. */
 const BY_ID_UNWIRED: Readonly<Record<string, string | undefined>> = {
-  getAgentAttribute: 'Connect an Agent input (it reads 0 otherwise) — use Get Self Attribute for this agent',
-  getAgentPosition: 'Connect an Agent input (it reads 0 otherwise) — use Get Self Position for this agent',
-  getAgentRadius: 'Connect an Agent input (it reads 0 otherwise) — use Get Radius for this agent',
   getAgentOffset: 'Connect an Agent input (it reads 0 otherwise) — e.g. from Get Nearby Agents or For Each Bond',
   setAgentPosition: 'Connect an Agent input (it writes nothing otherwise) — e.g. from Get Self Handle or Create Agent',
   setAgentRadius: 'Connect an Agent input (it writes nothing otherwise) — e.g. from Get Self Handle, or use Set Target Radius for this agent',
+  applyForceToAgent: 'Connect an Agent input (it adds nothing otherwise) — e.g. from Get Nearby Agents, or use Apply Force for this agent',
 };
 
 export function detectMissingConfig(
@@ -258,10 +263,11 @@ export function detectMissingConfig(
     // agent-equivalent gather / filter / write-many nodes. All target the AGENT
     // attribute set.
     case 'getAgentAttribute':
-      // Single-agent (scalar agentId) — the attribute AND the id are required.
+      // Single-agent (scalar agentId). Only the ATTRIBUTE is required: the id is
+      // OPTIONAL and unwired means SELF (the convention above), so an unwired
+      // Agent input is a valid, documented use — never badged.
       if (!hasAgentAttr(config.attributeId)) issues.push('Select an agent attribute');
       checkSlots(hasAgentAttr, 'an agent attribute');
-      if (isInputConnected('agentId') === false) issues.push(BY_ID_UNWIRED.getAgentAttribute!);
       break;
 
     case 'getAgentsAttribute':
@@ -524,15 +530,15 @@ export function detectMissingConfig(
       }
       break;
 
-    // BY-ID agent readers / writers whose UNWIRED `Agent` id is a SILENT no-op.
-    // See BY_ID_UNWIRED — every one of them compiles the missing id to the -1
-    // sentinel, which the range guard turns into a read of 0 (or a skipped write)
-    // on all three agent targets, with no error anywhere.
-    case 'getAgentPosition':
-    case 'getAgentRadius':
+    // BY-ID agent nodes whose UNWIRED `Agent` id is a SILENT no-op. See
+    // BY_ID_UNWIRED — each compiles the missing id to the -1 sentinel, which the
+    // range guard turns into a read of 0 (or a skipped write / a force nobody
+    // receives) on all three agent targets, with no error anywhere. The
+    // optional-id family (whose unwired id means SELF) is NOT here.
     case 'getAgentOffset':
     case 'setAgentPosition':
     case 'setAgentRadius':
+    case 'applyForceToAgent':
       if (isInputConnected('agentId') === false) issues.push(BY_ID_UNWIRED[nodeType]!);
       break;
 
@@ -1043,9 +1049,13 @@ const AGENT_SELF_ONLY_TYPES = new Set<string>([
   'neighbourDensity', 'getCurvature',
   // self-centred neighbour access + the self bond loop
   'getNearbyAgents', 'getAgentsInView', 'senseHemifield', 'getBondedAgents', 'forEachBond',
-  // by-id readers — emit `< highWater` (getAgentOffset also `_agentX[idx]`); array
-  // readers (getAgentsAttribute/filterAgents) also `_alive[id]`. None is in the
-  // init ABI, so all throw in init regardless of wiring.
+  // by-id readers — WIRED they emit `< highWater` (getAgentOffset also
+  // `_agentX[idx]`); array readers (getAgentsAttribute/filterAgents) also
+  // `_alive[id]`. None is in the init ABI. UNWIRED, the three optional-id
+  // readers (getAgentAttribute / getAgentPosition / getAgentRadius) mean SELF,
+  // i.e. `idx` — equally absent there. So they are init-invalid EITHER WAY and
+  // stay unconditional here; their emitters additionally degrade to the typed
+  // default in a selfless root, so a stale placement is inert rather than fatal.
   'getAgentOffset', 'getAgentPosition', 'getVelocity', 'getAgentRadius',
   'getAgentAttribute', 'getAgentsAttribute', 'filterAgents',
   // P2 bond attributes — both scan the SELF bond list (`idx * maxBonds`,

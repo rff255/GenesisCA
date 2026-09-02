@@ -1072,14 +1072,30 @@ function compileValueNode(ctx: AgentWasmCtx, nodeId: string, portId: string): Va
         result = compileAgentRelativePosition(ctx, node, portId);
         break;
       }
-      const aLocal = emitAgentIdLocal(ctx, node, 'agentId');
       const region = portId === 'y' ? ctx.layout.f64['y']! : portId === 'z' ? ctx.layout.f64['z']! : ctx.layout.f64['x']!;
+      // self when agentId is unwired (JS: `inputs.agentId ? (...|0) : idx`) —
+      // self is always live; a WIRED id is range-guarded like JS. Wiredness is
+      // read from the EDGE MAP *before* anything is minted: `emitAgentIdLocal`
+      // allocates a local, which moves the module bytes even when unused.
+      const src = ctx.adj.inputToSource.get(`${node.id}:agentId`);
+      if (!src) {
+        result = f64Result(() => pushF64Elem(em, region, ctx.idxLocal));
+        break;
+      }
+      const aLocal = emitAgentIdLocal(ctx, node, 'agentId');
       // Range-guarded (mirrors the JS emit): -1 / oob → 0.
       const guard = emitAgentIdGuard(ctx, aLocal);
       result = f64Result(() => pushGuardedF64(ctx, guard, safe => pushF64Elem(em, region, safe)));
       break;
     }
     case 'getAgentRadius': {
+      // self when unwired — same rule (and same byte-identity discipline) as
+      // getAgentPosition above.
+      const src = ctx.adj.inputToSource.get(`${node.id}:agentId`);
+      if (!src) {
+        result = f64Result(() => pushF64Elem(em, ctx.layout.f64['radius']!, ctx.idxLocal));
+        break;
+      }
       const aLocal = emitAgentIdLocal(ctx, node, 'agentId');
       const guard = emitAgentIdGuard(ctx, aLocal);
       result = f64Result(() => pushGuardedF64(ctx, guard, safe => pushF64Elem(em, ctx.layout.f64['radius']!, safe)));
@@ -1126,6 +1142,14 @@ function compileValueNode(ctx: AgentWasmCtx, nodeId: string, portId: string): Va
     }
     case 'getAgentAttribute': {
       const attrId = (node.data.config?.['attributeId'] as string) || '';
+      // self when agentId is unwired (JS: `r_<attr>[idx]`, i.e. exactly what the
+      // `getCellAttribute` arm below emits) — self is always live, so no guard.
+      // Wiredness comes from the EDGE MAP *before* `emitAgentIdLocal` allocates.
+      const src = ctx.adj.inputToSource.get(`${node.id}:agentId`);
+      if (!src) {
+        result = f64Result(() => pushAgentAttrReadF64(ctx, attrId, ctx.idxLocal));
+        break;
+      }
       const aLocal = emitAgentIdLocal(ctx, node, 'agentId');
       // Range-guarded (mirrors GetAgentAttributeNode's JS emit): -1 / oob → 0.
       const guard = emitAgentIdGuard(ctx, aLocal);
