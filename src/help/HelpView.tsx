@@ -2026,10 +2026,14 @@ export function HelpView() {
             has always read. That covers <strong>Set Attribute</strong> (write my own attribute, or
             a neighbour&rsquo;s), <strong>Kill Agent</strong> (apoptosis vs. predation),{' '}
             <strong>Set Velocity</strong>, <strong>Set Target Radius</strong>,{' '}
-            <strong>Set Agent Sprite</strong>, <strong>Form Bond</strong> and{' '}
-            <strong>Break Bond</strong>. One comes as a pair instead &mdash; a self node plus an
-            explicit &ldquo;(by ID)&rdquo; sibling: <em>Apply Force</em> /{' '}
-            <em>Apply Force To Agent</em>. A handful are self-anchored by nature and say so: the
+            <strong>Set Agent Sprite</strong>, <strong>Form Bond</strong>,{' '}
+            <strong>Break Bond</strong> and the by-id <em>readers</em> &mdash;{' '}
+            <strong>Get Attribute (by&nbsp;ID)</strong>, <strong>Get Position (by&nbsp;ID)</strong>{' '}
+            and <strong>Get Radius (by&nbsp;ID)</strong>, which read <em>this</em> agent when their
+            <code> Agent</code> input is empty. One comes as a pair instead &mdash; a self node plus
+            an explicit &ldquo;(by ID)&rdquo; sibling: <em>Apply Force</em> /{' '}
+            <em>Apply Force To Agent</em> (there the by-id node has no self meaning &mdash; use
+            <em> Apply Force</em> for that). A handful are self-anchored by nature and say so: the
             field nodes act on the cells <em>under this agent</em>, and <em>Rewire Bond</em> /{' '}
             <em>Set Bond Attribute</em> act on a bond you are an endpoint of (the third-party form
             of a rewire is <em>Transfer Bond</em>).
@@ -2565,21 +2569,27 @@ export function HelpView() {
             impure, so it cannot share the own-read&rsquo;s caching/hoisting classification).
           </p>
           <p className={styles.p}>
-            <strong>A by-id node&rsquo;s <code>Agent</code> input is REQUIRED.</strong> On the Agents
-            graph <em>Get Attribute (by&nbsp;ID)</em> reads simply as &ldquo;Get Attribute&rdquo;, so
-            it is easy to drop in where <em>Get Self Attribute</em> was meant &mdash; and with the
-            <code> Agent</code> input left empty it <strong>reads 0</strong> (a by-id <em>write</em>
-            with no id writes nothing). That is deliberate: the empty-agent sentinel is guarded so
-            it can never read past the end of the array. But 0 is a plausible-looking number, so it
-            propagates silently &mdash; a scale expression that always evaluates to 0, a direction
-            vector that is always (0,&nbsp;0). The modeler therefore <strong>badges</strong> an
-            unwired <code>Agent</code> on <em>Get Attribute (by&nbsp;ID)</em>,{' '}
-            <em>Get Position (by&nbsp;ID)</em>, <em>Get Agent Radius</em>, <em>Get Agent Offset</em>,{' '}
-            <em>Set Agent Position</em> and <em>Set Agent Radius</em>, naming the self-reading node
-            to use instead. (<em>Get Velocity</em>, <em>Set Velocity</em>, <em>Set Attribute</em>,{' '}
-            <em>Set Target Radius</em>, <em>Kill Agent</em> and <em>Set Agent Sprite</em> are not
-            badged &mdash; for those an empty <code>Agent</code> means <em>this</em> agent, which is
-            a documented, useful default.)
+            <strong>An empty <code>Agent</code> input means <em>this</em> agent.</strong> That is the
+            convention across the whole optional-id family &mdash; <em>Get Attribute (by&nbsp;ID)</em>,{' '}
+            <em>Get Position (by&nbsp;ID)</em>, <em>Get Radius (by&nbsp;ID)</em>,{' '}
+            <em>Get Velocity</em>, <em>Set Attribute</em>, <em>Set Velocity</em>,{' '}
+            <em>Set Target Radius</em>, <em>Kill Agent</em> and <em>Set Agent Sprite</em>. So on the
+            Agents graph, where <em>Get Attribute (by&nbsp;ID)</em> reads simply as &ldquo;Get
+            Attribute&rdquo;, dropping one in where <em>Get Self Attribute</em> was meant now does
+            the sensible thing rather than silently reading 0. (The dedicated self nodes &mdash;{' '}
+            <em>Get Self Attribute</em>, <em>Get Self Position</em>, <em>Get Radius</em> &mdash; are
+            still there, and a self read through them is cheaper for the compiler to share and
+            hoist.)
+          </p>
+          <p className={styles.p}>
+            A handful of by-id nodes have <strong>no</strong> self meaning, so leaving their{' '}
+            <code>Agent</code> input empty really is a silent no-op &mdash; and the modeler{' '}
+            <strong>badges</strong> those: <em>Get Agent Offset</em> (an offset to yourself is
+            always zero), <em>Set Agent Position</em>, <em>Set Agent Radius</em> and{' '}
+            <em>Apply Force To Agent</em>. For the three writers an empty <code>Agent</code> writes
+            nothing at all &mdash; they exist to configure a <em>Create Agent</em> handle, so
+            defaulting them to self would quietly retarget an existing rule; each badge names the
+            self-acting node (<em>Set Target Radius</em>, <em>Apply Force</em>) to use instead.
           </p>
           <p className={styles.p}>
             Agents sit <strong>above</strong> the CA: they can read and write grid cells (the field
@@ -2712,12 +2722,13 @@ export function HelpView() {
               Position</em> in its Relative mode) &mdash; not hand-subtracting two raw positions
               &mdash; for cohesion, separation, and "steer toward a neighbour" so the vectors stay
               correct across a wrapped (torus) boundary.</li>
-            <li><strong>Get Agent Position</strong> &mdash; a specific agent's <em>(X, Y[, Z])</em>
-              by id, with an <strong>Absolute / Relative</strong> mode. <em>Absolute</em> gives the
-              raw position; <em>Relative</em> gives the torus-shortest vector from a
-              <em> Reference</em> agent (which defaults to <em>self</em> when left unwired, or can be
-              any agent) &mdash; the wrap-correct way to read a vector to a neighbour, or between
-              two agents.</li>
+            <li><strong>Get Agent Position</strong> &mdash; an agent's <em>(X, Y[, Z])</em>, with an
+              <strong> Absolute / Relative</strong> mode. <em>Absolute</em> gives the raw position
+              &mdash; of <em>this</em> agent when the <em>Agent</em> input is empty, or of any agent
+              by id; <em>Relative</em> gives the torus-shortest vector from a
+              <em> Reference</em> agent (which likewise defaults to <em>self</em> when left unwired,
+              or can be any agent) &mdash; the wrap-correct way to read a vector to a neighbour, or
+              between two agents.</li>
             <li><strong>Apply Force</strong> &mdash; add a force vector to the agent; the engine
               integrates the sum of all your Apply Force contributions (plus its built-in
               soft-sphere repulsion + bond springs when <em>Use bonding physics</em> is on). This

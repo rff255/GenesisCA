@@ -3652,7 +3652,10 @@ makes that badge WIRING-aware for the two conditional nodes.
 #### THE AUDIT — every agent action node's targeting (the sweep behind the convention)
 | node | targeting | why |
 |---|---|---|
-| Apply Force / **Apply Force To Agent** / Apply Force To Agents | self / **by id** / array | complete trio already |
+| Apply Force / **Apply Force To Agent** / Apply Force To Agents | self / **by id** / array | complete trio already. The by-id node's unwired id has NO self meaning (Apply Force IS that) ⇒ it stays a badged silent no-op |
+| **Get Attribute (by ID)** / **Get Position (by ID)** (absolute) / **Get Radius (by ID)** | **optional id ⇒ self** | ✅ shipped 2026-09-02 — see "The by-id READERS default to self" below. They used to emit the −1 sentinel ⇒ a silent read of 0, which the badge merely reported; reading "the current agent" is a valid use and is what the rest of the family already means |
+| **Get Velocity** | optional id ⇒ self | already the convention (and the precedent every other reader now follows) |
+| **Get Agent Offset** | by id (required) | an offset to yourself is identically zero — there is no self meaning to default to, so it stays badged |
 | **Set Attribute** | **optional id ⇒ self / one agent / an id ARRAY** | ✅ FULLY CONSOLIDATED (2026-08-11/12) — `setAgentAttribute` ("Set Attribute (by ID)") AND `setAgentsAttribute` ("Set Agents Attribute") were both RETIRED into Set Attribute's one optional `Agent` port, which is scalar-or-array. See "Retiring the Set Agent Attribute node" + "Retiring the Set Agents Attribute node" |
 | **Set Agent Position** / **Set Agent Radius** | by id (required) | by-ID half of a documented pair; `Get Self Handle` is one wire away, and their unwired no-op is the spawn-handle idiom. **Left required deliberately** — defaulting them to self would silently retarget existing graphs |
 | **Kill Agent** | **optional id ⇒ self** | ✅ this change — had NO by-id sibling |
@@ -3667,6 +3670,65 @@ makes that badge WIRING-aware for the two conditional nodes.
 | Add Agent To World / Create Agent | by handle | a handle IS the target; "self" is meaningless |
 | affectCellsUnder / secreteToField / sampleField / fieldGradient / readCellsUnder | self position | the node's identity is "the cells **under this agent**"; a by-id variant is a plausible future node, not a port on these |
 | moveSelfToNeighbor etc. | — | lattice nodes, out of scope |
+
+#### The by-id READERS default to self (branch `tasks_batch_02-09`, 2026-09-02)
+
+User report: *"'Get Attribute by ID' is giving warnings if no agent id is connected, but that is
+a valid use case, when the user is referring to the 'current' agent."* Correct — and the project's
+own convention already said so for every optional-id WRITER. **`getAgentAttribute` /
+`getAgentPosition` (absolute mode) / `getAgentRadius` now read the CURRENT agent when their
+`Agent` input is unwired**, on all three agent targets, and the `BY_ID_UNWIRED` badge came off
+them. `check-compile-identity`: **31 models, all surfaces unchanged.**
+
+- **THE WIRED ARM IS BYTE-IDENTICAL, and that is structural, not careful.** Wiredness is resolved
+  from the EDGE MAP **before anything is minted** — `em.allocLocal` moves the WASM module bytes and
+  `fresh()` shifts every later WGSL name even when the value is unused, so the WASM/WebGPU cases
+  test `ctx.adj.inputToSource.get(\`${node.id}:agentId\`)` FIRST and only then call
+  `emitAgentIdLocal` / `emitAgentIdGuarded` (the `getVelocity` precedent, which those three now
+  copy line for line). On JS the port carries **no inline widget**, so `inputs['agentId']` IS the
+  edge-map test.
+- **The self read is UNGUARDED** (`r_<attr>[idx]` / `_agentX[idx]` / `_agentRadius[idx]`) — `idx` is
+  live by construction, exactly as `getCellAttribute` and `getVelocity` have always emitted. Only
+  a WIRED id can be −1 or out of range, so only it keeps the guard.
+- **SELFLESS ROOTS (`init` / `spawner`) have no `idx`, so an unwired reader degrades to the typed
+  default** (`const _v<id> = 0;`) rather than emitting a reference that throws at run time — the
+  `setVelocity` / `setAgentSprite` safety-catch shape, via the shared `agentRootHasSelf`. The three
+  stay UNCONDITIONALLY in `AGENT_SELF_ONLY_TYPES` (wired they emit `< highWater`, unwired they mean
+  `idx`; neither is in the init ABI), so the badge still preempts the placement — the degrade just
+  makes a stale one inert instead of fatal. **WASM and WebGPU need no such arm**: they compile the
+  behaviour root only (`AGENT_WASM_CPU_ROOT_TYPES`), where `idx` always exists.
+- **RELATIVE mode keeps the sentinel, deliberately.** With `refId` already defaulting to self, an
+  unwired `Agent` there would be self−self = the SAME zero vector the failed guard produces — so
+  "unwired = self" holds observationally either way and the emitted code is left untouched.
+- **What stays REQUIRED, and why it is not an inconsistency**: `getAgentOffset` (an offset to
+  yourself is identically zero) and the by-id WRITERS `setAgentPosition` / `setAgentRadius` /
+  `applyForceToAgent`. Changing a silent READ of 0 into a self read is safe; changing a silent
+  NO-OP WRITE into a self write would **silently retarget existing graphs**, and those three exist
+  to configure a Create Agent handle. `applyForceToAgent` was **added** to `BY_ID_UNWIRED` here —
+  it is in exactly that silent-no-op class and had been missed (0 false positives: no shipped model
+  uses the node at all).
+- **Port labels** read `Agent (self)` on the three readers (the `formBond.agentA` precedent).
+  Labels are display-only — nothing in the compilers, the drag/drop matcher or any harness keys on
+  them.
+- **⚠ A PRE-EXISTING SIBLING GAP, found by this work and deliberately NOT fixed**: an UNWIRED
+  `setAttribute` in a selfless root still emits `w_<attr>[idx]` (line 85 of
+  [SetAttributeNode.ts](src/modeler/vpl/nodes/SetAttributeNode.ts)) and throws at run time, where
+  `setVelocity` degrades to `''`. It is already badged (`AGENT_SELF_ONLY_WHEN_UNWIRED`), and
+  `setAttribute` is the most-used node in the catalogue — its cell path must stay byte-identical —
+  so the fix belongs in its own change, not this one.
+- **Verified**: `check-compile-identity` 31/31 unchanged · a new
+  [scripts/test-by-id-self-default.mjs](scripts/test-by-id-self-default.mjs) (**86 checks** — the
+  JS emit shapes, the WASM arms emitting DIFFERENT bytes and both modules VALIDATING, the WGSL
+  shapes, the selfless-root degrade + its badge, and the whole badge set) · a permanent
+  `[synthetic] By-id READERS unwired = self` entry in
+  [parity-agent-wasm.mjs](scripts/parity-agent-wasm.mjs) whose **VALUE invariant** recomputes all
+  six reads from the store's own energy / radius / x arrays, deliberately targeting `self + 1` so
+  the last agent exercises the guard arm. **Negative-controlled by SOURCE MUTATION — 5 mutations,
+  5 caught**: a WASM-only unwired→0 fails PARITY (`attr_selfE[0] js=1 wasm=0`); making BOTH targets
+  read self for the WIRED port passes parity and is caught ONLY by the invariant (`agent 0: byE 1
+  !== energy[1] 2`); reverting the JS unwired arm fails both; reverting the WebGPU unwired arm
+  fails the WGSL checks (parity cannot see WebGPU); and dropping the selfless-root catch fails the
+  init assertions.
 
 #### `Break Bond` names BOTH ends too — the third-party cut (the both-negative lane pair)
 
@@ -3822,14 +3884,19 @@ Attribute' and follow the same standard of Set Velocity."*
   such a read is always 0, so the sprite silently falls back to the asset scale ("unresponsive"),
   and the same reader on `Dir X`/`Dir Y` makes the vector-rotation write skip its own zero-vector
   guard ("the sprite never turns"). It also explains the reporter's "it works from an Init event"
-  — there the Create Agent handle IS wired. `detectMissingConfig` now badges an unwired `agentId`
-  on **`getAgentAttribute` / `getAgentPosition` / `getAgentRadius` / `getAgentOffset` /
+  — there the Create Agent handle IS wired. `detectMissingConfig` badged an unwired `agentId` on
+  **`getAgentAttribute` / `getAgentPosition` / `getAgentRadius` / `getAgentOffset` /
   `setAgentPosition` / `setAgentRadius`**, each message naming the self-reading alternative (the
   existing `getBondAttribute` / `getAgentsAttribute` precedent). **`getVelocity` / `setVelocity` /
   `setAttribute` / `setTargetRadius` / `killAgent` / `setAgentSprite` are deliberately EXCLUDED**
   — their unwired id means SELF, a documented default. Validation-only: zero compiler change,
   `check-compile-identity` 31/31 unchanged, and **0 false positives across all 31 shipped models**
   (none contains an unwired by-id node).
+  **⚠ SUPERSEDED FOR THE THREE READERS (2026-09-02) — the badge was the right answer to a silent
+  read of 0, but the SEMANTICS are the better one.** `getAgentAttribute` / `getAgentPosition` /
+  `getAgentRadius` now MEAN self when unwired and are no longer badged; `getAgentOffset` /
+  `setAgentPosition` / `setAgentRadius` (+ the newly-added `applyForceToAgent`) keep the badge,
+  because none of them has a self meaning to default to. See the next section.
 - **Verified**: `check-compile-identity` 29/29 unchanged · `test-cross-agent-writes` grew Parts D
   (the optional id: port visibility per graph, the self/wired emit on JS, both WASM modules
   differing, the WebGPU accept/reject split, and the CELL graph still emitting `w_c[idx]`) and E

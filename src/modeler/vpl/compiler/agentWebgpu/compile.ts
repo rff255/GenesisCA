@@ -756,12 +756,27 @@ function compileValueNode(ctx: AgentWgpuCtx, nodeId: string, portId: string): Va
         result = compileAgentRelativePosition(ctx, node, portId);
         break;
       }
-      const g = emitAgentIdGuarded(ctx, node, 'agentId');
       const field = portId === 'y' ? 'y' : portId === 'z' ? (ctx.is3d ? 'z' : 'y') : 'x';
+      // self when agentId is unwired (JS/WASM: `_agentX[idx]`) — self is always
+      // live, so no guard. Wiredness is read from the EDGE MAP *before*
+      // `emitAgentIdGuarded` runs: it mints three `fresh()` names, which would
+      // shift every later name in the shader even when unused.
+      const srcP = ctx.adj.inputToSource.get(`${node.id}:agentId`);
+      if (!srcP) {
+        result = emitLet(ctx, 'f32', f32At(ctx, field, 'idx'), 'gp');
+        break;
+      }
+      const g = emitAgentIdGuarded(ctx, node, 'agentId');
       result = emitLet(ctx, 'f32', `select(0.0, ${f32At(ctx, field, g.name)}, ${g.ok})`, 'gp');
       break;
     }
     case 'getAgentRadius': {
+      // self when unwired — same rule (and name-minting discipline) as above.
+      const srcR = ctx.adj.inputToSource.get(`${node.id}:agentId`);
+      if (!srcR) {
+        result = emitLet(ctx, 'f32', f32At(ctx, 'radius', 'idx'), 'gr');
+        break;
+      }
       const g = emitAgentIdGuarded(ctx, node, 'agentId');
       result = emitLet(ctx, 'f32', `select(0.0, ${f32At(ctx, 'radius', g.name)}, ${g.ok})`, 'gr');
       break;
@@ -780,10 +795,17 @@ function compileValueNode(ctx: AgentWgpuCtx, nodeId: string, portId: string): Va
       break;
     }
     case 'getAgentAttribute': {
-      // Read a SPECIFIC agent's attribute by id → `agentF32[attrBase + id]`.
+      // Read an agent's attribute → `agentF32[attrBase + id]` (SELF when the
+      // Agent input is unwired — self is always live, so no guard; the
+      // wiredness test precedes `emitAgentIdGuarded`'s three `fresh()` names).
       const attr = (node.data.config?.['attributeId'] as string) || '_undef';
       const base = ctx.layout.agentAttrBase[attr];
       if (base === undefined) { result = { expr: '0.0', type: 'f32' }; break; }
+      const srcA = ctx.adj.inputToSource.get(`${node.id}:agentId`);
+      if (!srcA) {
+        result = emitLet(ctx, 'f32', attrAt(ctx, attr, 'idx', 'read'), 'gaa1');
+        break;
+      }
       const g = emitAgentIdGuarded(ctx, node, 'agentId');
       result = emitLet(ctx, 'f32', `select(0.0, ${attrAt(ctx, attr, g.name, 'read')}, ${g.ok})`, 'gaa1');
       break;
