@@ -2,8 +2,9 @@ import type { NodeConfig, NodeTypeDef } from '../types';
 import { parseHandleId } from '../types';
 import type { CAModel } from '../../../model/types';
 import { cellFieldAttrsOf, BOND_ATTRIBUTE_TYPES } from '../../../model/attributeScope';
-import { agentNodeRequirement, nodeSatisfiesCapabilities, resolveAgentProfile, capReqLabel } from '../../../model/agentCapabilities';
-import { getNodeDef } from './registry';
+import { agentNodeRequirement, nodeSatisfiesCapabilities, resolveAgentProfile, capReqLabel, FULL_AGENT_PROFILE } from '../../../model/agentCapabilities';
+import { getNodeDef, getAllNodeDefs } from './registry';
+import { defaultCenterBasedConfig } from '../../../model/centerBased';
 import { CURRENT_VIEWER_SENTINEL } from './SetCellLooksNode';
 import { buildVarMap, parseExpression, clampVisibleCount } from '../compiler/expression/parser';
 import { buildLogicVarMap, parseLogicExpression } from '../compiler/expression/logicParser';
@@ -320,9 +321,9 @@ export function detectMissingConfig(
       const prof = model.centerBased?.agentCapabilities;
       if (prof) {
         if (config.source === 'nearby') {
-          if (!prof.sensing) issues.push('Nearby source needs the Sensing capability (Properties › Bond-Graph Agents)');
+          if (!prof.sensing) issues.push('Nearby source needs the Sensing capability (Properties › Agents › Capability profile)');
         } else if (prof.bonds === 'off') {
-          issues.push('Bonded source needs the Bonds capability (Properties › Bond-Graph Agents)');
+          issues.push('Bonded source needs the Bonds capability (Properties › Agents › Capability profile)');
         }
       }
       break;
@@ -820,7 +821,7 @@ export function detectMissingConfig(
         if (!attr || attr.type !== 'vector') {
           issues.push('Facing heading source: select a vector agent attribute (the stored direction).');
         } else if (!resolveAgentProfile(model).orientation) {
-          issues.push('The Facing heading source needs the Orientation capability. Enable it in Model Properties > Agent Capabilities.');
+          issues.push('The Facing heading source needs the Orientation capability. Enable it in Properties › Agents › Capability profile.');
         }
       }
       break;
@@ -917,10 +918,10 @@ export function detectCapabilityRequirements(
   if (!def?.requirements) return [];
   const issues: string[] = [];
   if (def.requirements.async && model.properties.updateMode !== 'asynchronous') {
-    issues.push(`"${def.label}" requires asynchronous update mode. Change in Model Properties > Execution.`);
+    issues.push(`"${def.label}" requires asynchronous update mode. Change it in Properties › Execution › Grid engine.`);
   }
   if (def.requirements.variegated && !model.variegatedCells?.enabled) {
-    issues.push(`"${def.label}" requires Variegated Cells enabled. Enable it in Model Properties > Execution.`);
+    issues.push(`"${def.label}" requires Variegated Cells. Enable it in Properties › Setup › Extensions.`);
   }
   // Generic 2D-only gate. (Currently NO node sets `lattice2d`: the neighborIndex
   // family was un-gated once the 3-axis (dr, dc, dl) codec landed on all three
@@ -936,12 +937,12 @@ export function detectCapabilityRequirements(
   // `activeGraphKind` module global — it can't be expressed from `(nodeType,
   // model)` alone, so the validation badge only flags the model-level half.
   if (def.requirements.bondGraph && !model.topologyMode?.agents) {
-    issues.push(`"${def.label}" requires the Bond-Graph Agents topology. Enable it in Model Properties > Execution > Topology.`);
+    issues.push(`"${def.label}" requires the Bond-Graph Agents layer. Enable it in Properties › Setup › Layers.`);
   }
   // Overseer: experiment-orchestration nodes need the Overseer enabled. Same
   // split as bondGraph — the sub-tab half of the gate lives in isNodeAvailable.
   if (def.requirements.overseer && !model.overseerConfig?.enabled) {
-    issues.push(`"${def.label}" requires the Overseer. Enable it in Model Properties > Execution.`);
+    issues.push(`"${def.label}" requires the Overseer. Enable it in Properties › Setup › Extensions.`);
   }
   // Agent Capability Profiles: a bond-graph node whose capability is OFF in the
   // resolved profile gets an INFORMATIONAL badge (STEP 1 is editor-surface-only —
@@ -950,7 +951,7 @@ export function detectCapabilityRequirements(
   if (def.requirements.bondGraph && model.topologyMode?.agents) {
     const key = agentNodeRequirement(nodeType);
     if (key && !nodeSatisfiesCapabilities(nodeType, resolveAgentProfile(model))) {
-      issues.push(`"${def.label}" needs the ${capReqLabel(key)} capability, which is off in this model's Agent Capabilities. Enable it in Model Properties > Agent Capabilities, or remove the node.`);
+      issues.push(`"${def.label}" needs the ${capReqLabel(key)} capability, which is off in this model's capability profile. Enable it in Properties › Agents › Capability profile, or remove the node.`);
     }
   }
   return issues;
@@ -1186,6 +1187,39 @@ export function detectAgentInitContextIssue(nodeId: string, model: CAModel): str
   if (getActiveGraphKind() !== 'agents' || !model.topologyMode?.agents) return [];
   const reason = agentInitSelfOnlyNodeIds(model).get(nodeId);
   return reason ? [reason] : [];
+}
+
+/** How many node types the model's SETUP hides on the ACTIVE graph — the
+ *  palette's "N nodes are hidden by this model's setup" notice. Computed by
+ *  DIFFING `isNodeAvailable` under the current model against the same model
+ *  with every gate opened (both layers, Variegated Cells, the Overseer, async
+ *  update mode, the full agent profile + charge), so it can never name a node
+ *  the graph KIND itself excludes (a lattice node on the Agents graph is hidden
+ *  under both models). `capability` counts the subset that only the agent
+ *  capability profile hides, so the notice can send the user to the right tab.
+ *  Pure and cheap (a few hundred defs × two gate calls); memoise on the model. */
+export function countNodesHiddenBySetup(model: CAModel): { total: number; capability: number } {
+  const maximal: CAModel = {
+    ...model,
+    properties: { ...model.properties, updateMode: 'asynchronous' },
+    topologyMode: { gridCells: true, agents: true },
+    variegatedCells: { ...(model.variegatedCells ?? { sourceAttributeId: '', facePalettes: [], facePatterns: [] }), enabled: true },
+    overseerConfig: { ...(model.overseerConfig ?? {}), enabled: true },
+    centerBased: { ...defaultCenterBasedConfig(), ...(model.centerBased ?? {}), agentCapabilities: { ...FULL_AGENT_PROFILE, charge: 'on' } },
+  };
+  // The capability-only diff: the CURRENT model with only the profile widened.
+  const capOnly: CAModel = model.topologyMode?.agents
+    ? { ...model, centerBased: { ...defaultCenterBasedConfig(), ...(model.centerBased ?? {}), agentCapabilities: { ...FULL_AGENT_PROFILE, charge: 'on' } } }
+    : model;
+  let total = 0;
+  let capability = 0;
+  for (const def of getAllNodeDefs()) {
+    if (isNodeAvailable(def, model)) continue;
+    if (!isNodeAvailable(def, maximal)) continue;
+    total++;
+    if (capOnly !== model && isNodeAvailable(def, capOnly)) capability++;
+  }
+  return { total, capability };
 }
 
 /** True when a node type can be added to / kept in the current model. Used to

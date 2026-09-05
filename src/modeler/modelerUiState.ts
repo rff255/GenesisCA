@@ -1,5 +1,6 @@
 import type { PanelId } from './ActivityBar';
 import type { RightPanelId } from './RightActivityBar';
+import type { PropertiesTab } from './panels/propertiesWidgets';
 
 // Module-level snapshot of the ModelerView's panel/selection UI state. ModelerView
 // is conditionally rendered in App.tsx (unmounted whenever the user switches to the
@@ -21,6 +22,9 @@ export const modelerUiState: {
    *  reseeds from here). Macro navigation does NOT reset it (entering a macro
    *  from the Agents graph returns to the Agents graph). */
   activeGraph: 'cells' | 'agents' | 'overseer';
+  /** Which Properties sub-tab (Setup / Execution / Agents / Diagnostics) is
+   *  showing — the panel is rebuilt on every mount, so it lives here. */
+  propertiesTab: PropertiesTab;
 } = {
   activePanel: 'properties',
   activeRightPanel: null,
@@ -28,4 +32,5 @@ export const modelerUiState: {
   lastRightPanel: 'palette',
   selectedByPanel: {},
   activeGraph: 'cells',
+  propertiesTab: 'setup',
 };

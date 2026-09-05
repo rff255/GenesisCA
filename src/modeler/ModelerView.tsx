@@ -20,6 +20,8 @@ import type { NodeExplorerHandle } from './vpl/NodeExplorer';
 import { quickAddApi, subscribeActiveGraphKind, getActiveGraphKind } from './vpl/graphState';
 import type { QuickAddPayload } from './vpl/graphState';
 import { modelerUiState } from './modelerUiState';
+import { IndicatorsPanelContent } from './panels/IndicatorsPanelContent';
+import { OPEN_MODELER_PANEL_EVENT, type OpenModelerPanelDetail } from './panels/propertiesWidgets';
 import styles from './ModelerView.module.css';
 
 const panelTitles: Record<PanelId, string> = {
@@ -28,6 +30,7 @@ const panelTitles: Record<PanelId, string> = {
   attributes: 'Attributes',
   neighborhoods: 'Neighborhoods',
   mappings: 'Mappings',
+  indicators: 'Indicators',
   variegated: 'Variegated Cells',
 };
 
@@ -37,15 +40,16 @@ const panelComponents: Record<PanelId, React.ComponentType<PanelContentProps>> =
   attributes: AttributesPanelContent,
   neighborhoods: NeighborhoodsPanelContent,
   mappings: MappingsPanelContent,
+  indicators: IndicatorsPanelContent,
   variegated: VariegatedCellsPanelContent,
 };
 
 // Panels with a list + per-item editor. Their editor renders in a second left
 // panel (the "detail" panel) so the user never scrolls past the list to reach it.
 // (The Attributes panel also hosts Local Variables; its selection is a
-// discriminated `attr:`/`var:` string handled by selectedItemName below. The
-// Properties panel hosts Indicators the same way via an `indicator:` slot.)
-const MASTER_DETAIL_PANELS = new Set<PanelId>(['properties', 'attributes', 'neighborhoods', 'mappings']);
+// discriminated `attr:`/`var:` string handled by selectedItemName below.
+// Indicators is its own panel — its slot is a bare indicator id.)
+const MASTER_DETAIL_PANELS = new Set<PanelId>(['indicators', 'attributes', 'neighborhoods', 'mappings']);
 
 /** Display name of the active panel's selected item, or null if nothing is
  *  selected / the id no longer resolves (so the detail panel hides on delete).
@@ -56,10 +60,8 @@ const MASTER_DETAIL_PANELS = new Set<PanelId>(['properties', 'attributes', 'neig
  *  through to model.attributes for a model attr selected there. */
 function selectedItemName(model: CAModel, panel: PanelId, id: string | null, agentMode: boolean): string | null {
   if (!id) return null;
-  if (panel === 'properties') {
-    // Indicators are the only master-detail sub-section in Properties.
-    const indId = id.startsWith('indicator:') ? id.slice(10) : id;
-    return (model.indicators ?? []).find(i => i.id === indId)?.name ?? null;
+  if (panel === 'indicators') {
+    return (model.indicators ?? []).find(i => i.id === id)?.name ?? null;
   }
   if (panel === 'attributes') {
     // Discriminated `attr:<id>` / `var:<id>` / `bond:<id>` — Local Variables AND
@@ -236,6 +238,21 @@ export function ModelerView() {
     window.addEventListener('genesis-toggle-canvas-fullscreen', onEvt);
     return () => window.removeEventListener('genesis-toggle-canvas-fullscreen', onEvt);
   }, [toggleCanvasFullscreen]);
+
+  // Open a named left panel from anywhere (the palette's hidden-nodes notice,
+  // the Setup tab's "Open panel" links). For Properties an optional sub-tab is
+  // written to the snapshot FIRST, so the panel mounts on it.
+  useEffect(() => {
+    const onOpen = (e: Event) => {
+      const d = (e as CustomEvent<OpenModelerPanelDetail>).detail;
+      if (!d?.panel) return;
+      if (d.propertiesTab) modelerUiState.propertiesTab = d.propertiesTab;
+      setActivePanel(d.panel);
+      setLastLeftPanel(d.panel);
+    };
+    window.addEventListener(OPEN_MODELER_PANEL_EVENT, onOpen);
+    return () => window.removeEventListener(OPEN_MODELER_PANEL_EVENT, onOpen);
+  }, []);
 
   // Ctrl+F opens Node Explorer and focuses search; Space toggles Palette;
   // Esc closes whichever right panel is open. Registered in the capture phase
