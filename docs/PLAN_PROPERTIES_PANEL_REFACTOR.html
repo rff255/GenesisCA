@@ -1,0 +1,164 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Plan — Properties panel refactor</title>
+<style>
+:root{--bg:#0c0d10;--panel:#16181d;--elev:#1d2026;--border:#2a2d35;--muted:#20232a;--text:#ecebe6;--sec:#c4c1b8;--ter:#908d83;--dim:#6f6c64;--acc:#e8a13a;--accs:rgba(232,161,58,.16);--ok:#5cbf7a;--warn:#e0a050;--bad:#e0605a;--agents:#b58fd6;font-family:Inter,Segoe UI,system-ui,sans-serif}
+body{margin:0;background:var(--bg);color:var(--text);padding:28px 32px;line-height:1.45}
+h1{font-size:1.4rem;margin:0 0 4px}h2{font-size:1.05rem;margin:34px 0 10px;color:var(--acc)}h3{font-size:.9rem;margin:18px 0 6px;color:var(--sec)}
+p,li{color:var(--sec);font-size:.86rem;max-width:960px}
+.row{display:flex;gap:26px;flex-wrap:wrap;align-items:flex-start}
+.panel{width:300px;background:var(--panel);border:1px solid var(--border);border-radius:5px;overflow:hidden;font-size:.72rem}
+.ph{padding:8px;text-align:center;font-size:.66rem;letter-spacing:.06em;font-weight:600;color:var(--ter);border-bottom:1px solid var(--muted)}
+.pb{padding:10px 12px}
+.tabs{display:flex;gap:2px;padding:6px 8px;border-bottom:1px solid var(--muted)}
+.tab{flex:1;text-align:center;padding:4px 0;border:1px solid transparent;border-radius:3px;color:var(--ter);font-weight:600;font-size:.66rem}
+.tab.on{color:var(--acc);background:var(--accs);border-color:var(--acc)}
+.tab.ag{color:var(--agents)}
+.sec{margin:0 0 14px}.st{font-size:.62rem;letter-spacing:.06em;text-transform:uppercase;font-weight:600;color:var(--text);padding-bottom:4px;border-bottom:1px solid var(--muted);margin-bottom:8px;display:flex;gap:6px;align-items:center}
+.st .chev{color:var(--dim);font-size:.55rem}.st .act{margin-left:auto;font-size:.55rem;border:1px solid var(--border);border-radius:2px;padding:0 5px;color:var(--ter)}
+.card{border:1px solid var(--border);border-radius:4px;padding:7px 9px;margin-bottom:6px;background:rgba(255,255,255,.025)}
+.card.on{border-color:var(--acc)}
+.ct{display:flex;align-items:center;gap:7px;font-weight:600;color:var(--text)}
+.sw{width:26px;height:14px;border-radius:7px;background:#3a3f49;position:relative;flex:0 0 auto}.sw::after{content:"";position:absolute;top:2px;left:2px;width:10px;height:10px;border-radius:5px;background:#9aa}
+.sw.on{background:var(--acc)}.sw.on::after{left:14px;background:#111}
+.one{color:var(--ter);font-size:.62rem;margin-top:2px}.unl{color:var(--dim);font-size:.58rem;margin-top:2px}.unl b{color:var(--ter);font-weight:600}
+.lbl{color:var(--dim);font-size:.6rem;font-weight:600;letter-spacing:.04em;text-transform:uppercase;margin:6px 0 3px}
+.seg{display:flex;border:1px solid var(--border);border-radius:3px;overflow:hidden}.seg span{flex:1;text-align:center;padding:3px 0;color:var(--ter)}.seg span.on{background:var(--accs);color:var(--acc);font-weight:600}
+.fr{display:flex;justify-content:space-between;align-items:center;gap:8px;margin:4px 0}.fr .in{border:1px solid var(--border);border-radius:3px;background:#08090b;padding:2px 6px;width:52px;color:var(--sec);text-align:right}
+.badge{font-size:.55rem;font-weight:700;padding:0 6px;border-radius:9px;border:1px solid rgba(92,191,122,.45);color:var(--ok);background:rgba(92,191,122,.13)}
+.badge.warn{border-color:rgba(224,160,80,.45);color:var(--warn);background:rgba(224,160,80,.13)}
+.adv{color:var(--dim);font-size:.6rem;margin-top:6px}
+.ro{border-left:3px solid #6b7280;padding-left:7px;color:var(--sec);font-size:.62rem;margin:3px 0}.ro.g{border-color:var(--acc)}
+.note{border:1px solid rgba(232,161,58,.35);background:var(--accs);border-radius:4px;padding:6px 8px;font-size:.62rem;color:var(--sec);display:flex;gap:8px;align-items:center}
+.note button{border:1px solid var(--acc);color:var(--acc);background:transparent;border-radius:3px;font-size:.6rem;padding:2px 7px;margin-left:auto;white-space:nowrap}
+.before{background:repeating-linear-gradient(180deg,var(--panel) 0 30px,#1b1e25 30px 31px)}
+.before .pb div{font-size:.6rem;color:var(--ter);padding:2px 0}
+.before .pb .h{color:var(--text);font-weight:600;margin-top:8px;text-transform:uppercase;font-size:.58rem;letter-spacing:.06em}
+.scale{position:relative;height:340px;width:120px;border-left:1px solid var(--border);margin-left:8px}
+.scale div{position:absolute;left:8px;font-size:.6rem;color:var(--ter);white-space:nowrap}
+.scale i{position:absolute;left:-1px;width:10px;border-top:1px solid var(--border)}
+.bar{width:38px;border-radius:3px 3px 0 0;position:absolute;bottom:0}
+.leftbar{width:40px;display:flex;flex-direction:column;gap:4px;align-items:center;padding-top:8px}
+.pill{width:30px;height:30px;border:1px solid var(--border);border-radius:5px;background:var(--panel);display:flex;align-items:center;justify-content:center;color:var(--ter);font-size:.62rem;font-weight:700}
+.pill.on{color:var(--acc);border-color:var(--acc);background:var(--accs)}.pill.new{outline:1px dashed var(--acc);outline-offset:2px}
+table{border-collapse:collapse;font-size:.78rem}td,th{border:1px solid var(--border);padding:4px 10px;text-align:left;color:var(--sec)}th{color:var(--text)}
+code{background:var(--elev);padding:0 4px;border-radius:3px;font-size:.78em}
+</style></head><body>
+<h1>Properties panel — from one 7-screen column to four short tabs</h1>
+<p>Mockup for <code>docs/PLAN_PROPERTIES_PANEL_REFACTOR.md</code>. Nocturne tokens; the Blender theme swaps colours only.</p>
+
+<h2>1. Before — one column, measured</h2>
+<div class="row">
+<div class="panel before"><div class="ph">PROPERTIES</div><div class="pb">
+<div class="h">▾ Structure</div><div>Boundary · W · H · Dimension (2 radios + prose) · GIS ☐ (prose) · Georeference…</div>
+<div class="h">▾ Execution</div><div>Reproducibility (2 radios + prose + guardrail) · Reset restores board · Update mode (2 radios + prose) · Async scheme · Engine (4 radios + prose + badge) · WebGPU stop-check · Skip Isolated Empty Cells (+6 fields) · <b>Topology</b> ☐☐ (prose) · Overseer ☐ (prose) · <b>Bond-Graph Agents</b>: Capabilities (6 chips, 3 segments, 12 rows, charge…) · Solver · Footprint · Agent update mode · Agent Engine (4 radios) · Capacity ×3 · Seeding ×3 · Seed pattern ×3 · Motion ×4 + Δt · Use bonding physics · Forces ×4 · Bonds ×5 · End Conditions…</div>
+<div class="h">▾ Compatibility ⧉</div><div>read-only verdict table</div>
+<div class="h">▾ Generation Pipeline ⧉</div><div>read-only 22-row list</div>
+<div class="h">▾ Indicators</div><div>the list + add buttons (5 screens down)</div>
+<div class="h">▾ Variegated Cells</div><div>☐ (prose) — the very last thing</div>
+</div></div>
+<div class="scale">
+ <div style="bottom:0;left:60px;font-size:.6rem">874 px body</div>
+ <div class="bar" style="left:0;height:160px;background:#3a3f49"></div><div style="bottom:164px;left:-2px">GoL 3 229 px</div>
+ <div class="bar" style="left:50px;height:330px;background:#5b3f6b"></div><div style="bottom:334px;left:48px">Tissue 6 621 px</div>
+</div>
+<div style="max-width:420px"><p><b>Six layers of the problem</b>: (1) five concerns in one panel, (2) the gates that decide what exists — Layers, 3D, Variegated, Overseer — buried mid-way and last, (3) nothing tells the user which nodes their setup hides, (4) a paragraph under every option, (5) read-only audits between the settings, (6) Indicators five screens down.</p></div>
+</div>
+
+<h2>2. After — the left bar gains an Indicators tab; Properties gets four sub-tabs</h2>
+<div class="row">
+<div class="leftbar"><div class="pill">ⓘ</div><div class="pill on">⚙</div><div class="pill">≡</div><div class="pill">▦</div><div class="pill">◧</div><div class="pill new" title="NEW">📈</div><div class="pill">◎</div></div>
+
+<div class="panel"><div class="ph">PROPERTIES</div>
+<div class="tabs"><span class="tab on">Setup</span><span class="tab">Execution</span><span class="tab ag">Agents</span><span class="tab">Diagnostics</span></div>
+<div class="pb">
+<div class="sec"><div class="st"><span class="chev">▾</span>Layers</div>
+ <div class="card on"><div class="ct"><span class="sw on"></span>Grid Cells</div><div class="one">The classic lattice cellular automaton.</div><div class="unl"><b>Unlocks</b> the Cells graph, the neighbourhood &amp; neighbour-index nodes, Neighborhoods panel.</div></div>
+ <div class="card on"><div class="ct"><span class="sw on"></span>Bond-Graph Agents</div><div class="one">Off-lattice agents in continuous space, joined by bonds.</div><div class="unl"><b>Unlocks</b> the Agents graph + node catalogue, the Agents tab here, the agent brush.</div></div>
+</div>
+<div class="sec"><div class="st"><span class="chev">▾</span>Grid</div>
+ <div class="lbl">Dimension</div><div class="seg"><span class="on">2D grid</span><span>3D volume</span></div><div class="one">Flat W×H lattice on the 2D canvas.</div>
+ <div class="fr" style="margin-top:6px"><span>Size</span><span><span class="in">300</span> × <span class="in">300</span></span></div>
+ <div class="lbl">Boundary</div><div class="seg"><span class="on">Torus</span><span>Constant</span></div>
+</div>
+<div class="sec"><div class="st"><span class="chev">▾</span>Extensions</div>
+ <div class="card"><div class="ct"><span class="sw"></span>Variegated Cells</div><div class="one">Per-cell orientation + face labels for directional rules.</div><div class="unl"><b>Unlocks</b> the orientation / face-label nodes and the V panel. 2D only.</div></div>
+ <div class="card on"><div class="ct"><span class="sw on"></span>Overseer</div><div class="one">A third graph that runs experiments around the simulation.</div><div class="unl"><b>Unlocks</b> the Overseer graph + nodes, the Experiments panel.</div>
+   <div class="fr" style="margin-top:6px"><span>Seed policy</span><span class="in" style="width:90px">sequential</span></div><div class="fr"><span>Base seed</span><span class="in">4242</span></div></div>
+ <div class="card"><div class="ct"><span class="sw"></span>Geographic tools (GIS)</div><div class="one">Georeference, map backdrop, .asc / GeoTIFF / GeoJSON import.</div></div>
+</div>
+</div></div>
+
+<div class="panel"><div class="ph">PROPERTIES</div>
+<div class="tabs"><span class="tab">Setup</span><span class="tab on">Execution</span><span class="tab ag">Agents</span><span class="tab">Diagnostics</span></div>
+<div class="pb">
+<div class="sec"><div class="st"><span class="chev">▾</span>Reproducibility</div>
+ <div class="seg"><span class="on">Exact</span><span>Statistical</span></div><div class="one">A fixed seed reproduces a run bit for bit on the CPU engines.</div></div>
+<div class="sec"><div class="st"><span class="chev">▾</span>Grid engine</div>
+ <div class="lbl">Update mode</div><div class="seg"><span class="on">Synchronous</span><span>Asynchronous</span></div><div class="one">Parallel — runs on all engines.</div>
+ <div class="lbl" style="display:flex;justify-content:space-between">Engine <span class="badge">Auto → WebGPU</span></div><div class="seg"><span class="on">Auto</span><span>WebAssembly</span><span>WebGPU</span></div><div class="one">Fastest engine this model can use; re-picks as you edit.</div>
+ <div class="adv">▸ Advanced (Debug/JS engine · WebGPU stop-check)</div></div>
+<div class="sec"><div class="st"><span class="chev">▾</span><span style="color:var(--agents)">Agent engine</span></div>
+ <div class="lbl">Update mode</div><div class="seg"><span class="on">Asynchronous</span><span>Synchronous</span></div>
+ <div class="lbl" style="display:flex;justify-content:space-between">Engine <span class="badge warn">WebGPU → running WASM</span></div><div class="seg"><span>Auto</span><span>WebAssembly</span><span class="on">WebGPU</span></div><div class="one">Runs on the GPU only when the agent gates pass — see Diagnostics.</div>
+ <div class="adv">▸ Advanced</div></div>
+<div class="sec"><div class="st"><span class="chev">▾</span>Performance</div>
+ <div class="card"><div class="ct"><span class="sw"></span>Skip isolated empty cells</div><div class="one">Large-grid speedup: only cells near a non-empty cell run the rule.</div></div></div>
+</div></div>
+
+<div class="panel"><div class="ph">PROPERTIES</div>
+<div class="tabs"><span class="tab">Setup</span><span class="tab">Execution</span><span class="tab on ag">Agents</span><span class="tab">Diagnostics</span></div>
+<div class="pb">
+<div class="sec"><div class="st"><span class="chev">▾</span>Capability profile</div>
+ <div class="one">Particle · <b style="color:var(--acc)">Boids</b> · Vivarium · Morphogenesis · Social graph · CA on agents · Custom</div>
+ <div class="lbl">Motion</div><div class="seg"><span>Static</span><span>Velocity</span><span class="on">Force</span></div>
+ <div class="fr"><span>☑ Body / Extent</span></div><div class="fr"><span>Collision</span><span class="in" style="width:70px">Off</span></div><div class="fr"><span>☐ Charge</span></div><div class="fr"><span>Bonds</span><span class="in" style="width:70px">Off</span></div><div class="fr"><span>☑ Sensing</span></div><div class="one">… every row: label + one line, the rest in the tooltip</div></div>
+<div class="sec"><div class="st"><span class="chev">▾</span>Population</div>
+ <div class="fr"><span>Max agents</span><span class="in">2400</span></div><div class="fr"><span>Max bonds / agent</span><span class="in">0</span></div>
+ <div class="lbl">Seed pattern</div><div class="seg"><span>Compact</span><span class="on">Scatter</span><span>None</span></div>
+ <div class="fr"><span>Seed count</span><span class="in">260</span></div><div class="fr"><span>Default radius</span><span class="in">0.5</span></div></div>
+<div class="sec"><div class="st"><span class="chev">▾</span>Motion</div><div class="fr"><span>Momentum (friction)</span><span class="in">0.9</span></div><div class="fr"><span>Time step Δt</span><span class="in">0.1</span></div><div class="one" style="color:var(--warn)">→ effective Δt 0.0625 (clamped, μ_eff = 3.2)</div></div>
+<div class="sec"><div class="st"><span class="chev">▾</span>Bonding physics</div><div class="card"><div class="ct"><span class="sw"></span>Use bonding physics</div><div class="one">Soft-sphere + springs + growth + auto-bond.</div></div></div>
+<div class="adv">▸ Advanced (Layout iterations · Bond requests / step)</div>
+</div></div>
+
+<div class="panel"><div class="ph">PROPERTIES</div>
+<div class="tabs"><span class="tab">Setup</span><span class="tab">Execution</span><span class="tab ag">Agents</span><span class="tab on">Diagnostics</span></div>
+<div class="pb">
+<div class="one" style="margin-bottom:8px">Read-only. What will actually run, and why — computed by the same checks the compilers enforce.</div>
+<div class="sec"><div class="st"><span class="chev">▾</span>Compatibility<span class="act">⧉ Copy</span></div>
+ <div class="fr"><span style="color:var(--agents);text-transform:uppercase;font-size:.58rem">Grid</span><span class="badge">Auto → WebGPU</span></div>
+ <div class="ro" style="border-color:var(--ok)">✓ WebGPU — running</div><div class="ro" style="border-color:var(--ok)">✓ WebAssembly</div><div class="ro" style="border-color:var(--ok)">✓ JS</div></div>
+<div class="sec"><div class="st"><span class="chev">▾</span>Generation pipeline<span class="act">⧉ Copy</span></div>
+ <div class="ro g">1 Behaviour step (your graph)</div><div class="ro">2 Force pass — soft-sphere <i>off — needs Collision</i></div><div class="ro">3 Integrate positions</div><div class="ro g">4 Cell step (your graph)</div><div class="ro">…</div></div>
+<div class="sec"><div class="st"><span class="chev">▾</span>Per-agent footprint</div><div class="fr"><span>≈ 141 B / agent</span></div></div>
+</div></div>
+</div>
+
+<h2>3. The new Indicators tab (list + End Conditions), and the palette closes the loop</h2>
+<div class="row">
+<div class="panel"><div class="ph">INDICATORS</div><div class="pb">
+<div class="sec"><div class="st"><span class="chev">▾</span>Indicators</div>
+ <div class="card on"><div class="ct">population <span style="margin-left:auto;font-size:.55rem;color:var(--sec)">LINKED</span> ⋮⋮</div></div>
+ <div class="card"><div class="ct">max degree <span style="margin-left:auto;font-size:.55rem;color:var(--sec)">GRAPH</span> ⋮⋮</div></div>
+ <div class="fr"><span class="in" style="width:auto;text-align:center;flex:1">+ Standalone</span><span class="in" style="width:auto;text-align:center;flex:1">+ Linked</span><span class="in" style="width:auto;text-align:center;flex:1">+ Graph</span></div></div>
+<div class="sec"><div class="st"><span class="chev">▾</span>End conditions</div>
+ <div class="card on"><div class="ct"><span class="sw on"></span>Auto-pause on a condition</div><div class="one">Max generations, or any indicator rule below.</div>
+ <div class="fr" style="margin-top:6px"><span>Max generations</span><span class="in">600</span></div>
+ <div class="fr"><span class="in" style="width:auto;flex:1.4">population</span><span class="in" style="width:auto;flex:1">true</span><span class="in" style="width:30px">≥</span><span class="in" style="width:34px">100</span></div></div></div>
+</div></div>
+<div class="panel"><div class="ph">PALETTE</div><div class="pb">
+<div class="in" style="width:auto;text-align:left;color:var(--dim);margin-bottom:8px">Search nodes…</div>
+<div class="note">⚠ 23 nodes are hidden by this model's setup (Agents layer off, Variegated off). <button>Open Setup</button></div>
+<div class="lbl" style="margin-top:10px">Data</div><div class="one">Get Cell Attribute · Get Neighbors Attribute · …</div>
+</div></div>
+<div style="max-width:380px"><p>The palette notice is the missing half of the gate: the app already hides nodes a setup rules out; now it says so, counts them, and links to the tab that turns them on (→ <b>Agents</b> when the hidden nodes are capability-gated).</p>
+<p>The <b>selected indicator's editor</b> still opens in the second panel — the master-detail machinery moves with the list.</p></div>
+</div>
+
+<h2>4. What stays exactly the same</h2>
+<ul>
+<li>Every control dispatches the SAME reducer action with the SAME payload — this is a presentation refactor; no model field is added or renamed, no compiler / worker / engine file is touched.</li>
+<li>The disabled-in-place rules (async under WebGPU, the last remaining layer, Seed count under Seed pattern = None, Variegated in 3D) and the hidden-when-impossible rules (Georeference behind GIS, Agents tab behind the Agents layer, Reset-restores-board behind an embedded board) are preserved.</li>
+<li>Collapsed sections persist per id in <code>localStorage</code> as before (new ids — the old set is simply dropped).</li>
+</ul>
+</body></html>

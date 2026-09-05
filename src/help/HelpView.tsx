@@ -366,14 +366,22 @@ export function HelpView() {
 
           <h3 className={styles.h3}>Properties Panel (P)</h3>
           <p className={styles.p}>
-            Configure the model&apos;s structure (grid width/height, boundary treatment:
-            torus or constant), execution mode and compile target, optional{' '}
-            <strong>End Conditions</strong> for the simulator, and the Indicators list.
+            The model&apos;s configuration, split into four <strong>sub-tabs</strong> so the settings
+            that decide what you can build come first and the read-only readouts come last:
           </p>
           <ul className={styles.list}>
-            <li><strong>End Conditions</strong> (optional) &mdash; auto-pause the simulator when a max generation count is reached or when any indicator satisfies a configured comparison (==, !=, &gt;, &lt;, &ge;, &le;). Scalar indicators compare against their value directly. For <strong>linked-frequency</strong> indicators (which produce a map of category &rarr; count) pick the specific category to monitor; the comparison then applies to the count of that category (e.g. binary <em>alive</em> &mdash; category <code>true</code>, <code>&ge;</code>, <code>100</code> pauses when at least 100 cells are alive). Decimal-binned frequency indicators can&apos;t be used in end conditions because their bin boundaries depend on runtime data &mdash; switch the aggregation to Total instead. For conditions that need graph-level logic add a <strong>Stop Event</strong> node inside the update graph &mdash; its DO flow input pauses the simulation with a user-defined message.</li>
+            <li><strong>Setup</strong> &mdash; <em>Layers</em> (Grid Cells / Bond-Graph Agents, each a card that names the node families it unlocks), <em>Grid</em> (dimension, width / height / depth, boundary) and <em>Extensions</em> (Variegated Cells, Overseer, Geographic tools &mdash; the georeference lives inside that card). This is the tab that decides which nodes exist at all: when its choices hide nodes, the Palette says how many and links straight here.</li>
+            <li><strong>Execution</strong> &mdash; the reproducibility contract, the grid engine (update mode, async scheme, Auto / WASM / WebGPU &mdash; Debug JS and the WebGPU stop-check interval sit under <em>Advanced</em>), the agent engine, and performance (Skip Isolated Empty Cells).</li>
+            <li><strong>Agents</strong> (present only while the Bond-Graph Agents layer is on) &mdash; the capability profile, population, motion and bonding physics; layout iterations and the bond request depth sit under <em>Advanced</em>.</li>
+            <li><strong>Diagnostics</strong> &mdash; the read-only <em>Compatibility</em> and <em>Generation Pipeline</em> readouts (each with a Copy button) and the per-agent memory footprint. Nothing here is a setting.</li>
+          </ul>
+          <p className={styles.p}>
+            Every explanation is a tooltip: hover a row, an option or a greyed card for its reason. A control that cannot apply to this model is hidden; one that is a single setting away is greyed in place with the reason. <strong>Indicators</strong> and <strong>End Conditions</strong> are no longer in Properties &mdash; they have their own <strong>Indicators</strong> panel on the left bar.
+          </p>
+          <ul className={styles.list}>
+            <li><strong>End Conditions</strong> (optional, in the <em>Indicators</em> panel) &mdash; auto-pause the simulator when a max generation count is reached or when any indicator satisfies a configured comparison (==, !=, &gt;, &lt;, &ge;, &le;). Scalar indicators compare against their value directly. For <strong>linked-frequency</strong> indicators (which produce a map of category &rarr; count) pick the specific category to monitor; the comparison then applies to the count of that category (e.g. binary <em>alive</em> &mdash; category <code>true</code>, <code>&ge;</code>, <code>100</code> pauses when at least 100 cells are alive). Decimal-binned frequency indicators can&apos;t be used in end conditions because their bin boundaries depend on runtime data &mdash; switch the aggregation to Total instead. For conditions that need graph-level logic add a <strong>Stop Event</strong> node inside the update graph &mdash; its DO flow input pauses the simulation with a user-defined message.</li>
             <li><strong>Engine</strong> &mdash; which backend evolves the cells. <strong>Auto (recommended)</strong> is the default for new models: it picks the fastest engine <em>this</em> model can use and shows what it picked (&ldquo;Auto &rarr; WebGPU&rdquo;) with the reason, and it re-picks as you edit &mdash; so it never lands on an engine your rule can&rsquo;t run on. <strong>WebAssembly</strong> is exact and seedable (f64 on one shared seeded stream, bit-identical to the JS reference) and typically several times faster than JS on dense neighborhoods. <strong>WebGPU</strong> runs WGSL compute shaders on the GPU &mdash; best for very large grids and math-heavy per-cell work; it needs synchronous mode and a browser with WebGPU (Chrome 127+, Firefox 141+, Safari 17.4+), and its parity is <em>statistical</em> (f32 + a per-cell RNG), so a fixed seed does not reproduce a run exactly. Under <strong>Advanced</strong> sits <strong>Debug / Reference (JS)</strong> &mdash; the readable semantic reference the other two are verified against, and the always-runnable fallback, but the slowest: useful for stepping through a rule in devtools, not for running models. Agents have their own independent <strong>Agent Engine</strong> radio with the same four choices. Switching restarts the simulator (grid state is lost). All engines apply <em>value sinking</em>: per-cell value computations consumed only inside one switch case or if branch are emitted <em>inside</em> that branch, so cells in different states only pay for the work their branch needs &mdash; sparse type-dispatch models (e.g. Wireworld with mostly Empty cells) gain most. A side effect: if your model calls <em>Get Random</em> inside a branch, cells that don&rsquo;t enter that branch no longer advance the RNG &mdash; the same seed produces different output than older builds did.</li>
-            <li><strong>WebGPU stop-check interval</strong> (advanced, WebGPU only) &mdash; Properties &rarr; Execution exposes an integer spinbox below the compile-target radio. It defaults to <code>1</code> &mdash; check the GPU stop flag after every step, exact stop-event timing. Higher values amortise the per-step <code>mapAsync</code> stall so big batches run faster, but a stop event firing at gen <em>n</em> may surface up to <em>K</em>&minus;1 generations later. The last step of every batch is always checked, so a stopped run never overshoots beyond the current play batch. JS and WASM ignore this setting.</li>
+            <li><strong>WebGPU stop-check interval</strong> (advanced, WebGPU only) &mdash; Properties &rarr; Execution &rarr; Grid engine &rarr; <em>Advanced</em> exposes an integer spinbox below the engine segment (greyed in place, with the reason, when the model is not running on WebGPU). It defaults to <code>1</code> &mdash; check the GPU stop flag after every step, exact stop-event timing. Higher values amortise the per-step <code>mapAsync</code> stall so big batches run faster, but a stop event firing at gen <em>n</em> may surface up to <em>K</em>&minus;1 generations later. The last step of every batch is always checked, so a stopped run never overshoots beyond the current play batch. JS and WASM ignore this setting.</li>
             <li><strong>Skip Isolated Empty Cells</strong> (opt-in large-grid optimization) &mdash; in a growth / accretion model, most cells are empty and far from the structure, yet every generation normally runs the full rule on all of them. Tick this and define what &ldquo;empty&rdquo; means (<strong>a cell attribute + the value</strong>) plus a <strong>processing range</strong> (a neighbourhood or a distance): only cells within the range of a non-empty cell run the Generation Step + colour pass &mdash; the growing <em>surface</em> &mdash; and the big precomputed neighbour tables are replaced by inline computation, so huge grids (the Accretor's 300&sup3; = 27M cells) load in seconds and step interactively. Results are <em>identical</em> to the full loop as long as your range covers the rule's neighbourhood reads (e.g. a radius-1 box for a Moore-neighbourhood rule) &mdash; that's your responsibility, which is why the feature is opt-in. Painting is never gated: brush any isolated cell and it activates from the next step. Synchronous CA-grid models only (async is incompatible by design); agent-topology models (whose field deposits happen outside the step) and glyph-drawing models keep the full loop, as does a constant-boundary model whose boundary value makes the empty-defining attribute non-empty (the always-non-empty boundary means no range could cover it); on the WebGPU target the feature is ignored and the full loop runs (same results, no speedup).</li>
           </ul>
 
@@ -654,11 +662,12 @@ export function HelpView() {
             RGB &mdash; painting and image import ignore alpha for now.
           </p>
 
-          <h3 className={styles.h3}>Indicators (Properties Panel)</h3>
+          <h3 className={styles.h3}>Indicators Panel</h3>
           <p className={styles.p}>
             Indicators are quantitative variables that monitor CA evolution beyond visual
-            feedback. They are defined in the <strong>Properties</strong> panel under the
-            &quot;Indicators&quot; section &mdash; click an indicator in the list to edit it in a
+            feedback. They are defined in their own <strong>Indicators</strong> panel on the
+            left bar (the line-chart icon), which also hosts the model&apos;s <strong>End
+            Conditions</strong> &mdash; click an indicator in the list to edit it in a
             side panel (the same master-detail layout as Attributes, Neighborhoods, and Mappings).
             Select one and click <strong>Duplicate</strong> to clone it with a fresh id. Three kinds
             exist:
@@ -775,7 +784,7 @@ export function HelpView() {
             here are <em>simulator-side overrides</em>: they persist across sessions on your
             machine and are saved into the project only when you save with{' '}
             <strong>Simulator controls</strong> ticked. The same settings can be set as{' '}
-            <em>model defaults</em> in the Modeler (Properties &rarr; Indicators &rarr;{' '}
+            <em>model defaults</em> in the Modeler (the Indicators panel &rarr;{' '}
             <strong>Chart Settings</strong>) &mdash; those travel with the <code>.gcaproj</code>{' '}
             always; the gear&apos;s overrides win where both are set, and{' '}
             <strong>Reset to model defaults</strong> clears the override layer.
@@ -787,8 +796,9 @@ export function HelpView() {
             <em> which face of one cell meets which face of the other</em>. Examples: water
             molecules (H, lone pair, H, lone pair), amphiphiles (hydrophobic vs hydrophilic
             faces), chiral enantiomers. Enable via the <strong>Use Variegated Cells
-            (Directional Interactions)</strong> checkbox in <strong>Properties &rsaquo;
-            Execution</strong>. Models without this feature behave identically to before.
+            (Directional Interactions)</strong> card in <strong>Properties &rsaquo; Setup &rsaquo;
+            Extensions</strong> (2D grids only &mdash; in 3D the card is greyed with the reason).
+            Models without this feature behave identically to before.
           </p>
           <p className={styles.p}>
             When enabled, the engine auto-allocates a per-cell <strong>orientation</strong>
@@ -1885,7 +1895,7 @@ export function HelpView() {
           <p className={styles.p}>
             GenesisCA models are 2D by default &mdash; a flat <code>W&times;H</code> grid.
             Flipping <strong>Dimension</strong> to <strong>3D</strong> in
-            Properties&nbsp;&rarr;&nbsp;Structure turns the lattice into a
+            Properties&nbsp;&rarr;&nbsp;Setup&nbsp;&rarr;&nbsp;Grid turns the lattice into a
             <code>W&times;H&times;D</code> <strong>volume</strong> (a Grid&nbsp;Depth field
             appears). Everything you already know carries over: attributes, the rule
             graph, indicators, and all three compile targets (JavaScript / WebAssembly /
@@ -2078,7 +2088,7 @@ export function HelpView() {
             By default agents move only by the forces <em>your rule graph</em> applies
             (Apply Force / Set Velocity) &mdash; ideal for flocking, chemotaxis, or a
             grid-of-agents. Tick <strong>Use bonding physics</strong> (Properties &rarr;
-            Bond-Graph Agents) to switch on the built-in center-based engine: agents then push
+            Agents &rarr; Bonding physics) to switch on the built-in center-based engine: agents then push
             each other apart (soft-sphere repulsion), can be joined by springs
             (<strong>bonds</strong>), <strong>grow</strong> toward a target size, and
             <strong> divide</strong> into a connected tissue &mdash; how you model
@@ -2094,7 +2104,7 @@ export function HelpView() {
           </p>
           <p className={styles.p}>
             The agent engine&rsquo;s <strong>compile target</strong> and <strong>update mode</strong>
-            are set in <strong>Properties &rarr; Bond-Graph Agents</strong>, <em>independently of
+            are set in <strong>Properties &rarr; Execution &rarr; Agent engine</strong>, <em>independently of
             the grid&rsquo;s</em> &mdash; so you can run a synchronous grid rule with asynchronous
             agents, and vice versa. <strong>Agent Engine</strong> (<strong>Auto</strong> by default &mdash; it picks the fastest engine this agent graph can use and shows which): <strong>JavaScript</strong>
             (full node coverage), <strong>WebAssembly</strong> (covers the <em>whole</em> agent-node
@@ -2174,7 +2184,7 @@ export function HelpView() {
           <h3 className={styles.h3}>Engine compatibility &mdash; three principles</h3>
           <p className={styles.p}>
             Every &ldquo;X doesn&rsquo;t work on Y&rdquo; in GenesisCA follows from three sentences.
-            <strong> Properties &rarr; Compatibility</strong> shows, for this model, which engines each
+            <strong> Properties &rarr; Diagnostics &rarr; Compatibility</strong> shows, for this model, which engines each
             layer (CA grid / agents) can use and why not the others &mdash; computed from the same
             checks the compilers enforce, so it can never drift from what actually happens.
           </p>
@@ -2398,7 +2408,7 @@ export function HelpView() {
             A CA-grid generation is easy to picture: <em>your Generation Step graph is the rule</em>,
             and the engine only double-buffers and runs the colour pass. An <strong>agent</strong>{' '}
             generation is a longer sequence, and only two or three of its phases are your graphs.
-            <strong> Properties &rarr; Generation Pipeline</strong> lists it for <em>your</em> model:
+            <strong> Properties &rarr; Diagnostics &rarr; Generation Pipeline</strong> lists it for <em>your</em> model:
             in execution order, with each phase marked as <em>your graph</em> or <em>the engine</em>,
             tagged with how often it runs, and showing the resolved numbers it reads (the actual
             &Delta;t, momentum, stiffnesses, iteration count). Phases that are off for your model stay
@@ -2437,7 +2447,7 @@ export function HelpView() {
             your graphs and says so: those phases carry a{' '}
             <strong>presentation</strong> tag and the line{' '}
             <em>&ldquo;presentation only &mdash; does not affect your rule&rdquo;</em>, and{' '}
-            <strong>Properties &rarr; Compatibility</strong> opens with{' '}
+            <strong>Properties &rarr; Diagnostics &rarr; Compatibility</strong> opens with{' '}
             <strong>Layout is presentation</strong>.
           </p>
           <p className={styles.p}>
@@ -2472,17 +2482,17 @@ export function HelpView() {
 
           <h3 className={styles.h3}>Enabling Agents</h3>
           <p className={styles.p}>
-            In <strong>Properties &rarr; Execution &rarr; Topology</strong>, tick
-            <strong> Bond-Graph Agents</strong> (alongside <strong>Grid Cells</strong> &mdash;
-            at least one must stay on). A <strong>Bond-Graph Agents</strong> config block
-            appears below, and a <strong>Cells / Agents</strong> tab strip appears above the
-            graph canvas.
+            In <strong>Properties &rarr; Setup &rarr; Layers</strong>, switch on the
+            <strong> Bond-Graph Agents</strong> card (alongside <strong>Grid Cells</strong> &mdash;
+            at least one must stay on). An <strong>Agents</strong> sub-tab appears in Properties
+            (the card links to it), the agent engine appears in the Execution tab, and a
+            <strong> Cells / Agents</strong> tab strip appears above the graph canvas.
           </p>
           <h3 className={styles.h3}>Agent Capability Profiles (show only what you use)</h3>
           <p className={styles.p}>
             The agent engine is <strong>composed from opt-in capability modules</strong>, so a
             model shows only its paradigm&rsquo;s machinery instead of the whole morphogenesis
-            toolkit. In <strong>Properties &rarr; Agent Capabilities</strong> pick a{' '}
+            toolkit. In <strong>Properties &rarr; Agents &rarr; Capability profile</strong> pick a{' '}
             <strong>preset</strong> (Particle System, Boids, Vivarium, Morphogenesis, Social
             Network, CA-on-Agents) or toggle individual capabilities &mdash; <strong>Motion</strong>{' '}
             (Static / Velocity / Force), <strong>Body</strong>, <strong>Collision</strong>,{' '}
@@ -2521,7 +2531,7 @@ export function HelpView() {
             widens the <em>search</em>, not the force.
           </p>
           <p className={styles.p}>
-            <strong>Charge</strong> (Properties &rarr; Agent Capabilities, off by default) adds the
+            <strong>Charge</strong> (Properties &rarr; Agents &rarr; Capability profile, off by default) adds the
             missing long-range term &mdash; a repulsion between every pair inside a{' '}
             <strong>cutoff</strong>, falling off as <code>1/(1+d&sup2;)</code> and reaching exactly
             zero at the cutoff. Two knobs appear when you turn it on:
@@ -2575,7 +2585,7 @@ export function HelpView() {
           </p>
           <h3 className={styles.h3}>Charge range &mdash; Cutoff or Global (Barnes&ndash;Hut)</h3>
           <p className={styles.p}>
-            <strong>Charge range</strong> (Properties &rarr; Bond-Graph Agents, inside the charge
+            <strong>Charge range</strong> (Properties &rarr; Agents &rarr; Capability profile, inside the charge
             block) chooses <em>which law</em> the charge runs, not how fast it runs.{' '}
             <strong>Cutoff</strong> is the force described above: every pair inside{' '}
             <em>charge cutoff</em> repels, and nothing beyond it does.{' '}
@@ -2618,7 +2628,7 @@ export function HelpView() {
           </p>
           <h3 className={styles.h3}>Layout iterations &mdash; more relaxation per generation</h3>
           <p className={styles.p}>
-            <strong>Layout iterations</strong> (Properties &rarr; Bond-Graph Agents &rarr; Solver,
+            <strong>Layout iterations</strong> (Properties &rarr; Agents &rarr; Advanced,
             default <strong>1</strong>) runs the force integrator that many times per generation.
             It is a solver setting, not rule logic &mdash; which is exactly why it is a knob here
             and <em>not</em> a node in your graph: how many times the solver iterates is numerical
@@ -3081,7 +3091,7 @@ export function HelpView() {
           <h3 className={styles.h3}>Measuring the graph &mdash; graph indicators + the sweep</h3>
           <p className={styles.p}>
             Rolling a rule is only half the research loop; the other half is <em>measuring what it
-            did</em>. A <strong>Graph</strong> indicator (Properties &rarr; Indicators &rarr;
+            did</em>. A <strong>Graph</strong> indicator (the Indicators panel &rarr;
             &ldquo;+ Graph&rdquo;, shown once the Agents topology is on) reports a graph-global
             quantity every step: <em>node count</em>, <em>edge count</em>, <em>mean</em> and{' '}
             <em>max degree</em>, the <em>degree histogram</em>, and the number of{' '}
@@ -3169,7 +3179,7 @@ export function HelpView() {
             (a triangle split, an edge swap or a pair annihilation is 2&ndash;5 edge changes at one
             node, and spreading them over several generations would break the very property the rule
             is meant to preserve). The depth is <em>Bond Requests / Agent / Step</em> in{' '}
-            <strong>Model Properties &rarr; Bond-Graph Agents</strong> (default 8). Ops past the depth
+            <strong>Properties &rarr; Agents &rarr; Advanced</strong> (default 8). Ops past the depth
             are <strong>rejected whole</strong> &mdash; never half-applied, never wrapped &mdash; and a
             notice tells you to raise it.
           </p>
@@ -3620,8 +3630,8 @@ export function HelpView() {
           </p>
           <h3 className={styles.h3}>The Config Panel</h3>
           <p className={styles.p}>
-            The <strong>Bond-Graph Agents</strong> block (Properties, shown when Agents is on)
-            controls:
+            The <strong>Agents</strong> sub-tab of Properties (shown while the Bond-Graph Agents
+            layer is on) controls:
           </p>
           <ul className={styles.list}>
             <li><strong>Capacity</strong> &mdash; <strong>Max Agents</strong> and
@@ -3645,7 +3655,7 @@ export function HelpView() {
               Scatter draws its placement from the seeded random stream, so
               <em> Set Random Seed</em> + Reset reproduces it exactly; <em>None</em> draws nothing
               at all.</li>
-            <li><strong>Motion mode</strong> (Properties &rarr; Agent Capabilities) &mdash; what the
+            <li><strong>Motion mode</strong> (Properties &rarr; Agents &rarr; Capability profile) &mdash; what the
               ENGINE is allowed to move. <strong>Force</strong> (the default) integrates
               <code>v = momentum&middot;v + (&Delta;t/&eta;)&middot;&Sigma;F</code> and then
               <code>x += v</code>. <strong>Velocity</strong> seeds <em>no</em> engine force and just
@@ -3687,7 +3697,7 @@ export function HelpView() {
               <strong> Growth Rate</strong>) and <strong>Bonds</strong> (<strong>Auto-bond by
               distance</strong>, <strong>Bond Stiffness</strong>, and the <strong>Form / Break
               Distances</strong> &mdash; a hysteresis band so bonds don't flicker).{' '}
-              <em>For finer control the <strong>Agent Capabilities</strong> section drives these
+              <em>For finer control the Agents tab's <strong>Capability profile</strong> section drives these
               individually and independently of this toggle: <strong>Collision</strong> runs the
               repulsion on its own (a pure gas), <strong>Bonds = Physics</strong> the springs, and
               <strong> Growth</strong> the radius ramp.</em> With both this toggle and the physics
@@ -3735,7 +3745,7 @@ export function HelpView() {
             <strong> Push</strong> / <strong>Pull</strong> (see below), and
             <strong> Glue</strong> / <strong>Cut</strong> (bond/unbond two clicked agents).
             Glue / Cut appear only on a model whose <strong>Bonds</strong> capability is on
-            (Properties &rsaquo; Bond-Graph Agents) &mdash; without a bond store there is nothing for
+            (Properties &rsaquo; Agents &rsaquo; Capability profile) &mdash; without a bond store there is nothing for
             them to do, so they are left out rather than shown doing nothing. Each built-in action is
             an <strong>icon button</strong> (as are the shape buttons); hover one for its name and
             what it does &mdash; and the same glyph follows your cursor on the board, drawn just
@@ -3753,7 +3763,7 @@ export function HelpView() {
             gives a sparse dusting for small agents and an overlapping mass for large ones.
             The radius it uses is the <strong>Radius</strong> row in <em>Add config</em> when you
             tick it, and otherwise the model&apos;s own <em>Default Radius</em> (Properties &rsaquo;
-            Bond-Graph Agents) &mdash; so ticking that row changes both how big the new agents are
+            Agents &rsaquo; Population) &mdash; so ticking that row changes both how big the new agents are
             and, at the same Density, how many of them fit. <em>Drag step</em> is a different thing
             entirely: how far the cursor must travel, in world units, before a <em>drag</em> lays
             down the next stamp. A single click never uses it; lower values give a denser,
@@ -3917,7 +3927,7 @@ export function HelpView() {
               density stays constant keeps the per-agent cost flat (50k agents in a
               large world can run faster than 10k crammed into a small one).</li>
             <li><strong>Keep radii tight.</strong> The <strong>Neighbour Query
-              Radius</strong> (Properties &rarr; Bond-Graph Agents &rarr; Motion) sets the
+              Radius</strong> (Properties &rarr; Agents &rarr; Motion) sets the
               spatial-hash bin size for <em>every</em> neighbour pass &mdash; set it no
               larger than the biggest radius the model actually queries, and keep the
               wired Get Nearby Agents radii as small as the rule allows. Halving a
@@ -4078,8 +4088,8 @@ export function HelpView() {
             sweep response curve) instead of one anecdotal run.
           </p>
           <p className={styles.p}>
-            Enable it with <strong>Use Overseer</strong> in Model Properties &rarr;
-            Execution. That reveals an <strong>Overseer</strong> tab in the Modeler&apos;s
+            Enable it with the <strong>Overseer</strong> card in Properties &rarr;
+            Setup &rarr; Extensions. That reveals an <strong>Overseer</strong> tab in the Modeler&apos;s
             graph strip and an <strong>Overseer Experiments</strong> tab in the
             Simulator&apos;s right panel (alongside the Controls tab). With the checkbox
             off the feature is completely invisible.
@@ -4096,7 +4106,7 @@ export function HelpView() {
               the simulation (Run Until Stop ends on a Stop Event, an End Condition, or its
               safety cap, and outputs the generation it stopped at and why).</li>
             <li><strong>Set Random Seed</strong> + the per-run <strong>seed policy</strong>
-              (Model Properties &rarr; Overseer) &mdash; make runs reproducible. The
+              (the Overseer card in Properties &rarr; Setup &rarr; Extensions) &mdash; make runs reproducible. The
               &quot;sequential&quot; policy re-seeds each Reset with base + run index, so
               replicates differ from each other but the whole batch reproduces exactly.</li>
             <li><strong>Set Model Attribute / Load Preset / Sweep Values</strong> &mdash; the
@@ -4295,7 +4305,7 @@ export function HelpView() {
               <em>reseed from the rules</em>: defaults, then the model&apos;s Init Events. A model
               whose board is <em>data</em> (imported map layers, a hand-painted starting
               configuration) can declare that saved board as its initial state instead &mdash;{' '}
-              <em>Properties &rarr; Execution &rarr; &ldquo;Reset restores saved board&rdquo;</em>,
+              <em>Properties &rarr; Execution &rarr; Reproducibility &rarr; &ldquo;Reset restores the saved board&rdquo;</em>,
               or the <em>Use as initial state</em> box in the Save dialog &mdash; and then Reset
               reseeds <em>and</em> applies that board on top. Whichever is the default,{' '}
               <strong>hover or right-click the Reset button</strong> to pick either action
@@ -4438,7 +4448,7 @@ export function HelpView() {
           </p>
           <h3 className={styles.h3}>Using real map data &mdash; the workflow</h3>
           <p className={styles.p}>
-            The geographic tools live behind one switch: <em>Properties &rarr; Structure &rarr;{' '}
+            The geographic tools live behind one switch: <em>Properties &rarr; Setup &rarr; Extensions &rarr;{' '}
             <strong>Geographic tools (GIS)</strong></em>. It is off for a normal model, so the
             georeference, the map backdrop and the GIS import/export items stay out of the way
             &mdash; and it turns itself <strong>on automatically</strong> the moment you import
@@ -4504,7 +4514,7 @@ export function HelpView() {
             to run with no network &mdash; and <strong>Reset puts the landscape back</strong>.
             Imported data is not an Init Event, so a plain reseed would wipe it; both models
             therefore declare their saved board as their <em>initial state</em>
-            (<em>Properties &rarr; Execution</em>), which makes Reset reseed and then apply that
+            (<em>Properties &rarr; Execution &rarr; Reproducibility</em>), which makes Reset reseed and then apply that
             board on top. To reseed from the rules alone, hover or right-click the Reset button
             and pick <em>Reseed from rules</em>. <strong>Your own imports get this
             automatically</strong>: applying a <code>.asc</code> / GeoTIFF / GeoJSON import
@@ -4698,7 +4708,7 @@ export function HelpView() {
           </p>
           <ul className={styles.list}>
             <li>
-              <strong>Georeference</strong> (<em>Properties &rarr; Structure</em>) &mdash; where
+              <strong>Georeference</strong> (<em>Properties &rarr; Setup &rarr; Extensions &rarr; Geographic tools</em>) &mdash; where
               cell (0,0) sits in the real world: an <strong>X / Y origin</strong> and a{' '}
               <strong>cell size</strong>, plus an optional <strong>CRS</strong> string. An{' '}
               <code>.asc</code> import fills it from the file&apos;s own header and the{' '}

@@ -1,7 +1,9 @@
 import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { useModel } from '../../model/ModelContext';
 import { getNodeDefsByCategory } from '../vpl/nodes/registry';
-import { isNodeAvailable, isMacroAvailableOnGraph } from '../vpl/nodes/nodeValidation';
+import { isNodeAvailable, isMacroAvailableOnGraph, countNodesHiddenBySetup } from '../vpl/nodes/nodeValidation';
+import { openModelerPanel } from './propertiesWidgets';
+import panelStyles from './PanelContent.module.css';
 import { subscribeActiveGraphKind, getActiveGraphKind, displayNodeLabel, displayNodeDescription } from '../vpl/graphState';
 import type { NodeTypeDef } from '../vpl/types';
 import type { GraphNode } from '../../model/types';
@@ -82,7 +84,7 @@ export const PalettePanelContent = forwardRef<PaletteHandle, PalettePanelContent
   const { model } = useModel();
   // Bond-Graph Agents: re-render (re-filter the node list) when the active
   // sub-tab (Cells/Agents) changes — isNodeAvailable gates by it.
-  useSyncExternalStore(subscribeActiveGraphKind, getActiveGraphKind);
+  const activeGraphKind = useSyncExternalStore(subscribeActiveGraphKind, getActiveGraphKind);
   const [search, setSearch] = useState('');
   // Keyboard-driven selection through the flat list of visible items. There is
   // always a selection (index 0 after every filter change) so Space → type →
@@ -165,6 +167,11 @@ export const PalettePanelContent = forwardRef<PaletteHandle, PalettePanelContent
   }, []);
 
   const byCategory = useMemo(() => getNodeDefsByCategory(), []);
+  // The setup-gated notice: how many node types this model's Setup hides on the
+  // active graph (diffed against a model with every gate opened — see
+  // countNodesHiddenBySetup). Memoised on the model + the active graph kind;
+  // `activeGraphKind` is read here only to re-run the memo on a sub-tab swap.
+  const hiddenBySetup = useMemo(() => countNodesHiddenBySetup(model), [model, activeGraphKind]);
 
   const q = search.trim().toLowerCase();
   const matches = (hay: string | undefined): boolean => {
@@ -411,6 +418,19 @@ export const PalettePanelContent = forwardRef<PaletteHandle, PalettePanelContent
         onChange={e => setSearch(e.target.value)}
         onKeyDown={onSearchKeyDown}
       />
+      {hiddenBySetup.total > 0 && (
+        <div className={panelStyles.paletteNotice} title="The palette only lists nodes this model can run. The Properties › Setup tab decides which layers and extensions are on — and therefore which node families exist; the Agents capability profile gates the agent nodes.">
+          <span style={{ flex: 1 }}>
+            {hiddenBySetup.total} node{hiddenBySetup.total === 1 ? '' : 's'} hidden by this model’s setup
+            {hiddenBySetup.capability > 0 && hiddenBySetup.capability === hiddenBySetup.total ? ' (capability profile)' : ''}
+          </span>
+          <button
+            type="button"
+            className={panelStyles.linkBtn}
+            onClick={() => openModelerPanel('properties', hiddenBySetup.capability > 0 && hiddenBySetup.capability === hiddenBySetup.total ? 'agents' : 'setup')}
+          >{hiddenBySetup.capability > 0 && hiddenBySetup.capability === hiddenBySetup.total ? 'Open Agents' : 'Open Setup'} ›</button>
+        </div>
+      )}
       <div className={styles.headerRow}>
         <div className={styles.hint}>Drag to canvas — or ↑↓ + Enter to add at cursor.</div>
         <div className={styles.viewToggle} role="group" aria-label="Palette view mode">

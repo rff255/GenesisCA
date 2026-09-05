@@ -2,16 +2,16 @@ import type { CSSProperties } from 'react';
 import type { CAModel, CenterBasedConfig, AgentCapabilities, CollisionMode, BondsMode, MotionMode } from '../../model/types';
 import {
   AGENT_PRESETS, AGENT_PRESET_META, AGENT_CAPABILITY_ROWS, HIDDEN_CAP_ROWS_V1,
-  resolveAgentProfile, matchAgentPreset, applyCapabilityEdit, estimateAgentFootprint,
+  resolveAgentProfile, matchAgentPreset, applyCapabilityEdit,
   capabilityClosureDrivers, capabilityRowLabel,
   type AgentPresetKey, type BoolCapKey,
 } from '../../model/agentCapabilities';
-import { cbNum, chargeStrengthOf, chargeMaxDistOf, CHARGE_MAX_DIST_REST_MULTIPLE, layoutIterationsOf, MAX_LAYOUT_ITERATIONS, chargeRangeOf, chargeThetaOf, MIN_CHARGE_THETA, MAX_CHARGE_THETA } from '../../model/centerBased';
+import { cbNum, chargeStrengthOf, chargeMaxDistOf, CHARGE_MAX_DIST_REST_MULTIPLE, chargeRangeOf, chargeThetaOf, MIN_CHARGE_THETA, MAX_CHARGE_THETA } from '../../model/centerBased';
 import { NumberField } from '../vpl/widgets/InlineWidgets';
 
-/** Model Properties → "Agent Capabilities" section. The preset picker + the
- *  progressive-disclosure capability toggles + the live per-agent footprint
- *  readout. Drives `centerBased.agentCapabilities`; editor-surface only in v1
+/** Properties › Agents › Capability profile. The preset picker + the
+ *  progressive-disclosure capability toggles (the per-agent footprint readout
+ *  lives in Properties › Diagnostics; the Solver row in Agents › Advanced). Drives `centerBased.agentCapabilities`; editor-surface only in v1
  *  (palette / Behaviour-Step ports / Edit-panel rows filter to what's on). */
 export function AgentCapabilitiesSection({
   model, updateCenterBased,
@@ -21,7 +21,6 @@ export function AgentCapabilitiesSection({
 }) {
   const profile = resolveAgentProfile(model);
   const activePreset = matchAgentPreset(profile);
-  const footprint = estimateAgentFootprint(profile, model);
   const set = (next: AgentCapabilities) => updateCenterBased({ agentCapabilities: next });
   const edit = <K extends keyof AgentCapabilities>(key: K, value: AgentCapabilities[K]) =>
     set(applyCapabilityEdit(profile, key, value));
@@ -244,43 +243,6 @@ export function AgentCapabilitiesSection({
         })}
       </div>
 
-      {/* Solver relaxation — an ENGINE knob, not a capability and not a graph node:
-          how many times the force integrator runs per generation. Sits outside the
-          capability list on purpose (nothing gates it, and it changes no semantics —
-          only how far the layout settles between rewrites). */}
-      <div style={{ fontSize: '0.6rem', color: '#888', textTransform: 'uppercase', letterSpacing: '0.05em', margin: '10px 0 4px' }}>Solver</div>
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
-        <span style={{ fontSize: '0.72rem', color: '#ddd' }} title="Force-pass runs per generation. Purely numerical relaxation — age, growth and the structural phase (bond form/break/rewire, division, death) still advance exactly ONCE per generation.">Layout iterations</span>
-        <NumberField
-          value={layoutIterationsOf(model.centerBased)}
-          onNumber={n => updateCenterBased({ layoutIterations: n })}
-          min={1} max={MAX_LAYOUT_ITERATIONS} integer step={1}
-          style={{ background: 'var(--color-bg-panel, #1a1a1a)', color: '#ddd', border: '1px solid var(--color-widget-border, #444)', borderRadius: 4, width: 64, fontSize: '0.66rem' }}
-        />
-      </div>
-      <span style={{ color: '#888', fontSize: '0.6rem', display: 'block', marginTop: 2 }}>
-        How many times the force integrator runs per generation (1 = one pass, the default). Raising it lets a
-        growing structure settle further per rewrite without inflating the generation counter — the rule's own
-        cadence (&ldquo;rewrite every Nth generation&rdquo;) belongs in the graph instead, as a Periodic Step.
-      </span>
-
-      {/* Footprint readout — the cost of generality, bound to the profile. */}
-      <div style={{ marginTop: 10, padding: '6px 8px', borderRadius: 4, background: 'var(--color-overlay-row, rgba(255,255,255,0.03))', border: '1px solid var(--color-border-muted, #2a2a2a)' }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
-          <span style={{ fontSize: '0.66rem', color: '#aaa', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Per-agent footprint</span>
-          <span style={{ fontSize: '0.82rem', color: 'var(--color-accent)', fontWeight: 600 }}>≈ {footprint.bytesPerAgent} B</span>
-        </div>
-        <div style={{ marginTop: 4, display: 'flex', flexDirection: 'column', gap: 1 }}>
-          {footprint.groups.map((g, i) => (
-            <div key={i} style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.6rem', color: g.core ? '#999' : '#bbb' }}>
-              <span>{g.label}</span><span>{g.bytes} B</span>
-            </div>
-          ))}
-        </div>
-        <span style={{ color: '#777', fontSize: '0.58rem', display: 'block', marginTop: 4, fontStyle: 'italic' }}>
-          v1 estimate — the engine still allocates the full struct; profile-driven allocation lands in a later phase.
-        </span>
-      </div>
     </div>
   );
 }

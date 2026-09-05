@@ -2,7 +2,7 @@ import type { ReactElement } from 'react';
 import { useModel } from '../model/ModelContext';
 import styles from './ActivityBar.module.css';
 
-export type PanelId = 'info' | 'properties' | 'attributes' | 'neighborhoods' | 'mappings' | 'variegated';
+export type PanelId = 'info' | 'properties' | 'attributes' | 'neighborhoods' | 'mappings' | 'indicators' | 'variegated';
 
 interface ActivityBarProps {
   activePanel: PanelId | null;
@@ -27,6 +27,8 @@ const ICONS: Record<PanelId, ReactElement> = {
   neighborhoods: svg(<><rect x="4" y="4" width="16" height="16" rx="1.5" /><line x1="9.3" y1="4" x2="9.3" y2="20" /><line x1="14.6" y1="4" x2="14.6" y2="20" /><line x1="4" y1="9.3" x2="20" y2="9.3" /><line x1="4" y1="14.6" x2="20" y2="14.6" /><rect x="9.3" y="9.3" width="5.3" height="5.3" fill="currentColor" stroke="none" /></>),
   // Mappings — overlapping colour swatches.
   mappings: svg(<><rect x="4" y="4" width="11" height="11" rx="2" /><rect x="9" y="9" width="11" height="11" rx="2" fill="currentColor" fillOpacity="0.25" /></>),
+  // Indicators — a line chart (a measured series over time).
+  indicators: svg(<><polyline points="3,20 3,4" /><polyline points="3,20 21,20" /><polyline points="6,15 10,10 14,13 20,6" /></>),
   // Variegated — a compass needle (orientation).
   variegated: svg(<><circle cx="12" cy="12" r="9" /><polygon points="12,6 14.5,12 12,18 9.5,12" fill="currentColor" stroke="none" /></>),
 };
@@ -37,6 +39,7 @@ const BASE_PANELS: Array<{ id: PanelId; label: string }> = [
   { id: 'attributes', label: 'Attributes' },
   { id: 'neighborhoods', label: 'Neighborhoods' },
   { id: 'mappings', label: 'Mappings' },
+  { id: 'indicators', label: 'Indicators' },
 ];
 
 export function ActivityBar({ activePanel, onTogglePanel }: ActivityBarProps) {
