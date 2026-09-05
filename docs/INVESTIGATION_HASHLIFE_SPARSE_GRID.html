@@ -1,0 +1,496 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>HashLife, Golly's algorithms, and O(active) grids — illustrated investigation</title>
+<style>
+  :root { color-scheme: only dark; }
+  html, body { background:#0d1117; }
+  body { color:#c9d4e0; font-family: system-ui, -apple-system, Segoe UI, sans-serif; margin:0; padding:32px 28px 80px; -webkit-font-smoothing:antialiased; }
+  .wrap { max-width:1020px; margin:0 auto; }
+  h1 { font-size:1.35rem; color:#e8f0f8; margin:0 0 6px; line-height:1.3; }
+  h2 { font-size:1.05rem; color:#9fd0e8; margin:40px 0 10px; border-bottom:1px solid #223046; padding-bottom:6px; }
+  h3 { font-size:0.9rem; color:#cfe3f2; margin:22px 0 6px; }
+  p, li { font-size:0.85rem; line-height:1.55; color:#c9d4e0; }
+  .lede { color:#a9bccd; font-size:0.88rem; }
+  .panel { background:#141b26; border:1px solid #2a3a50; border-radius:10px; padding:18px 22px; margin:14px 0; }
+  .pair { display:flex; gap:22px; flex-wrap:wrap; }
+  .pair > div { flex:1 1 400px; min-width:300px; }
+  .cap { font-size:0.72rem; color:#8090a0; margin-top:8px; line-height:1.45; }
+  code { background:#0b1017; border:1px solid #2a3a50; border-radius:4px; padding:1px 5px; font-size:0.78rem; color:#9fd0e8; font-family: ui-monospace, Consolas, monospace; }
+  .tag { display:inline-block; font-size:0.62rem; font-weight:700; letter-spacing:0.06em; padding:3px 9px; border-radius:4px; margin-bottom:9px; text-transform:uppercase; }
+  .t-ship { background:#1d4030; color:#9fe8c0; }
+  .t-bad  { background:#4a2a2a; color:#f0b0a0; }
+  .t-new  { background:#3a3418; color:#f0d68a; }
+  .t-no   { background:#2a2f3d; color:#a4b0c4; }
+  table { border-collapse:collapse; width:100%; font-size:0.78rem; margin:10px 0; }
+  th, td { border:1px solid #2a3a50; padding:6px 9px; text-align:left; vertical-align:top; }
+  th { background:#1a2432; color:#cfe3f2; font-weight:600; }
+  td.num { text-align:right; font-family: ui-monospace, Consolas, monospace; }
+  .win  { color:#7fe0a0; font-weight:700; }
+  .lose { color:#f09a8a; font-weight:700; }
+  .mid  { color:#f0d68a; }
+  .key { display:flex; gap:18px; flex-wrap:wrap; font-size:0.72rem; color:#a9bccd; margin:8px 0 2px; }
+  .key span { display:flex; align-items:center; gap:6px; }
+  .sw { width:13px; height:13px; border-radius:3px; display:inline-block; border:1px solid #2a3a50; }
+  ul { margin:8px 0 8px 20px; padding:0; }
+  li { margin:3px 0; }
+  .note { border-left:3px solid #e8a13a; padding-left:12px; color:#e0cba0; font-size:0.8rem; }
+  .foot { color:#6e7d8f; font-size:0.72rem; margin-top:44px; border-top:1px solid #223046; padding-top:12px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>HashLife, Golly's algorithms, and O(active) grids in GenesisCA</h1>
+<p class="lede">Illustrated companion to <code>docs/INVESTIGATION_HASHLIFE_SPARSE_GRID.md</code>.
+<strong>Research only — nothing shipped.</strong> Every number below was measured against the real
+shipped compiled step and the real <code>activeSet.ts</code>.</p>
+
+<div class="panel">
+<p style="margin-top:0"><strong>The brainstorm splits into three things, and GenesisCA's status on each is different:</strong></p>
+<table>
+  <tr><th style="width:44%">the ask</th><th style="width:16%">status</th><th>where</th></tr>
+  <tr><td>“a data structure tracking which cells need evaluating”</td><td><span class="win">SHIPPED</span></td><td>Skip Isolated Empty Cells — 4.6× / 356× / 6&nbsp;326× measured (§3.2 of the .md)</td></tr>
+  <tr><td>“the user determines what makes a cell <em>stable</em>”</td><td><span class="mid">GAP — cheap</span></td><td>predicate is hard-wired to one value. A <em>set</em> gives <strong>25×</strong> on a shipped model, with <strong>no compiler change</strong></td></tr>
+  <tr><td>“without allocating memory for void regions”, “infinite like golly”</td><td><span class="lose">GAP — expensive</span></td><td>storage is dense <code>W×H×D</code>; boundary is <code>constant</code>&nbsp;|&nbsp;<code>torus</code> only</td></tr>
+</table>
+</div>
+
+<!-- ═══════════════════════════════════════════════════ -->
+<h2>1 · What already ships — the active set, drawn</h2>
+
+<div class="panel">
+<span class="tag t-ship">SHIPPED — Skip Isolated Empty Cells</span>
+<div class="key">
+  <span><i class="sw" style="background:#e8a13a"></i> source cell (non-empty)</span>
+  <span><i class="sw" style="background:#2c5a44"></i> ACTIVE (within range of a source) — stepped</span>
+  <span><i class="sw" style="background:#0b1017"></i> inactive — skipped entirely</span>
+</div>
+<svg viewBox="0 0 720 210" width="100%" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="A grid where a few non-empty source cells dilate into an active region">
+  <defs>
+    <pattern id="cellgrid" width="22" height="22" patternUnits="userSpaceOnUse">
+      <rect width="22" height="22" fill="#0b1017" stroke="#1e2a3a" stroke-width="1"/>
+    </pattern>
+    <marker id="arw" markerWidth="9" markerHeight="9" refX="8" refY="3.2" orient="auto">
+      <path d="M0,0 L8,3.2 L0,6.4 z" fill="#9fd0e8"/>
+    </marker>
+  </defs>
+  <rect x="20" y="20" width="616" height="176" fill="url(#cellgrid)" stroke="#2a3a50"/>
+  <!-- dilated regions: each source contributes a 3x3 (66x66) translucent square -->
+  <g fill="#2c5a44" fill-opacity="0.85">
+    <rect x="130" y="64" width="66" height="66"/>
+    <rect x="152" y="86" width="66" height="66"/>
+    <rect x="174" y="64" width="66" height="66"/>
+    <rect x="372" y="42" width="66" height="66"/>
+    <rect x="394" y="64" width="66" height="66"/>
+    <rect x="416" y="42" width="66" height="66"/>
+    <rect x="438" y="86" width="66" height="66"/>
+    <rect x="526" y="130" width="66" height="66"/>
+  </g>
+  <!-- re-draw grid lines over the fills -->
+  <rect x="20" y="20" width="616" height="176" fill="none" stroke="#2a3a50"/>
+  <g stroke="#1e2a3a" stroke-width="1">
+    <path d="M42 20V196M64 20V196M86 20V196M108 20V196M130 20V196M152 20V196M174 20V196M196 20V196M218 20V196M240 20V196M262 20V196M284 20V196M306 20V196M328 20V196M350 20V196M372 20V196M394 20V196M416 20V196M438 20V196M460 20V196M482 20V196M504 20V196M526 20V196M548 20V196M570 20V196M592 20V196M614 20V196"/>
+    <path d="M20 42H636M20 64H636M20 86H636M20 108H636M20 130H636M20 152H636M20 174H636"/>
+  </g>
+  <!-- source cells -->
+  <g fill="#e8a13a">
+    <rect x="152" y="86" width="22" height="22"/>
+    <rect x="174" y="108" width="22" height="22"/>
+    <rect x="196" y="86" width="22" height="22"/>
+    <rect x="394" y="64" width="22" height="22"/>
+    <rect x="416" y="86" width="22" height="22"/>
+    <rect x="438" y="64" width="22" height="22"/>
+    <rect x="460" y="108" width="22" height="22"/>
+    <rect x="548" y="152" width="22" height="22"/>
+  </g>
+  <g font-family="ui-monospace, Consolas, monospace" font-size="11" fill="#9fd0e8">
+    <path d="M660 100 L 600 100" stroke="#9fd0e8" fill="none" marker-end="url(#arw)"/>
+    <text x="646" y="86" text-anchor="end" fill="#8090a0">every other cell:</text>
+    <text x="646" y="120" text-anchor="end" fill="#8090a0">never stepped</text>
+  </g>
+</svg>
+<div class="cap"><strong>The mechanism.</strong> Each non-empty cell dilates by the user's <em>processing range</em>
+(here Moore r=1, so a 3×3 square). The union is the active list; the compiled step iterates
+<em>that list</em> instead of <code>0..total</code>. Reference-counted (<code>nearCount</code>), so it is
+correct when cells go empty again — and <strong>state-defined, not change-tracking</strong>, which is why it
+survives a load, a paint or a reset with a single rebuild.</div>
+</div>
+
+<div class="panel">
+<span class="tag t-bad">GAP — the predicate is ONE value of ONE attribute</span>
+<h3 style="margin-top:0">Wildfire: neither available choice works</h3>
+<p>The shipped <code>Wildfire&nbsp;-&nbsp;Sierra&nbsp;Nevada</code> has <code>state ∈ {Unburned, Burning, Burned}</code>.
+<strong>Burned is a terminal, non-empty, permanently static state</strong> — and the config can name only one value as “empty”.</p>
+
+<div class="pair">
+ <div>
+  <span class="tag t-bad">Today — <code>empty = Unburned</code></span>
+  <svg viewBox="0 0 340 190" width="100%" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="The whole burned scar plus the fire front is marked active">
+    <rect x="10" y="10" width="320" height="150" fill="#0b1017" stroke="#2a3a50"/>
+    <!-- burned scar: ACTIVE (wastefully) -->
+    <path d="M10 10 H150 C175 45 175 115 150 160 H10 Z" fill="#3f6b52"/>
+    <path d="M10 10 H150 C175 45 175 115 150 160 H10 Z" fill="#6b4a3e" fill-opacity="0.38"/>
+    <!-- front band: ACTIVE (correctly) -->
+    <path d="M150 10 C175 45 175 115 150 160 H190 C215 115 215 45 190 10 Z" fill="#3f6b52"/>
+    <path d="M158 10 C179 46 179 114 158 160 L174 160 C195 114 195 46 174 10 Z" fill="#e06c5f"/>
+    <rect x="10" y="10" width="320" height="150" fill="none" stroke="#2a3a50"/>
+    <g font-family="ui-monospace, Consolas, monospace" font-size="10.5">
+      <text x="42" y="86" fill="#d8ecdd">BURNED</text>
+      <text x="42" y="100" fill="#9fe8c0" font-size="9.5">↑ ACTIVE — stepped,</text>
+      <text x="42" y="112" fill="#9fe8c0" font-size="9.5">   though it never changes</text>
+      <text x="150" y="180" fill="#f09a8a" font-size="11">active = 84.9% at gen 259 — and rising</text>
+      <text x="242" y="92" fill="#7f8c9c">UNBURNED</text>
+      <text x="242" y="106" fill="#5e6b7a" font-size="9.5">(skipped)</text>
+    </g>
+  </svg>
+  <div class="cap">The scar is non-empty, so every burned cell is a <em>source</em> forever. The active set
+  grows monotonically with the fire. <strong>2.08×</strong> over 260 generations, degrading.</div>
+ </div>
+ <div>
+  <span class="tag t-new">Proposed — <code>stable = {Unburned, Burned}</code></span>
+  <svg viewBox="0 0 340 190" width="100%" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Only the thin fire front is marked active">
+    <rect x="10" y="10" width="320" height="150" fill="#0b1017" stroke="#2a3a50"/>
+    <path d="M10 10 H150 C175 45 175 115 150 160 H10 Z" fill="#3a2b25"/>
+    <path d="M144 10 C169 45 169 115 144 160 H190 C215 115 215 45 190 10 Z" fill="#3f6b52"/>
+    <path d="M158 10 C179 46 179 114 158 160 L174 160 C195 114 195 46 174 10 Z" fill="#e06c5f"/>
+    <rect x="10" y="10" width="320" height="150" fill="none" stroke="#2a3a50"/>
+    <g font-family="ui-monospace, Consolas, monospace" font-size="10.5">
+      <text x="42" y="86" fill="#a9958c">BURNED</text>
+      <text x="42" y="100" fill="#7f8c9c" font-size="9.5">↑ now STABLE —</text>
+      <text x="42" y="112" fill="#7f8c9c" font-size="9.5">   skipped entirely</text>
+      <text x="150" y="180" fill="#7fe0a0" font-size="11">active = 1.1% at gen 259 — flat</text>
+      <text x="242" y="92" fill="#7f8c9c">UNBURNED</text>
+      <text x="242" y="106" fill="#5e6b7a" font-size="9.5">(skipped)</text>
+    </g>
+  </svg>
+  <div class="cap">Only <code>Burning</code> is a source. The active set tracks the <em>front</em> and stays
+  at 1–5% for the whole run. <strong class="win">25.19×</strong> — 12× better than the best shipped option.</div>
+ </div>
+</div>
+
+<h3>Measured work, 260 generations, 200×200 (shipped model, shipped landscape)</h3>
+<svg viewBox="0 0 720 150" width="100%" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Bar chart of evaluated cell-steps per predicate">
+  <g font-family="ui-monospace, Consolas, monospace" font-size="11">
+    <text x="4" y="24" fill="#a9bccd">full loop</text>
+    <rect x="130" y="12" width="520" height="17" fill="#3c4a5e"/><text x="658" y="25" fill="#c9d4e0">10.4M · 1×</text>
+    <text x="4" y="56" fill="#a9bccd">empty = Unburned</text>
+    <rect x="130" y="44" width="250" height="17" fill="#8a5a4c"/><text x="388" y="57" fill="#f09a8a">5.0M · 2.08×</text>
+    <text x="4" y="88" fill="#a9bccd">empty = Burned</text>
+    <rect x="130" y="76" width="306" height="17" fill="#8a5a4c"/><text x="444" y="89" fill="#f09a8a">6.1M · 1.70×</text>
+    <text x="4" y="120" fill="#a9bccd">stable = {Unb, Burned}</text>
+    <rect x="130" y="108" width="21" height="17" fill="#3f9e6d"/><text x="159" y="121" fill="#7fe0a0">0.4M · 25.19×</text>
+  </g>
+</svg>
+<p class="note" style="margin-bottom:0">The generalisation is <strong>one <code>Set&lt;number&gt;</code> instead of one <code>number</code></strong>
+inside <code>activeSet.ts</code>. The compiled step never knew what “empty” meant — it only ever receives
+<code>_activeList</code> and <code>_activeCount</code>. So <strong>no JS, WASM or WGSL emitter is touched</strong>,
+and byte-identity for every shipped model holds by construction.</p>
+</div>
+
+<!-- ═══════════════════════════════════════════════════ -->
+<h2>2 · The predicate ladder — and its floor</h2>
+
+<div class="panel">
+<p style="margin-top:0">Four predicates, same Moore dilation, Game of Life 512², 2000 generations
+(cell-steps evaluated, as a share of the full loop):</p>
+<svg viewBox="0 0 720 210" width="100%" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Bar chart comparing empty, stable, dirty and oracle predicates on a Game of Life soup">
+  <g font-family="ui-monospace, Consolas, monospace" font-size="11">
+    <text x="4" y="22" fill="#a9bccd">full</text>
+    <rect x="164" y="10" width="500" height="18" fill="#3c4a5e"/><text x="672" y="24" fill="#c9d4e0">100%</text>
+
+    <text x="4" y="56" fill="#a9bccd">empty <tspan fill="#7fe0a0">(SHIPPED)</tspan></text>
+    <rect x="164" y="44" width="109" height="18" fill="#3f9e6d"/><text x="281" y="58" fill="#7fe0a0">21.8% · 4.60×</text>
+
+    <text x="4" y="90" fill="#a9bccd">dirty <tspan fill="#f0d68a">(Tier A1)</tspan></text>
+    <rect x="164" y="78" width="65" height="18" fill="#c9a03c"/><text x="237" y="92" fill="#f0d68a">12.9% · 7.76×</text>
+
+    <text x="4" y="124" fill="#a9bccd">oracle (unreachable)</text>
+    <rect x="164" y="112" width="16" height="18" fill="#4a5568"/><text x="188" y="126" fill="#8090a0">3.2% · 31×</text>
+
+    <line x1="164" y1="146" x2="664" y2="146" stroke="#223046"/>
+    <text x="164" y="168" fill="#8090a0" font-size="10.5">⟵ 1.69× — what a stability predicate buys on Life ⟶</text>
+    <path d="M229 158 L 229 96" stroke="#c9a03c" stroke-dasharray="3 3" fill="none"/>
+    <path d="M273 158 L 273 62" stroke="#3f9e6d" stroke-dasharray="3 3" fill="none"/>
+    <text x="164" y="190" fill="#8090a0" font-size="10.5">⟵ 4.0× — the cost of dilating instead of knowing ⟶</text>
+    <path d="M180 180 L 180 130" stroke="#4a5568" stroke-dasharray="3 3" fill="none"/>
+  </g>
+</svg>
+<div class="cap"><strong>Two readings that matter.</strong> (a) On Life the “stable” generalisation is worth
+<strong>~1.7–2.0×</strong> — real, but not an order of magnitude, because what it unlocks is skipping
+<em>still lifes</em> (58.2% of the live population of a settled soup). The wildfire case above is where a
+value set is <em>qualitative</em>. (b) The dilation itself costs <strong>~4×</strong> against a perfect
+oracle; that gap is irreducible for any conservative range predicate.</div>
+
+<p class="note">A fresh random soup is <strong>99.1% active at generation 1</strong>. Sparse stepping is an
+<em>asymptotic</em> win as a pattern settles — never an opening-frame one, and never a win at all for a
+dense chaotic model with a huge neighbourhood (the documented MNCA case, where it is measurably
+<em>worse</em>).</p>
+</div>
+
+<!-- ═══════════════════════════════════════════════════ -->
+<h2>3 · What HashLife actually is</h2>
+
+<div class="panel">
+<div class="pair">
+ <div>
+  <h3 style="margin-top:0">(a) Hash-consing — repetition is free in <em>space</em></h3>
+  <svg viewBox="0 0 360 250" width="100%" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="A quadtree where two identical subtrees point at one shared canonical node">
+    <defs><marker id="q1" markerWidth="8" markerHeight="8" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 z" fill="#7f8c9c"/></marker></defs>
+    <g font-family="ui-monospace, Consolas, monospace" font-size="10">
+      <rect x="140" y="12" width="80" height="30" rx="5" fill="#1b2a3a" stroke="#4a6a8a"/>
+      <text x="152" y="31" fill="#cfe3f2">level 4</text>
+      <g stroke="#7f8c9c" fill="none" marker-end="url(#q1)">
+        <path d="M160 44 L 92 76"/><path d="M175 44 L 160 76"/>
+        <path d="M188 44 L 228 76"/><path d="M202 44 L 288 76"/>
+      </g>
+      <rect x="52" y="80" width="66" height="26" rx="4" fill="#1b2a3a" stroke="#3a5570"/><text x="62" y="97" fill="#a9bccd">NW</text>
+      <rect x="128" y="80" width="66" height="26" rx="4" fill="#1b2a3a" stroke="#3a5570"/><text x="140" y="97" fill="#a9bccd">NE</text>
+      <rect x="200" y="80" width="66" height="26" rx="4" fill="#1b2a3a" stroke="#3a5570"/><text x="212" y="97" fill="#a9bccd">SW</text>
+      <rect x="272" y="80" width="66" height="26" rx="4" fill="#1b2a3a" stroke="#3a5570"/><text x="284" y="97" fill="#a9bccd">SE</text>
+      <g stroke="#5fbf77" fill="none" marker-end="url(#q1)" stroke-dasharray="4 3">
+        <path d="M85 108 C 85 140 165 140 172 158"/>
+        <path d="M161 108 C 161 138 172 140 176 158"/>
+        <path d="M233 108 C 233 138 190 142 184 158"/>
+      </g>
+      <path d="M305 108 L 305 158" stroke="#7f8c9c" fill="none" marker-end="url(#q1)"/>
+      <rect x="128" y="162" width="106" height="34" rx="5" fill="#1d4030" stroke="#5fbf77"/>
+      <text x="139" y="176" fill="#9fe8c0">ONE canonical</text><text x="139" y="189" fill="#9fe8c0">“empty 8×8” node</text>
+      <rect x="268" y="162" width="74" height="34" rx="5" fill="#1b2a3a" stroke="#3a5570"/>
+      <text x="278" y="183" fill="#a9bccd">glider</text>
+      <text x="12" y="226" fill="#8090a0">Three children are structurally identical →</text>
+      <text x="12" y="240" fill="#8090a0">the hash table returns the <tspan fill="#9fe8c0">same object</tspan>. Stored once.</text>
+    </g>
+  </svg>
+  <div class="cap">Every node is canonicalised through a hash table, so identical subsquares
+  <em>anywhere</em> in the universe are one object. This is where “don't allocate the void” comes from:
+  the empty quadrant of any size is a single shared node.</div>
+ </div>
+ <div>
+  <h3 style="margin-top:0">(b) Memoised <code>result</code> — repetition is free in <em>time</em></h3>
+  <svg viewBox="0 0 360 266" width="100%" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="A level-k node caches its centre advanced two-to-the-k-minus-two generations">
+    <g font-family="ui-monospace, Consolas, monospace" font-size="10">
+      <rect x="20" y="30" width="150" height="150" fill="#0b1017" stroke="#4a6a8a"/>
+      <g stroke="#1e2a3a"><path d="M57.5 30V180M95 30V180M132.5 30V180M20 67.5H170M20 105H170M20 142.5H170"/></g>
+      <rect x="57.5" y="67.5" width="75" height="75" fill="#2c5a44" fill-opacity="0.9" stroke="#5fbf77"/>
+      <text x="24" y="22" fill="#a9bccd">node, level k  (2^k × 2^k)</text>
+      <text x="62" y="110" fill="#9fe8c0" font-size="9">centre 2^(k−1)</text>
+      <path d="M180 105 L 216 105" stroke="#9fd0e8" fill="none" marker-end="url(#arw2)"/>
+      <defs><marker id="arw2" markerWidth="9" markerHeight="9" refX="8" refY="3.2" orient="auto"><path d="M0,0 L8,3.2 L0,6.4 z" fill="#9fd0e8"/></marker></defs>
+      <rect x="222" y="67.5" width="75" height="75" fill="#2c5a44" fill-opacity="0.9" stroke="#5fbf77"/>
+      <text x="200" y="58" fill="#9fd0e8" font-size="9.5">.result — cached</text>
+      <text x="228" y="100" fill="#9fe8c0" font-size="9">advanced</text>
+      <text x="228" y="113" fill="#9fe8c0" font-size="9">2^(k−2) gens</text>
+      <text x="20" y="206" fill="#8090a0">Combined from <tspan fill="#cfe3f2">nine</tspan> sub-results, recursively.</text>
+      <text x="20" y="220" fill="#8090a0">Base case (level 2, 4×4) = centre 2×2, <tspan fill="#cfe3f2">1</tspan> generation.</text>
+      <text x="20" y="238" fill="#e8a13a">⇒ a big node advances 2^k generations for one lookup —</text>
+      <text x="20" y="250" fill="#e8a13a">   and <tspan fill="#f09a8a">never computes the ones in between</tspan>.</text>
+    </g>
+  </svg>
+  <div class="cap">Gosper 1984. The exponential time jump is the headline — and it is also why the
+  transport, the indicators, recording, end conditions and Stop Events all lose their meaning under it.</div>
+ </div>
+</div>
+
+<h3>Measured: 8×8 tile dedup — the whole trade in one table</h3>
+<table>
+  <tr><th>512² fixture</th><th style="width:20%">distinct tiles, t = 0</th><th style="width:20%">t = 2000</th><th>reading</th></tr>
+  <tr><td>random soup p = 0.35</td><td class="num lose">4096 / 4096 (100%)</td><td class="num">1074 / 4096 (26%)</td><td>nothing to share on arrival; ~4× once settled</td></tr>
+  <tr><td>R-pentomino</td><td class="num win">4 / 4096 (0.1%)</td><td class="num win">45 / 4096 (1.1%)</td><td>~90× — HashLife's home turf</td></tr>
+  <tr><td>single glider</td><td class="num win">2 / 4096</td><td class="num win">5 / 4096 (0.1%)</td><td>~800×</td></tr>
+</table>
+<p class="cap" style="margin-top:2px">Exactly the published behaviour: <strong>pathological for chaotic
+input, spectacular for sparse structured patterns.</strong> A GenesisCA model with a <code>float</code>
+attribute has effectively zero dedup by construction — a float leaf key never repeats.</p>
+</div>
+
+<!-- ═══════════════════════════════════════════════════ -->
+<h2>4 · O(active) <em>memory</em> — chunked storage</h2>
+
+<div class="panel">
+<div class="pair">
+ <div>
+  <span class="tag t-ship">TODAY — dense</span>
+  <svg viewBox="0 0 300 210" width="100%" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Every chunk of the grid is allocated regardless of content">
+    <g>
+      <rect x="10" y="10" width="256" height="160" fill="#2a3546" stroke="#2a3a50"/>
+      <g stroke="#3c4a5e" stroke-width="1">
+        <path d="M42 10V170M74 10V170M106 10V170M138 10V170M170 10V170M202 10V170M234 10V170"/>
+        <path d="M10 42H266M10 74H266M10 106H266M10 138H266"/>
+      </g>
+      <rect x="106" y="74" width="32" height="32" fill="#e8a13a"/>
+      <rect x="138" y="74" width="32" height="32" fill="#e8a13a" fill-opacity="0.45"/>
+    </g>
+    <g font-family="ui-monospace, Consolas, monospace" font-size="10.5">
+      <text x="10" y="192" fill="#a9bccd">256 / 256 chunks allocated</text>
+      <text x="10" y="206" fill="#f09a8a">4.00 MB per attribute · one flat typed array</text>
+    </g>
+  </svg>
+  <div class="cap">Each attribute is one dense <code>total</code>-length typed array at a <strong>baked</strong>
+  offset in <code>wasmMemory</code>. <code>idx</code> is a flat index — used by the compiled loop, the NI codec,
+  the brush, the clipboard, the inspector, the colour buffer and both renderers.</div>
+ </div>
+ <div>
+  <span class="tag t-new">TIER B — chunk map + halo</span>
+  <svg viewBox="0 0 300 210" width="100%" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Only occupied chunks and their halo are allocated">
+    <g>
+      <rect x="10" y="10" width="256" height="160" fill="#0b1017" stroke="#2a3a50"/>
+      <g fill="#243347">
+        <rect x="74" y="42" width="96" height="96"/>
+      </g>
+      <g fill="#2c5a44" fill-opacity="0.9"><rect x="106" y="74" width="64" height="32"/></g>
+      <g stroke="#1e2a3a" stroke-width="1">
+        <path d="M42 10V170M74 10V170M106 10V170M138 10V170M170 10V170M202 10V170M234 10V170"/>
+        <path d="M10 42H266M10 74H266M10 106H266M10 138H266"/>
+      </g>
+      <rect x="106" y="74" width="32" height="32" fill="#e8a13a"/>
+      <rect x="138" y="74" width="32" height="32" fill="#e8a13a" fill-opacity="0.45"/>
+      <rect x="74" y="42" width="96" height="96" fill="none" stroke="#5fbf77" stroke-dasharray="4 3"/>
+    </g>
+    <g font-family="ui-monospace, Consolas, monospace" font-size="10.5">
+      <text x="10" y="192" fill="#a9bccd">occupied + halo only</text>
+      <text x="10" y="206" fill="#7fe0a0">measured: 10 → <tspan fill="#f0d68a">46</tspan> of 256 · 0.72 MB · 5.6×</text>
+    </g>
+  </svg>
+  <div class="cap">Measured at 1024² after 2000 generations: <strong>1.0×</strong> for a soup,
+  <strong>5.6×</strong> for an R-pentomino, <strong>16.0×</strong> for a glider. The halo is expensive at
+  64² granularity — 10 occupied chunks become 46 allocated.</div>
+ </div>
+</div>
+<p class="note" style="margin-bottom:0"><strong>The win is a function of the grid-to-structure ratio, not of the
+technique.</strong> At realistic grid sizes it is 1×–16×. Its genuine value is only the limit case the
+brainstorm names — <em>unbounded</em> — where dense storage is not wasteful but <em>impossible</em>. That
+needs a third <code>boundaryTreatment</code> and touches the SoA layout, both CPU layouts, the WebGPU
+buffers, the flat cell index, save/load, the brush, the clipboard and every renderer. <strong>Milestone-sized.</strong></p>
+</div>
+
+<!-- ═══════════════════════════════════════════════════ -->
+<h2>5 · The tiers</h2>
+
+<div class="panel">
+<table>
+ <tr>
+  <th style="width:15%">tier</th><th style="width:23%">what the user gets</th>
+  <th style="width:9%">compiler<br>surface</th><th style="width:11%">targets</th>
+  <th style="width:16%">measured payoff</th><th>verdict</th>
+ </tr>
+ <tr>
+  <td><strong>A0</strong><br>stable value <em>set</em></td>
+  <td>“Empty value” → “<strong>Stable values</strong>” (multi-select). Terminal states become skippable.</td>
+  <td class="num win">none</td>
+  <td>JS + WASM<br><span class="cap">(as today)</span></td>
+  <td class="win">Wildfire 2.08× → <strong>25.19×</strong></td>
+  <td><span class="win">⭐ RECOMMENDED.</span> Worker + schema + UI only. Byte-identity by construction. Ship it with Wildfire as the demonstrator.</td>
+ </tr>
+ <tr>
+  <td><strong>A1</strong><br>quiescence (dirty) term</td>
+  <td>Optional: “also a source for one generation after it changes”. The only way to skip a Life still life.</td>
+  <td class="num win">none</td>
+  <td>JS + WASM</td>
+  <td class="mid">GoL +1.7–2.0× on top of A0</td>
+  <td><span class="mid">MAYBE, LATER.</span> Breaks the state-defined property; <strong>unsound</strong> for a rule with RNG / model attrs / <code>Get Generation</code> / indicators — needs an explicit user assertion.</td>
+ </tr>
+ <tr>
+  <td><strong>A2</strong><br>graph-authored predicate</td>
+  <td>A boolean expression node deciding stability.</td>
+  <td class="num lose">new entry point ×3</td>
+  <td>all three</td>
+  <td class="cap">≤ A0 in practice</td>
+  <td><span class="lose">NO.</span> A full extra per-cell pass just to decide who to skip, plus a fourth compile surface. A value set already covers the real cases.</td>
+ </tr>
+ <tr>
+  <td><strong>B</strong><br>chunked / unbounded</td>
+  <td>“Infinite like golly” — allocate only what is occupied.</td>
+  <td class="num lose">structural</td>
+  <td>all three must change together</td>
+  <td class="mid">1.0× soup · 5.6× methuselah · 16× glider</td>
+  <td><span class="lose">DEFER.</span> Breaks “a cell is a flat index into a dense array”, the project's central invariant. Own milestone, own Impact Map. <em>Tier C requires it.</em></td>
+ </tr>
+ <tr>
+  <td><strong>C</strong><br>HashLife</td>
+  <td>Exponential 2^k time jumps for pure, r=1, small-state, unbounded models.</td>
+  <td class="num lose">a separate engine</td>
+  <td>CPU only<br><span class="lose">(fundamental)</span></td>
+  <td class="cap">huge — for 3 shipped models that are all one rule</td>
+  <td><span class="lose">NO, not now.</span> Needs B first, its own quadtree renderer, and a transport with no intermediate generations, no per-generation indicators and no Stop Events. If ever: a fourth <code>EngineChoice</code>, never a “feature”.</td>
+ </tr>
+ <tr>
+  <td><strong>D</strong><br>WebGPU compaction</td>
+  <td>Nothing visible — SIE stops being a no-op on the GPU.</td>
+  <td class="num mid">runtime, not emit</td>
+  <td class="win">all three ✓</td>
+  <td class="cap">unblocks large sparse volumes</td>
+  <td><span class="mid">DO — AFTER A0.</span> Reuse the shipped agent count→scan→scatter. Don't GPU-port a predicate that is about to be generalised.</td>
+ </tr>
+</table>
+</div>
+
+<div class="panel">
+<h3 style="margin-top:0">⚠ The finding with the best effort-to-value ratio in the whole document</h3>
+<p style="margin-bottom:0"><strong>Exactly one shipped model carries a <code>skipIsolatedEmpty</code> config
+— the Accretor — and it is <code>enabled: false</code></strong>, while its own Rule Description tells the user
+the 27M-cell volume “is practical because Skip Isolated Empty Cells is ON”. The same mismatch was flagged in
+<code>PERF_REVIEW_LATTICE.md</code> §6 on 2026-07-24 and is still there. <strong>The feature has zero users in
+the library, which is the practical reason it reads as unimplemented.</strong> Fixing one boolean (or one
+sentence) beats every tier above on effort.</p>
+</div>
+
+<!-- ═══════════════════════════════════════════════════ -->
+<h2>6 · Why memoisation and GenesisCA's step disagree</h2>
+
+<div class="panel">
+<p style="margin-top:0">GenesisCA's step is a <em>compiled user graph</em>, not a fixed rule. Anything that
+memoises “this neighbourhood ⇒ this result” bets on the step being a <strong>pure function of the cells in its
+read-neighbourhood</strong>. Where that bet loses:</p>
+<table>
+ <tr><th style="width:34%">feature</th><th style="width:22%">active set (A / B / D)</th><th>HashLife (C)</th></tr>
+ <tr><td><code>getRandom</code>, <code>pickRandomNeighbor</code>, <code>aggregate.random</code>…</td><td class="win">✅ fine</td><td class="lose">⛔ fatal — not a function of the neighbourhood; the xorshift stream is global mutable state</td></tr>
+ <tr><td><code>setIndicator</code> / <code>updateIndicator</code> / <code>getIndicator</code></td><td class="win">✅ fine</td><td class="lose">⛔ fatal — order-dependent shared accumulator, and a 2^k jump never visits the generations that write it</td></tr>
+ <tr><td><code>getModelAttribute</code>, lookup tables</td><td class="win">✅ fine</td><td class="mid">⚠ live sliders are the interaction idiom — every move invalidates the memo table</td></tr>
+ <tr><td>Stop Events / End Conditions</td><td class="win">✅ fine</td><td class="lose">⛔ cannot fire mid-jump</td></tr>
+ <tr><td><code>Get Generation</code> (cadence)</td><td class="mid">⚠ breaks a <em>dirty</em> predicate</td><td class="lose">⛔ time-varying rule</td></tr>
+ <tr><td>async mode · agents / field bridge · glyphs</td><td class="cap">⛔ already excluded by the gate</td><td class="lose">⛔ fatal</td></tr>
+ <tr><td>float attributes</td><td class="win">✅ fine</td><td class="lose">⛔ dedup ≈ 0 — a float leaf key never repeats</td></tr>
+ <tr><td>neighbourhood radius &gt; 1 (MNCA, Coagulation, Accretor)</td><td class="win">✅ fine</td><td class="lose">⛔ the classic node algebra is r = 1</td></tr>
+ <tr><td>torus / constant boundary</td><td class="win">✅ fine</td><td class="lose">⛔ HashLife assumes an infinite uniform background — neither shipped boundary is one</td></tr>
+ <tr><td>WebGPU</td><td class="mid">⚠ Tier D closes it</td><td class="lose">⛔ memoised recursion over a hash-consed pointer graph has no GPU form</td></tr>
+</table>
+<p><strong>Applying that gate to the shipped library — MEASURED, all 31 models compiled and their emitted
+steps tested:</strong> <strong class="win">3 of 31 pass, and all three are the same rule</strong> — Game Of
+Life, General 2D CA (Golly style) and GoL Replicate Statistics. 12 are agents-only (no grid at all); the
+other 16 are rejected.</p>
+<p style="margin-bottom:0">The 16 rejections by blocker (a model can carry several): <strong>live model
+attributes 13</strong> — the commonest, and the least surprising, since a live slider is exactly what
+GenesisCA is for — <strong>RNG 7</strong>, <strong>radius &gt; 1: 4</strong>, <strong>async 4</strong>,
+<strong>3D 2</strong>, <strong>indicators 2</strong>, <strong>float attributes 2</strong>,
+<strong>agents 2</strong>. Even <strong>Extended Wireworld</strong>, the “one other plausible candidate”, is
+stopped before its 4 states matter — by a model attribute and an indicator.</p>
+</div>
+
+<!-- ═══════════════════════════════════════════════════ -->
+<h2>7 · The adjacent finding — Golly's <em>other</em> idea</h2>
+<div class="panel">
+<p style="margin-top:0">Golly's <strong>Larger than Life</strong> algorithm makes big-radius <em>totalistic</em>
+rules O(1) per cell with <strong>cumulative / summed-area sums</strong>. GenesisCA's MNCA-class models are
+exactly that shape and are its worst measured lattice case — <strong>229 ms/gen and a 693 MB neighbour table at
+512²</strong> — and Skip Isolated Empty Cells is documented as <em>measurably worse</em> for them.</p>
+<p style="margin-bottom:0">A compile-time recognition of “<em>this is a sum or count of one attribute over a
+contiguous box or disc</em>” → a prefix-sum pass would collapse that on <strong>all three targets</strong>
+(a prefix sum is trivially GPU-friendly, unlike everything else in this document). <strong>This is a much
+better fit for GenesisCA's actual model population than HashLife</strong>, and it deserves its own
+investigation.</p>
+</div>
+
+<div class="foot">
+Measurements taken on the development machine, 2026-09-05, Node 22, driving the real shipped compiled step
+(<code>compileHarness.compileAll</code>) and the real <code>src/simulator/engine/activeSet.ts</code> over the
+shipped <code>Game of Life.gcaproj</code> and <code>Wildfire - Sierra Nevada.gcaproj</code>. The hand-rolled
+dilation used for the value-set sweep was cross-checked against the shipped <code>rebuildActiveSet()</code> —
+exact match on two independent single-value cases. <strong>Quote the ratios; re-measure the absolutes.</strong>
+</div>
+
+</div>
+</body>
+</html>
