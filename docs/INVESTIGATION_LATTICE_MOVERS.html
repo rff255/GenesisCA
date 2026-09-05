@@ -1,0 +1,767 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GenesisCA — Lattice Movers Investigation</title>
+<style>
+  :root{
+    --bg:#0c0d10; --panel:#16181d; --panel2:#1c1f26; --panel3:#22262f;
+    --border:#2a2e37; --border2:#3a3f4a;
+    --ink:#e9ebee; --muted:#9aa0aa; --faint:#6b7280;
+    --accent:#e8a13a; --accent2:#f4c06a; --accent-soft:rgba(232,161,58,.13);
+    --cyan:#4cc9f0; --green:#66bb6a; --red:#e0566a; --purple:#b08cff; --pink:#f06aa8;
+    --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;
+    --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth;color-scheme:dark}
+  body{margin:0;background:#0c0d10;color:#e9ebee;font-family:var(--sans);line-height:1.6;
+    background-image:radial-gradient(1100px 480px at 80% -8%,rgba(232,161,58,.07),transparent 60%),
+      radial-gradient(900px 420px at 0% 0%,rgba(76,201,240,.05),transparent 55%);}
+  a{color:var(--accent2);text-decoration:none} a:hover{text-decoration:underline}
+  .wrap{max-width:1120px;margin:0 auto;padding:0 22px 90px}
+  header.hero{padding:60px 22px 26px;max-width:1120px;margin:0 auto}
+  .kicker{display:inline-flex;align-items:center;gap:8px;font-size:12px;letter-spacing:.16em;text-transform:uppercase;
+    color:var(--accent);border:1px solid var(--border2);background:var(--accent-soft);padding:5px 11px;border-radius:999px}
+  h1{font-size:clamp(29px,5vw,48px);line-height:1.07;margin:18px 0 10px;letter-spacing:-.02em}
+  h1 .sub{display:block;font-size:clamp(15px,2.2vw,20px);font-weight:500;color:var(--muted);margin-top:12px;letter-spacing:0}
+  .herometa{display:flex;flex-wrap:wrap;gap:10px 18px;margin-top:20px;color:var(--faint);font-size:13px}
+  .herometa b{color:var(--muted);font-weight:600}
+  .status{display:inline-block;margin-top:18px;font-size:13px;color:var(--accent2);border:1px solid rgba(232,161,58,.35);
+    background:rgba(232,161,58,.08);border-radius:8px;padding:7px 12px}
+  blockquote.brain{margin:22px 0 0;padding:14px 18px;border-left:3px solid var(--purple);
+    background:rgba(176,140,255,.07);border-radius:0 10px 10px 0;color:#d4d7dd;font-size:14.5px}
+  nav.toc{position:sticky;top:0;z-index:20;background:rgba(12,13,16,.86);backdrop-filter:blur(10px);
+    border-top:1px solid var(--border);border-bottom:1px solid var(--border);margin-top:32px}
+  nav.toc .row{max-width:1120px;margin:0 auto;padding:9px 22px;display:flex;flex-wrap:wrap;gap:5px 6px;font-size:12.5px}
+  nav.toc a{color:var(--muted);padding:5px 9px;border-radius:7px;white-space:nowrap}
+  nav.toc a:hover{color:var(--ink);background:var(--panel2);text-decoration:none}
+  section{margin-top:40px}
+  .card{background:linear-gradient(180deg,#16181d,#131519);border:1px solid var(--border);border-radius:16px;
+    padding:24px 26px;box-shadow:0 1px 0 rgba(255,255,255,.02) inset, 0 20px 40px -30px rgba(0,0,0,.8)}
+  h2{font-size:23px;margin:0 0 4px;letter-spacing:-.01em;display:flex;align-items:baseline;gap:12px}
+  h2 .n{font-family:var(--mono);font-size:14px;color:var(--accent);border:1px solid var(--border2);
+    background:var(--accent-soft);border-radius:8px;padding:2px 9px;flex:none}
+  h2 .n.alt{color:var(--cyan);background:rgba(76,201,240,.1)}
+  .lede{color:var(--muted);font-size:15.5px;margin:6px 0 18px;max-width:82ch}
+  h3{font-size:16.5px;margin:24px 0 8px;color:var(--accent2)}
+  h4{font-size:14.5px;margin:18px 0 6px;color:var(--cyan)}
+  p{margin:10px 0;color:#d4d7dd}
+  .small{font-size:13px;color:var(--faint)}
+  figure{margin:18px 0 6px;background:#101216;border:1px solid var(--border);border-radius:12px;padding:16px}
+  figure svg{display:block;width:100%;height:auto}
+  figcaption{color:var(--muted);font-size:13px;margin-top:12px;padding-top:10px;border-top:1px dashed var(--border2)}
+  figcaption b{color:var(--ink)}
+  pre.code{background:#0a0c0f;border:1px solid var(--border2);border-radius:10px;padding:14px 16px;overflow:auto;
+    font-family:var(--mono);font-size:12.5px;line-height:1.55;color:#cdd3da;margin:10px 0}
+  .code .c{color:#6b7280} .code .k{color:var(--purple)} .code .s{color:var(--green)} .code .y{color:var(--accent2)}
+  .code .hl{background:rgba(232,161,58,.16);border-radius:3px;padding:0 2px}
+  .code .del{color:var(--red)} .code .add{color:var(--green)}
+  code.inl{font-family:var(--mono);font-size:.9em;background:#0a0c0f;border:1px solid var(--border2);
+    border-radius:5px;padding:1px 5px;color:#cdd3da}
+  table{width:100%;border-collapse:collapse;margin:14px 0;font-size:13.5px}
+  th,td{text-align:left;padding:8px 10px;border-bottom:1px solid var(--border);vertical-align:top}
+  th{color:var(--accent2);font-weight:600;font-size:12.5px;text-transform:uppercase;letter-spacing:.05em;
+    border-bottom:1px solid var(--border2)}
+  td{color:#d4d7dd}
+  tr:last-child td{border-bottom:none}
+  .num{font-family:var(--mono);text-align:right;white-space:nowrap}
+  .ok{color:var(--green);font-weight:600}
+  .bad{color:var(--red);font-weight:600}
+  .warn{color:var(--accent);font-weight:600}
+  .callout{border:1px solid var(--border2);border-left:3px solid var(--accent);background:rgba(232,161,58,.06);
+    border-radius:0 10px 10px 0;padding:13px 17px;margin:16px 0;font-size:14.5px;color:#d9dce2}
+  .callout.danger{border-left-color:var(--red);background:rgba(224,86,106,.07)}
+  .callout.good{border-left-color:var(--green);background:rgba(102,187,106,.07)}
+  .callout b{color:var(--ink)}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:18px}
+  @media(max-width:820px){.grid2{grid-template-columns:1fr}}
+  .pill{display:inline-block;font-family:var(--mono);font-size:11.5px;padding:2px 8px;border-radius:999px;
+    border:1px solid var(--border2);color:var(--muted);background:var(--panel2)}
+  .pill.g{color:var(--green);border-color:rgba(102,187,106,.4);background:rgba(102,187,106,.09)}
+  .pill.r{color:var(--red);border-color:rgba(224,86,106,.4);background:rgba(224,86,106,.09)}
+  .pill.c{color:var(--cyan);border-color:rgba(76,201,240,.4);background:rgba(76,201,240,.09)}
+  footer{margin-top:56px;padding-top:22px;border-top:1px solid var(--border);color:var(--faint);font-size:13px}
+  .svgtxt{font-family:var(--sans);font-size:12px;fill:#c9ced6}
+  .svgtxt.sm{font-size:10.5px;fill:#8b929c}
+  .svgtxt.b{font-weight:700;fill:#e9ebee}
+  .svgmono{font-family:var(--mono);font-size:11px;fill:#cdd3da}
+</style>
+</head>
+<body>
+
+<header class="hero">
+  <span class="kicker">Investigation · Design study</span>
+  <h1>Lattice movers
+    <span class="sub">Mass-conserving movement on a <em>parallel</em> CA grid — how to take “transfer cell attributes to neighbour” to WebGPU without a sequential sweep.</span>
+  </h1>
+  <div class="herometa">
+    <span><b>Scope</b> cell grid (not agents)</span>
+    <span><b>Targets</b> JS · WASM · WebGPU</span>
+    <span><b>Dimensions</b> 2D + 3D</span>
+    <span><b>Code changed</b> none</span>
+  </div>
+  <div class="status">⚗️ DESIGN STUDY — nothing shipped. Prototype measured; recommendation in §8; falsifiers in §8.3.</div>
+  <blockquote class="brain">
+    <b style="color:var(--purple)">The brainstorm, verbatim —</b>
+    “design a CAGrid mode in which the cells are treated as agents that can move around over other cells that are &quot;empty&quot;, effectively unlocking the ability to use webgpu while having the mass conservation of occupied cells moving around and optionally overlapping or colliding, but the main point is: some CAs become incompatible with webgpu by having to set neighbors attributes via the 'transfer cells attributes to neighbor' node, but if the goal is just to &quot;move&quot; an entity that the cell is representing to a neighboring cell, then we could treat it as agents that are locked inside a grid and with that enable the use of webgpu to simulate those as well, however the &quot;conflict&quot;/&quot;collision&quot; policy needs to be determined somehow.”
+  </blockquote>
+</header>
+
+<nav class="toc"><div class="row">
+  <a href="#s2">Summary</a>
+  <a href="#s3">The problem</a>
+  <a href="#s4">Formalisms</a>
+  <a href="#s5">Designs A–D</a>
+  <a href="#s6">Policies</a>
+  <a href="#s7">Measurements</a>
+  <a href="#s8">Recommendation</a>
+  <a href="#s9">Impact map</a>
+</div></nav>
+
+<div class="wrap">
+
+<!-- ============================================================ 2 -->
+<section id="s2"><div class="card">
+  <h2><span class="n">2</span> Executive summary</h2>
+  <p class="lede">The diagnosis in the brainstorm is right, and the conclusion is stronger than it assumes.</p>
+
+  <p>A move-into-a-vacancy rule is <b>not</b> fundamentally sequential. What is fundamentally sequential is the <em>implementation</em> GenesisCA offers for it: async mode’s single shared buffer, where “is my target empty?” is answered against a board other cells are mutating. The rule itself needs exactly one guarantee — <b>no two entities land on the same cell</b> — and that is a <b>conflict-resolution problem, not an ordering problem</b>. Conflict resolution parallelises. Ordering does not.</p>
+
+  <div class="callout good">
+    <b>The recommendation is design (A): a two-phase PROPOSE → RESOLVE step.</b> Phase 1 is the user’s existing rule, ending in a new <code class="inl">proposeMove</code> node that writes an <em>intent</em> instead of writing the neighbour. Phase 2 is an <b>engine-owned</b> pass in which <b>every cell writes only itself</b>. Both phases are pure functions of the previous buffer — so both are order-independent, and both are ordinary WGSL dispatches.
+  </div>
+
+  <h3>What the prototype measured</h3>
+  <table>
+    <tr><th>Claim</th><th>Result</th></tr>
+    <tr><td>Mass conservation, every policy, 10 → 99 % occupancy</td><td><span class="ok">EXACT at every generation</span> — <code class="inl">received == cleared</code></td></tr>
+    <tr><td>Order independence of the resolve pass</td><td><span class="ok">0 mismatching cells</span> over 30 gens × 4 random visit orders</td></tr>
+    <tr><td>Determinism, same seed</td><td><span class="ok">Hashes match</span> for both RNG sources, all four policies</td></tr>
+    <tr><td>Throughput vs. the <em>correct</em> sequential reference</td><td><b>97 %</b> @10 % fill · <b>92 %</b> @20 % · <b>84 %</b> @35 % · 43 % @76 % · 31 % @90 %</td></tr>
+    <tr><td>A naive chain extension</td><td><span class="bad">BROKE conservation</span> — §7.6 documents the trap and the monotone fix</td></tr>
+  </table>
+
+  <h3>Three findings that reframe the problem</h3>
+  <div class="grid2">
+    <div>
+      <h4>1 · The usual baseline is inflated</h4>
+      <p>A naive shuffled sweep re-visits a particle that moved into a not-yet-visited cell, so one particle moves <b>1.61 times per generation</b> at 10 % fill — impossible for a “one cell per step” rule. GenesisCA already ships <code class="inl">markCellUpdated</code> to suppress exactly this. Against the <em>marked</em> baseline the parallel scheme is nearly free at the densities most models run at.</p>
+    </div>
+    <div>
+      <h4>2 · Async is <em>already</em> order-dependent</h4>
+      <p>For a packed “train”, a right-to-left sweep advances all <em>K</em> movers and a left-to-right sweep advances <b>1</b> — same state, <code class="inl">markCellUpdated</code> on. The random-order scheme re-rolls that every generation. The parallel scheme always gives the left-to-right answer: <b>one of the answers async already produces</b>, deterministically.</p>
+    </div>
+  </div>
+  <div style="margin-top:14px">
+    <h4>3 · The prize is the ceiling, not the four shipped models</h4>
+    <p>Every shipped async model is 8 600–10 000 cells, where WASM is entirely adequate. The real constraint is that <b>today a model may have movement with mass conservation, <em>or</em> a grid big enough to need WebGPU — never both.</b> The Accretor ships at 300³ = 27 M cells; a moving-entity model at that scale is not slow, it is <em>inexpressible</em>.</p>
+  </div>
+</div></section>
+
+<!-- ============================================================ 3 -->
+<section id="s3"><div class="card">
+  <h2><span class="n">3</span> The problem, precisely</h2>
+  <p class="lede">Two cells want the same empty cell. Sequential execution answers that by making one of them go first. A parallel dispatch has no “first”.</p>
+
+  <figure>
+    <svg viewBox="0 0 900 300" role="img" aria-label="The write conflict: two movers target one empty cell">
+      <!-- left: the conflict -->
+      <text x="20" y="24" class="svgtxt b">The conflict</text>
+      <text x="20" y="42" class="svgtxt sm">two occupied cells, one shared empty target</text>
+      <g transform="translate(20,58)">
+        <rect x="0" y="0" width="60" height="60" fill="#1c1f26" stroke="#3a3f4a"/>
+        <rect x="62" y="0" width="60" height="60" fill="#2a3a2f" stroke="#66bb6a" stroke-width="2"/>
+        <text x="92" y="35" class="svgtxt b" text-anchor="middle" fill="#66bb6a">A</text>
+        <rect x="124" y="0" width="60" height="60" fill="#1c1f26" stroke="#3a3f4a"/>
+        <rect x="62" y="62" width="60" height="60" fill="#22262f" stroke="#e8a13a" stroke-width="2" stroke-dasharray="5 4"/>
+        <text x="92" y="97" class="svgtxt" text-anchor="middle" fill="#e8a13a">empty</text>
+        <rect x="0" y="124" width="60" height="60" fill="#1c1f26" stroke="#3a3f4a"/>
+        <rect x="62" y="124" width="60" height="60" fill="#3a2a35" stroke="#f06aa8" stroke-width="2"/>
+        <text x="92" y="159" class="svgtxt b" text-anchor="middle" fill="#f06aa8">B</text>
+        <rect x="124" y="124" width="60" height="60" fill="#1c1f26" stroke="#3a3f4a"/>
+        <!-- arrows -->
+        <path d="M92 62 L92 78" stroke="#66bb6a" stroke-width="3" fill="none" marker-end="url(#ar-g)"/>
+        <path d="M92 122 L92 106" stroke="#f06aa8" stroke-width="3" fill="none" marker-end="url(#ar-p)"/>
+      </g>
+      <defs>
+        <marker id="ar-g" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto"><path d="M0 0 L9 4.5 L0 9 z" fill="#66bb6a"/></marker>
+        <marker id="ar-p" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto"><path d="M0 0 L9 4.5 L0 9 z" fill="#f06aa8"/></marker>
+        <marker id="ar-c" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto"><path d="M0 0 L9 4.5 L0 9 z" fill="#4cc9f0"/></marker>
+        <marker id="ar-a" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto"><path d="M0 0 L9 4.5 L0 9 z" fill="#e8a13a"/></marker>
+        <marker id="ar-m" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto"><path d="M0 0 L9 4.5 L0 9 z" fill="#9aa0aa"/></marker>
+      </defs>
+
+      <!-- middle: async answer -->
+      <text x="250" y="24" class="svgtxt b">Async (today)</text>
+      <text x="250" y="42" class="svgtxt sm">single buffer, shuffled order</text>
+      <g transform="translate(250,58)">
+        <rect x="0" y="0" width="230" height="184" rx="10" fill="#131519" stroke="#2a2e37"/>
+        <text x="16" y="30" class="svgmono" fill="#66bb6a">1. A runs → target empty → A moves</text>
+        <text x="16" y="56" class="svgmono" fill="#f06aa8">2. B runs → target now FULL → stays</text>
+        <text x="16" y="88" class="svgtxt sm">Correct, conservative — and</text>
+        <text x="16" y="106" class="svgtxt sm" fill="#e8a13a">the answer depends entirely on</text>
+        <text x="16" y="124" class="svgtxt sm" fill="#e8a13a">which of A or B was shuffled first.</text>
+        <text x="16" y="156" class="svgmono" fill="#e0566a">✗ no parallel-GPU representation</text>
+      </g>
+
+      <!-- right: parallel answer -->
+      <text x="510" y="24" class="svgtxt b">Parallel propose / resolve</text>
+      <text x="510" y="42" class="svgtxt sm">two passes, previous buffer only</text>
+      <g transform="translate(510,58)">
+        <rect x="0" y="0" width="370" height="184" rx="10" fill="#131519" stroke="#2a2e37"/>
+        <text x="16" y="30" class="svgmono" fill="#4cc9f0">1. A and B BOTH write an intent</text>
+        <text x="34" y="50" class="svgmono" fill="#8b929c">intent[A] = (prio, slot↓) intent[B] = (prio, slot↑)</text>
+        <text x="16" y="78" class="svgmono" fill="#4cc9f0">2. the empty cell picks ONE winner</text>
+        <text x="34" y="98" class="svgmono" fill="#8b929c">by a named policy — a total order</text>
+        <text x="16" y="126" class="svgmono" fill="#66bb6a">✓ order-independent · exactly conserving</text>
+        <text x="16" y="146" class="svgmono" fill="#66bb6a">✓ deterministic · two plain dispatches</text>
+        <text x="16" y="168" class="svgtxt sm">The loser stays put — same outcome class as async,</text>
+      </g>
+      <text x="526" y="244" class="svgtxt sm">reached by arbitration instead of by ordering.</text>
+    </svg>
+    <figcaption><b>The whole argument in one picture.</b> The rule needs “at most one arrival per cell”. Sequential execution buys that with an <em>order</em>; a parallel step can buy the same thing with an <em>arbitration</em> — and arbitration is a pure function of the previous state, so it is a legal GPU kernel.</figcaption>
+  </figure>
+
+  <h3>3.1 · What is locked off, and by which gate</h3>
+  <table>
+    <tr><th>Gate</th><th>Where</th><th>Rejects</th></tr>
+    <tr><td><b>Model-level</b></td><td><code class="inl">detectWebGPUModelIncompatibilities</code> · nodeValidation.ts:1378</td><td><code class="inl">updateMode === 'asynchronous'</code>, outright</td></tr>
+    <tr><td><b>Node-level</b></td><td><code class="inl">detectWebGPUIncompatibilities</code> · nodeValidation.ts:1292</td><td><code class="inl">moveSelfToNeighbor</code>, <code class="inl">setFacingOrientation</code>, <code class="inl">setNeighborOrientationByIndex</code>, and <code class="inl">updateIndicator</code> with toggle/next/previous</td></tr>
+  </table>
+  <p>The remaining three async-only nodes are deliberately <em>not</em> in the node list — they surface through the “requires async mode” capability badge plus the model-level rejection, which the file’s own comment calls “together unambiguous”. <code class="inl">isNodeAvailable</code> hides all six from the palette in a sync model.</p>
+
+  <h3>3.2 · What actually needs sequentiality</h3>
+  <p>The six async-only nodes are not one category, and sorting them <em>is</em> the design:</p>
+  <table>
+    <tr><th>Node</th><th>Writes</th><th>Genuinely order-dependent?</th></tr>
+    <tr><td><code class="inl">moveSelfToNeighbor</code></td><td>one target + self</td><td><span class="ok">NO</span> — a <em>permutation</em>: at most one payload per cell. A conflict problem.</td></tr>
+    <tr><td><code class="inl">setNeighborAttributeByIndex</code></td><td>one/array of neighbours</td><td><span class="ok">NO</span> when used as a move (gas_particles, snake); <span class="bad">YES</span> if two writers legitimately differ and last-writer matters.</td></tr>
+    <tr><td><code class="inl">setNeighborhoodAttribute</code></td><td><em>every</em> cell of a neighbourhood</td><td><span class="bad">YES, structurally</span> — a broadcast. N writers per cell is the <em>intent</em>. No arbitration preserves that.</td></tr>
+    <tr><td><code class="inl">setFacingOrientation</code> · <code class="inl">setNeighborOrientationByIndex</code></td><td>one neighbour’s orientation</td><td>Same shape as <code class="inl">setNeighborAttributeByIndex</code>.</td></tr>
+    <tr><td><code class="inl">markCellUpdated</code></td><td>the scheduler’s <code class="inl">_skipped</code> flag</td><td><span class="warn">N/A</span> — it exists <em>only</em> to patch a sequential artifact. In a two-phase scheme it is <b>unnecessary</b>.</td></tr>
+  </table>
+  <div class="callout">
+    <b>Read the node’s own doc comment:</b> <em>“Async-only. It writes neighbour cells … sync mode’s post-step bulk copy would overwrite those writes.”</em> That is a statement about <b>the buffer discipline</b>, not about the rule’s semantics. Give the rule a mechanism that answers “did I get the cell?” <em>after</em> everyone has asked, and the live buffer stops being necessary.
+  </div>
+  <p>Both shipped movement models configure the node identically in the load-bearing respect — <code class="inl">operation:&nbsp;'copyTo'</code>, <code class="inl">nonReceiving:&nbsp;'defaults'</code> — which <em>is</em> the move-into-a-vacancy idiom: payload to the target, source resets, exactly one vacancy left behind.</p>
+
+  <h3>3.3 · The scale observation</h3>
+  <table>
+    <tr><th>Model</th><th>Grid</th><th class="num">Cells</th><th>Target</th><th>Async-only nodes</th></tr>
+    <tr><td>Amphiphile</td><td>100 × 100</td><td class="num">10 000</td><td>WASM</td><td><code class="inl">moveSelfToNeighbor</code> ×1</td></tr>
+    <tr><td>Chromatography</td><td>43 × 200</td><td class="num">8 600</td><td>WASM</td><td><code class="inl">moveSelfToNeighbor</code> ×1</td></tr>
+    <tr><td>gas_particles</td><td>100 × 100</td><td class="num">10 000</td><td>WASM</td><td><code class="inl">setNeighborAttributeByIndex</code> ×1</td></tr>
+    <tr><td>snake</td><td>100 × 100</td><td class="num">10 000</td><td>WASM</td><td><code class="inl">setNeighborAttributeByIndex</code> ×3 + <code class="inl">markCellUpdated</code> ×1</td></tr>
+  </table>
+  <p>At ten thousand cells WASM comfortably beats a GPU round-trip. <b>So the goal is not “make these four faster.”</b> It is to remove a ceiling.</p>
+</div></section>
+
+<!-- ============================================================ 4 -->
+<section id="s4"><div class="card">
+  <h2><span class="n">4</span> Survey — parallel mass-conserving formalisms</h2>
+  <p class="lede">All of these exist in the literature. The column that matters is the last one.</p>
+  <table>
+    <tr><th>Formalism</th><th>Mechanism</th><th>Conservation</th><th>Determinism</th><th>Fit</th></tr>
+    <tr><td><b>Margolus / block CA</b><br><span class="small">Toffoli &amp; Margolus 1987</span></td><td>2×2 blocks, rule maps block→block, partition offset alternates</td><td><span class="ok">Exact by construction</span></td><td>Full; no arbitration exists</td><td>Strong, but a <b>different rule shape</b> → design (B)</td></tr>
+    <tr><td><b>Lattice-gas CA</b><br><span class="small">HPP 1973 · FHP 1986</span></td><td>directional <em>channels</em> per cell; propagate then collide</td><td><span class="ok">Exact</span> — channels permuted</td><td>Full</td><td>Requires re-modelling an entity as channels</td></tr>
+    <tr><td><b>Nagel–Schreckenberg</b><br><span class="small">1992</span></td><td>move up to the <em>gap</em> read from the previous state</td><td><span class="ok">Exact</span></td><td>Given the seed</td><td>Needs a 1-D directed lane (a total order)</td></tr>
+    <tr><td><b>Propose / arbitrate / commit</b><br><span class="small">floor-field &amp; pedestrian CA</span></td><td>one intent per mover; each target picks one winner</td><td><span class="ok">Exact</span> by arbitration</td><td><b>Full</b>, if the tie-break is total</td><td><b>Direct fit → design (A)</b></td></tr>
+    <tr><td><b>Parallel exclusion processes</b><br><span class="small">TASEP/ASEP; Chopard &amp; Droz</span></td><td>hop iff empty; parallel update needs an explicit conflict rule</td><td>Exact once the rule is fixed</td><td>Per the rule</td><td>The theory: a parallel exclusion process is <b>only defined once you name the collision policy</b></td></tr>
+    <tr><td><b>Agents + occupancy map</b></td><td>atomic CAS claim on the occupancy cell</td><td><span class="ok">Exact</span></td><td><span class="bad">None</span> — CAS winner is dispatch-order</td><td>Design (C)</td></tr>
+  </table>
+  <div class="callout">
+    <b>The literature’s verdict on the brainstorm’s closing sentence.</b> “The conflict policy needs to be determined somehow” is not an implementation detail — it is the <b>definition</b> of a parallel exclusion process. Two parallel CAs with the same hop rule and different collision rules are <em>different models</em>. That argues for making the policy an explicit, named, per-model setting rather than an engine constant.
+  </div>
+</div></section>
+
+<!-- ============================================================ 5 -->
+<section id="s5"><div class="card">
+  <h2><span class="n">5</span> Design alternatives</h2>
+
+  <h3>(A) Two-phase <code class="inl">proposeMove</code> / engine resolve — <span class="pill g">RECOMMENDED</span></h3>
+
+  <figure>
+    <svg viewBox="0 0 900 320" role="img" aria-label="The two-pass generation and its buffer discipline">
+      <text x="16" y="22" class="svgtxt b">One generation = two passes, two ping-pongs</text>
+
+      <!-- buffers -->
+      <rect x="16" y="42" width="86" height="230" rx="8" fill="#131519" stroke="#3a3f4a"/>
+      <text x="59" y="64" class="svgtxt b" text-anchor="middle" fill="#4cc9f0">buffer A</text>
+      <text x="59" y="82" class="svgtxt sm" text-anchor="middle">previous</text>
+      <text x="59" y="96" class="svgtxt sm" text-anchor="middle">generation</text>
+
+      <rect x="404" y="42" width="86" height="230" rx="8" fill="#131519" stroke="#3a3f4a"/>
+      <text x="447" y="64" class="svgtxt b" text-anchor="middle" fill="#e8a13a">buffer B</text>
+      <text x="447" y="82" class="svgtxt sm" text-anchor="middle">post-rule</text>
+      <text x="447" y="96" class="svgtxt sm" text-anchor="middle">(scratch)</text>
+
+      <rect x="792" y="42" width="92" height="230" rx="8" fill="#131519" stroke="#4cc9f0" stroke-width="2"/>
+      <text x="838" y="64" class="svgtxt b" text-anchor="middle" fill="#4cc9f0">buffer A</text>
+      <text x="838" y="82" class="svgtxt sm" text-anchor="middle">new</text>
+      <text x="838" y="96" class="svgtxt sm" text-anchor="middle">generation</text>
+
+      <!-- pass 1 -->
+      <rect x="122" y="52" width="262" height="96" rx="10" fill="#1b2530" stroke="#4cc9f0"/>
+      <text x="138" y="76" class="svgtxt b" fill="#4cc9f0">PASS 1 — PROPOSE</text>
+      <text x="138" y="97" class="svgtxt sm">the user’s rule, unchanged …</text>
+      <text x="138" y="115" class="svgmono" fill="#f4c06a">… ending in proposeMove</text>
+      <text x="138" y="135" class="svgtxt sm">writes B (attributes) + intent</text>
+      <path d="M102 100 L120 100" stroke="#4cc9f0" stroke-width="2.5" marker-end="url(#ar-c)"/>
+      <path d="M386 100 L402 100" stroke="#4cc9f0" stroke-width="2.5" marker-end="url(#ar-c)"/>
+
+      <!-- intent buffer -->
+      <rect x="122" y="160" width="262" height="52" rx="8" fill="#241f2e" stroke="#b08cff"/>
+      <text x="138" y="181" class="svgtxt b" fill="#b08cff">intent[ ] — one u32 per cell</text>
+      <text x="138" y="200" class="svgmono" fill="#8b929c">(priority &lt;&lt; 8) | (slot + 1)   ·   0 = none</text>
+      <path d="M253 148 L253 158" stroke="#b08cff" stroke-width="2.5" marker-end="url(#ar-m)"/>
+
+      <!-- pass 2 -->
+      <rect x="510" y="52" width="262" height="160" rx="10" fill="#1e2a22" stroke="#66bb6a"/>
+      <text x="526" y="76" class="svgtxt b" fill="#66bb6a">PASS 2 — RESOLVE</text>
+      <text x="526" y="96" class="svgtxt sm">engine-owned · not user-authored</text>
+      <text x="526" y="120" class="svgmono" fill="#cdd3da">scan 1  am I a destination?</text>
+      <text x="526" y="138" class="svgmono" fill="#cdd3da">scan 2  did my own move win?</text>
+      <text x="526" y="162" class="svgtxt sm" fill="#66bb6a">every cell writes ONLY ITSELF</text>
+      <text x="526" y="180" class="svgtxt sm">carries B→A for untouched cells,</text>
+      <text x="526" y="196" class="svgtxt sm">so it subsumes the bulk copy</text>
+      <path d="M492 132 L508 132" stroke="#66bb6a" stroke-width="2.5" marker-end="url(#ar-g)"/>
+      <path d="M384 186 C 450 186, 460 150, 508 146" stroke="#b08cff" stroke-width="2" fill="none" stroke-dasharray="4 4" marker-end="url(#ar-m)"/>
+      <path d="M774 132 L790 132" stroke="#66bb6a" stroke-width="2.5" marker-end="url(#ar-g)"/>
+
+      <text x="16" y="298" class="svgtxt sm">Two swaps return to A each generation — which means the WASM path <tspan fill="#66bb6a">loses its bulk w→r copy</tspan>, partly offsetting the second pass.</text>
+      <text x="16" y="314" class="svgtxt sm">On WebGPU this is two dispatches using the two bind groups that already exist (A→B and B→A).</text>
+    </svg>
+    <figcaption><b>Reading payloads from B preserves the existing “post-update semantics”</b> — a rule that sets an attribute and <em>then</em> moves carries the updated value. Reading B is safe because the rule pass has fully completed; B is immutable during the resolve.</figcaption>
+  </figure>
+
+  <h4>The crux — why every cell can write only itself</h4>
+  <figure>
+    <svg viewBox="0 0 900 250" role="img" aria-label="The two local scans of the resolve pass">
+      <!-- scan 1 -->
+      <text x="16" y="22" class="svgtxt b" fill="#66bb6a">scan 1 — “am I a destination?”</text>
+      <g transform="translate(40,38)">
+        <rect x="60" y="0" width="52" height="52" fill="#1c1f26" stroke="#3a3f4a"/>
+        <text x="86" y="30" class="svgmono" text-anchor="middle" fill="#8b929c">s↑</text>
+        <rect x="0" y="54" width="52" height="52" fill="#2a3a2f" stroke="#66bb6a" stroke-width="2"/>
+        <text x="26" y="84" class="svgmono" text-anchor="middle" fill="#66bb6a">S1</text>
+        <rect x="60" y="54" width="52" height="52" fill="#332b1c" stroke="#e8a13a" stroke-width="2"/>
+        <text x="86" y="78" class="svgtxt b" text-anchor="middle" fill="#e8a13a">c</text>
+        <text x="86" y="94" class="svgtxt sm" text-anchor="middle" fill="#e8a13a">me</text>
+        <rect x="120" y="54" width="52" height="52" fill="#3a2a35" stroke="#f06aa8" stroke-width="2"/>
+        <text x="146" y="84" class="svgmono" text-anchor="middle" fill="#f06aa8">S2</text>
+        <rect x="60" y="108" width="52" height="52" fill="#1c1f26" stroke="#3a3f4a"/>
+        <path d="M54 80 L58 80" stroke="#66bb6a" stroke-width="3" marker-end="url(#ar-g)"/>
+        <path d="M118 80 L114 80" stroke="#f06aa8" stroke-width="3" marker-end="url(#ar-p)"/>
+      </g>
+      <text x="230" y="66" class="svgmono" fill="#cdd3da">for each slot s:</text>
+      <text x="230" y="84" class="svgmono" fill="#cdd3da">  src = cell at (c − offset[s])</text>
+      <text x="230" y="102" class="svgmono" fill="#cdd3da">  if intent[src] names slot s → candidate</text>
+      <text x="230" y="126" class="svgmono" fill="#e8a13a">winner = argmax(intent[src], −src)</text>
+      <text x="230" y="150" class="svgtxt sm">a total order ⇒ every thread computes the SAME winner</text>
+      <text x="230" y="168" class="svgtxt sm">if a winner exists → I take its payload</text>
+
+      <!-- scan 2 -->
+      <line x1="0" y1="196" x2="900" y2="196" stroke="#2a2e37"/>
+      <text x="16" y="222" class="svgtxt b" fill="#4cc9f0">scan 2 — “did my own move win?”</text>
+      <text x="300" y="222" class="svgmono" fill="#cdd3da">t = my target · recompute scan 1 AT t · if its winner is me → I vacate</text>
+      <text x="300" y="242" class="svgtxt sm">if both scans fire: scan 1 wins — I moved out AND someone moved in, so I hold theirs.</text>
+    </svg>
+    <figcaption><b>This is what makes the scheme a legal GPU kernel.</b> The obvious implementation — “the destination writes the source’s vacancy” — reintroduces the very cross-cell write we are removing. Because the arbitration is a <em>pure function</em> of (previous buffer, intent buffer), a source can <b>independently recompute</b> whether it won. No cross-cell write, no scratch buffer, no barrier, no atomics. Cost: <code class="inl">2 × O(nbrSize)</code> per cell — the same order as one ordinary neighbour gather.</figcaption>
+  </figure>
+
+  <h4>The inverse neighbourhood — computed, never tabulated</h4>
+  <figure>
+    <svg viewBox="0 0 900 200" role="img" aria-label="Inverse neighbourhood gather options">
+      <g transform="translate(20,20)">
+        <rect x="0" y="0" width="270" height="160" rx="10" fill="#2a1d20" stroke="#e0566a"/>
+        <text x="16" y="26" class="svgtxt b" fill="#e0566a">✗ a second nIdx table</text>
+        <text x="16" y="52" class="svgmono" fill="#cdd3da">total × nSz × 4 bytes</text>
+        <text x="16" y="76" class="svgtxt sm">= 2.8 GB at 300³ Moore-3D —</text>
+        <text x="16" y="94" class="svgtxt sm">already the dominant per-cell cost.</text>
+        <text x="16" y="124" class="svgtxt sm" fill="#e0566a">Doubling it is a non-starter.</text>
+      </g>
+      <g transform="translate(320,20)">
+        <rect x="0" y="0" width="560" height="160" rx="10" fill="#1e2a22" stroke="#66bb6a"/>
+        <text x="16" y="26" class="svgtxt b" fill="#66bb6a">✓ compute it inline from the negated offset</text>
+        <text x="16" y="52" class="svgmono" fill="#cdd3da">niCellExprStmts (JS) · pushInlineNbrCellIdx (WASM) · nbrCellIdxFromNi (WGSL)</text>
+        <text x="16" y="78" class="svgtxt sm">…all of which already implement the torus wrap and the constant-boundary sentinel.</text>
+        <text x="16" y="104" class="svgtxt sm" fill="#66bb6a">The WebGPU path already does this for <tspan font-style="italic">all</tspan> neighbour access (nbrOffsets holds only</text>
+        <text x="16" y="122" class="svgtxt sm" fill="#66bb6a">relative coords), and sparse-stepping does it on the CPU. Negated offsets = kilobytes.</text>
+        <text x="16" y="148" class="svgtxt sm" fill="#e8a13a">⚠ the sentinel (index = total) must never be a proposal target.</text>
+      </g>
+    </svg>
+    <figcaption>The codebase already chose this pattern twice. Following it means the inverse gather costs <b>no memory at all</b>.</figcaption>
+  </figure>
+
+  <h4>Where the intent buffer lives</h4>
+  <table>
+    <tr><th>Target</th><th>Placement</th><th>Why</th></tr>
+    <tr><td>JS / WASM</td><td>a <code class="inl">total × 4</code> region appended <b>after <code class="inl">generationOffset</code></b></td><td>The file documents this discipline for <code class="inl">activeList</code> (<em>“Appended LAST so a non-sparse module’s offsets are byte-identical”</em>) and <code class="inl">generation</code>. Gate the <b>bytes</b>, never the offset.</td></tr>
+    <tr><td>WebGPU</td><td>an appended per-cell <code class="inl">u32</code> region <b>inside the <code class="inl">attrs</code> buffer</b></td><td>The <b>orientation precedent</b> — variegation already rides <code class="inl">attrsRead/Write</code> rather than taking a binding. The grid pipeline uses <b>10 storage buffers</b> and conservative adapters cap at 8. <b>Pack, don’t add a binding.</b></td></tr>
+  </table>
+  <p class="small">4 bytes/cell, against the ~9 B/cell a typical model’s write buffer already costs.</p>
+
+  <h4>The user’s graph delta — one node</h4>
+  <figure>
+    <svg viewBox="0 0 900 220" role="img" aria-label="Graph delta for Amphiphile and Chromatography">
+      <text x="16" y="22" class="svgtxt b">Amphiphile / Chromatography — the move chain</text>
+      <text x="16" y="40" class="svgtxt sm">everything upstream is untouched; only the terminal node changes</text>
+
+      <g transform="translate(16,58)">
+        <rect x="0" y="0" width="150" height="46" rx="8" fill="#1c1f26" stroke="#3a3f4a"/>
+        <text x="75" y="21" class="svgtxt" text-anchor="middle">Group Reduce</text>
+        <text x="75" y="36" class="svgtxt sm" text-anchor="middle">weightedRandom</text>
+        <path d="M152 23 L176 23" stroke="#9aa0aa" stroke-width="2" marker-end="url(#ar-m)"/>
+        <rect x="178" y="0" width="150" height="46" rx="8" fill="#1c1f26" stroke="#3a3f4a"/>
+        <text x="253" y="21" class="svgtxt" text-anchor="middle">Get Array Element</text>
+        <text x="253" y="36" class="svgtxt sm" text-anchor="middle">NI of chosen dir</text>
+        <path d="M330 23 L354 23" stroke="#9aa0aa" stroke-width="2" marker-end="url(#ar-m)"/>
+      </g>
+
+      <!-- before -->
+      <g transform="translate(386,58)">
+        <rect x="0" y="0" width="230" height="46" rx="8" fill="#2a1d20" stroke="#e0566a" stroke-width="2"/>
+        <text x="115" y="20" class="svgtxt b" text-anchor="middle" fill="#e0566a">Transfer Cell Attrs to Neighbor</text>
+        <text x="115" y="36" class="svgtxt sm" text-anchor="middle" fill="#e0566a">async-only · WebGPU rejects</text>
+      </g>
+      <text x="632" y="86" class="svgtxt sm" fill="#e0566a">✗ WASM / JS only</text>
+
+      <!-- after -->
+      <g transform="translate(386,132)">
+        <rect x="0" y="0" width="230" height="46" rx="8" fill="#1e2a22" stroke="#66bb6a" stroke-width="2"/>
+        <text x="115" y="20" class="svgtxt b" text-anchor="middle" fill="#66bb6a">Propose Move to Neighbor</text>
+        <text x="115" y="36" class="svgtxt sm" text-anchor="middle" fill="#66bb6a">sync · same config schema</text>
+      </g>
+      <path d="M501 108 L501 128" stroke="#e8a13a" stroke-width="2.5" stroke-dasharray="4 3" marker-end="url(#ar-a)"/>
+      <text x="632" y="160" class="svgtxt sm" fill="#66bb6a">✓ JS · WASM · WebGPU</text>
+      <text x="16" y="206" class="svgtxt sm"><tspan class="svgtxt b">The config schema is identical</tspan> — payloadCount, attr_N, operation, nonReceiving, includeOrientation — because those describe what the RESOLVE must transfer.</text>
+    </svg>
+    <figcaption><b>A new node, not a mode on the old one.</b> Making <code class="inl">moveSelfToNeighbor</code> compile to propose/resolve in sync mode and to its current emit in async mode would give the same graph two different semantics depending on a setting elsewhere — exactly the invisible coupling the project’s honesty rules exist to prevent.</figcaption>
+  </figure>
+
+  <h4>Interactions to get right</h4>
+  <table>
+    <tr><th>Subsystem</th><th>Interaction</th></tr>
+    <tr><td>Skip Isolated Empty Cells</td><td>The resolve must run on every cell that could <em>receive</em> — the active set dilated by the <b>mover</b> neighbourhood. One more clause on an existing contract.</td></tr>
+    <tr><td>Indicators</td><td>The linked/spatial scan must run <b>after the resolve</b>, not after the rule, or it counts the pre-move board.</td></tr>
+    <tr><td>Sub-attributes</td><td><b>Refuse a sub-attribute payload in v1.</b> “Move a value that is only defined when the parent matches” deserves its own decision.</td></tr>
+    <tr><td>Variegation</td><td><code class="inl">includeOrientation</code> transfers the orientation word exactly as today. Amphiphile relies on it; costs nothing new.</td></tr>
+    <tr><td>3D</td><td>Nothing is 2-D-specific — the intent stores a <b>slot</b>, not a packed NI, so <code class="inl">packNI3</code>’s 10-bit thirds are not involved.</td></tr>
+    <tr><td>WebGPU dispatch</td><td>The resolve must use <code class="inl">dispatchCells</code>. A flat 1-D dispatch silently no-ops past ~4.19 M cells — <b>exactly the regime this feature is for.</b></td></tr>
+    <tr><td><code class="inl">markCellUpdated</code></td><td>Becomes unnecessary — each cell acts exactly once.</td></tr>
+    <tr><td>Save / load</td><td><b>Nothing.</b> The intent buffer is per-generation scratch and must not be serialised.</td></tr>
+  </table>
+
+  <div class="callout danger">
+    <b>Honest limitations.</b> It is <em>not</em> bit-identical to any async run, and cannot be — async’s answer depends on a shuffle. A single generation moves a mover at most one cell, so a packed train advances one cell per generation rather than cascading (the same answer async gives under an unfavourable order). And <code class="inl">setNeighborhoodAttribute</code> — a broadcast with N legitimate writers per cell — stays async-only, correctly.
+  </div>
+
+  <h3>(B) Margolus block partitioning as an update mode</h3>
+  <figure>
+    <svg viewBox="0 0 900 200" role="img" aria-label="Margolus alternating 2x2 block partition">
+      <text x="16" y="22" class="svgtxt b">Even generation — partition offset 0</text>
+      <text x="470" y="22" class="svgtxt b">Odd generation — partition offset 1</text>
+      <g transform="translate(16,34)">
+        <g>
+          <rect x="0" y="0" width="288" height="144" fill="#131519" stroke="#2a2e37"/>
+          <g stroke="#2a2e37" stroke-width="1">
+            <path d="M36 0 V144 M72 0 V144 M108 0 V144 M144 0 V144 M180 0 V144 M216 0 V144 M252 0 V144"/>
+            <path d="M0 36 H288 M0 72 H288 M0 108 H288"/>
+          </g>
+          <g fill="none" stroke="#4cc9f0" stroke-width="2.5">
+            <rect x="0" y="0" width="72" height="72"/><rect x="72" y="0" width="72" height="72"/>
+            <rect x="144" y="0" width="72" height="72"/><rect x="216" y="0" width="72" height="72"/>
+            <rect x="0" y="72" width="72" height="72"/><rect x="72" y="72" width="72" height="72"/>
+            <rect x="144" y="72" width="72" height="72"/><rect x="216" y="72" width="72" height="72"/>
+          </g>
+        </g>
+      </g>
+      <g transform="translate(470,34)">
+        <rect x="0" y="0" width="288" height="144" fill="#131519" stroke="#2a2e37"/>
+        <g stroke="#2a2e37" stroke-width="1">
+          <path d="M36 0 V144 M72 0 V144 M108 0 V144 M144 0 V144 M180 0 V144 M216 0 V144 M252 0 V144"/>
+          <path d="M0 36 H288 M0 72 H288 M0 108 H288"/>
+        </g>
+        <clipPath id="margolusOdd"><rect x="0" y="0" width="288" height="144"/></clipPath>
+        <g fill="none" stroke="#e8a13a" stroke-width="2.5" clip-path="url(#margolusOdd)">
+          <rect x="-36" y="-36" width="72" height="72"/><rect x="36" y="-36" width="72" height="72"/><rect x="108" y="-36" width="72" height="72"/><rect x="180" y="-36" width="72" height="72"/><rect x="252" y="-36" width="72" height="72"/>
+          <rect x="-36" y="36" width="72" height="72"/><rect x="36" y="36" width="72" height="72"/><rect x="108" y="36" width="72" height="72"/><rect x="180" y="36" width="72" height="72"/><rect x="252" y="36" width="72" height="72"/>
+          <rect x="-36" y="108" width="72" height="72"/><rect x="36" y="108" width="72" height="72"/><rect x="108" y="108" width="72" height="72"/><rect x="180" y="108" width="72" height="72"/><rect x="252" y="108" width="72" height="72"/>
+        </g>
+      </g>
+      <text x="16" y="196" class="svgtxt sm">Blocks are disjoint ⇒ one writer per block ⇒ <tspan fill="#66bb6a">conflict-free by construction, no policy to choose</tspan>. The offset alternates so information crosses block boundaries.</text>
+    </svg>
+    <figcaption><b>Measured: mass exact over 200 generations, deterministic across runs.</b> But it is a <em>different rule shape</em> — GenesisCA’s whole node catalogue is cell-local, and a 2×2 block cannot see Amphiphile’s von Neumann interaction neighbourhood. A legitimate future mode for lattice gases and exact-conservation fluids; not the first thing to build.</figcaption>
+  </figure>
+
+  <h3>(C) Lattice-locked agents — the brainstorm’s literal reading</h3>
+  <p><b>This already exists, by hand.</b> <code class="inl">Ant Necrophoresis</code> does exactly it: ants on exact integer cell positions, moved one cell per step with <code class="inl">Set Agent Position</code> and a hand-written torus wrap, with the engine integrator inert.</p>
+  <table>
+    <tr><th>Why it does not reach the goal</th><th>Detail</th></tr>
+    <tr><td>A GPU resolve needs atomics <b>and gives up determinism</b></td><td>The agent structural phase is CPU/JS on <em>every</em> target by design — draining move requests there forfeits the very residency the brainstorm wants. A GPU-side <code class="inl">atomicCompareExchangeWeak</code> claim is conservative but its winner is dispatch-order-dependent, so <b>the model stops being reproducible</b>. Against the project’s <code class="inl">exact</code> reproducibility contract that is a visible downgrade.</td></tr>
+    <tr><td>Population scale is off by orders of magnitude</td><td>The agent engine is measured at ~50 k agents. A 300³ grid is <b>27 million</b> entities; a 5000² grid is 25 million. Three orders of magnitude past the tested range — and the agent SoA is <code class="inl">maxAgents</code>-sized regardless of occupancy.</td></tr>
+    <tr><td>Every cell attribute must migrate</td><td>State becomes agent attributes; the substrate becomes a field read through the field bridge; rendering, brushing, indicators, save/load and the cell inspector all change meaning. A model-authoring migration, not a compile-target unlock.</td></tr>
+  </table>
+  <p><b>Verdict:</b> right when entities are <em>sparse</em> relative to the grid. Wrong when entities <em>are</em> the grid.</p>
+
+  <h3>(D) Do nothing; document the workaround</h3>
+  <p>Async on WASM is already the fastest CPU path, and all four shipped async models are ≤ 10 000 cells. <b>The cost of (D) is not slowness — it is the ceiling.</b> Because the gate is a compile-time rejection with a clear message, the failure is at least <em>loud</em>. (D) is correct <b>if</b> nobody wants a large moving-entity model — a product question, and the one question this document cannot answer.</p>
+</div></section>
+
+<!-- ============================================================ 6 -->
+<section id="s6"><div class="card">
+  <h2><span class="n">6</span> Conflict / collision policy catalogue</h2>
+  <p class="lede">All are a one-line change to how <code class="inl">priority</code> is computed, or to the comparison. All were measured mass-exact.</p>
+  <table>
+    <tr><th>Policy</th><th>Priority source</th><th>Winner</th><th>Determinism</th><th>Notes</th></tr>
+    <tr>
+      <td><b>Deterministic index</b></td><td>constant 0</td><td>lowest source index</td>
+      <td><span class="pill g">bit-exact, all 3 targets</span></td>
+      <td>No RNG at all. Introduces a spatial bias — a “left” mover systematically wins. Best for reproducible runs, worst for isotropy.</td>
+    </tr>
+    <tr>
+      <td><b>Random (shared stream)</b></td><td><code class="inl">xorshift32</code> from <code class="inl">_rngState</code></td><td>highest priority</td>
+      <td><span class="pill c">JS ↔ WASM bit-exact</span><br><span class="small">WebGPU differs (per-cell PCG)</span></td>
+      <td>Matches the existing <code class="inl">getRandom</code> posture exactly: same seed → different sequences across targets; statistical behaviour matches.</td>
+    </tr>
+    <tr>
+      <td><b>Random (per-cell hash)</b> <span class="pill g">default</span></td><td><code class="inl">hash(cellIdx, generation, salt)</code></td><td>highest priority</td>
+      <td><span class="pill g">bit-exact, all 3 targets</span></td>
+      <td>A pure function of position and time ⇒ independent of dispatch order. <b>The only unbiased policy that is also cross-target reproducible.</b></td>
+    </tr>
+    <tr>
+      <td><b>Attribute priority</b></td><td>a chosen cell attribute (24-bit)</td><td>highest value</td><td>Deterministic given the board</td>
+      <td>“Heavier / older / hungrier wins.” Makes the policy part of the <em>model</em> — often what a scientist wants.</td>
+    </tr>
+    <tr>
+      <td><b>Reject on conflict</b></td><td>—</td><td>nobody</td><td>Deterministic</td>
+      <td>Strongest exclusion. Measured ~22 % fewer moves at 35 % fill. Useful when a contested site should represent congestion.</td>
+    </tr>
+    <tr>
+      <td><b>Swap (mutual intent)</b></td><td>—</td><td>both move</td><td>Deterministic</td>
+      <td><b>Needs no arbitration at all</b> — the pair is symmetric; an <code class="inl">i &lt; j</code> guard fires it once. The <em>only</em> mechanism that still mixes a completely full grid. Composes with any policy above.</td>
+    </tr>
+    <tr>
+      <td><b>Overlap allowed</b></td><td>—</td><td>all move</td><td>Deterministic if the accumulate is commutative</td>
+      <td>The target becomes a <em>count</em>. Conserves the count, not the identity — a different model wearing a policy’s clothes.</td>
+    </tr>
+    <tr>
+      <td><b>Bounce</b></td><td>—</td><td>losers reverse</td><td>Deterministic</td>
+      <td>Needs a velocity-like attribute. A natural add-on, not a v1 primitive.</td>
+    </tr>
+  </table>
+  <div class="callout"><b>Ship in v1:</b> deterministic-index and per-cell-hash (one biased-but-exact, one unbiased-and-exact), plus <b>swap</b>, since it is nearly free. Attribute-priority and reject are small follow-ons.</div>
+</div></section>
+
+<!-- ============================================================ 7 -->
+<section id="s7"><div class="card">
+  <h2><span class="n">7</span> Measurements</h2>
+  <p class="lede">A five-stage Node prototype on a 64×64 torus with a von Neumann neighbourhood, the engine’s own <code class="inl">xorshift32</code>, and — in the final stage — <b>the exact self-write-only resolve of §5(A)</b>. Every number is measured output.</p>
+
+  <h3>7.1 · Mass conservation — the self-write-only resolve, 200 generations</h3>
+  <table>
+    <tr><th>Fill</th><th class="num">n₀</th><th class="num">n final</th><th class="num">min</th><th class="num">max</th><th class="num">received/gen</th><th class="num">cleared/gen</th><th>Verdict</th></tr>
+    <tr><td>10 %</td><td class="num">456</td><td class="num">456</td><td class="num">456</td><td class="num">456</td><td class="num">439.5</td><td class="num">439.5</td><td class="ok">EXACT every gen</td></tr>
+    <tr><td>35 %</td><td class="num">1463</td><td class="num">1463</td><td class="num">1463</td><td class="num">1463</td><td class="num">1212.4</td><td class="num">1212.4</td><td class="ok">EXACT every gen</td></tr>
+    <tr><td>65 %</td><td class="num">2718</td><td class="num">2718</td><td class="num">2718</td><td class="num">2718</td><td class="num">1261.0</td><td class="num">1261.0</td><td class="ok">EXACT every gen</td></tr>
+    <tr><td>90 %</td><td class="num">3679</td><td class="num">3679</td><td class="num">3679</td><td class="num">3679</td><td class="num">416.5</td><td class="num">416.5</td><td class="ok">EXACT every gen</td></tr>
+    <tr><td>99 %</td><td class="num">4050</td><td class="num">4050</td><td class="num">4050</td><td class="num">4050</td><td class="num">46.0</td><td class="num">46.0</td><td class="ok">EXACT every gen</td></tr>
+  </table>
+  <p class="small"><code class="inl">received == cleared</code> exactly at every density: every payload that leaves a cell arrives at exactly one other cell.</p>
+
+  <h3>7.2 · The re-visit pathology — the sequential baseline is not what you think</h3>
+  <figure>
+    <svg viewBox="0 0 900 240" role="img" aria-label="Moves per particle per generation, three schemes">
+      <text x="16" y="20" class="svgtxt b">Moves per generation per particle</text>
+      <line x1="70" y1="196" x2="880" y2="196" stroke="#3a3f4a"/>
+      <line x1="70" y1="40" x2="70" y2="196" stroke="#3a3f4a"/>
+      <line x1="70" y1="118" x2="880" y2="118" stroke="#e8a13a" stroke-dasharray="4 4" stroke-width="1.5"/>
+      <text x="884" y="116" class="svgtxt sm" fill="#e8a13a" text-anchor="end" dx="-4" dy="-6">1.0 — the physical ceiling</text>
+      <text x="58" y="44" class="svgtxt sm" text-anchor="end">1.6</text>
+      <text x="58" y="122" class="svgtxt sm" text-anchor="end">1.0</text>
+      <text x="58" y="200" class="svgtxt sm" text-anchor="end">0</text>
+      <!-- data: fills 10 20 35 50 65 76 90 ; naive, marked, parallel ; scale y: 196 - v*97.5 -->
+      <g>
+        <!-- x positions -->
+        <g class="svgtxt sm" text-anchor="middle" fill="#8b929c">
+          <text x="126" y="216">10%</text><text x="230" y="216">20%</text><text x="334" y="216">35%</text>
+          <text x="438" y="216">50%</text><text x="542" y="216">65%</text><text x="646" y="216">76%</text><text x="750" y="216">90%</text>
+        </g>
+        <!-- naive -->
+        <polyline points="126,38 230,43 334,50 438,64 542,88 646,114 750,159" fill="none" stroke="#e0566a" stroke-width="2.5"/>
+        <!-- marked -->
+        <polyline points="126,98 230,98 334,99 438,103 542,114 646,129 750,163" fill="none" stroke="#4cc9f0" stroke-width="2.5"/>
+        <!-- parallel -->
+        <polyline points="126,102 334,115 438,130 542,150 646,167 750,186" fill="none" stroke="#66bb6a" stroke-width="2.5"/>
+        <g fill="#e0566a"><circle cx="126" cy="38" r="3.5"/><circle cx="334" cy="50" r="3.5"/><circle cx="542" cy="88" r="3.5"/><circle cx="750" cy="159" r="3.5"/></g>
+        <g fill="#4cc9f0"><circle cx="126" cy="98" r="3.5"/><circle cx="334" cy="99" r="3.5"/><circle cx="542" cy="114" r="3.5"/><circle cx="750" cy="163" r="3.5"/></g>
+        <g fill="#66bb6a"><circle cx="126" cy="102" r="3.5"/><circle cx="334" cy="115" r="3.5"/><circle cx="542" cy="150" r="3.5"/><circle cx="750" cy="186" r="3.5"/></g>
+      </g>
+      <g class="svgtxt sm">
+        <rect x="620" y="34" width="12" height="3" fill="#e0566a"/><text x="640" y="39" fill="#e0566a">sequential, naive — exceeds the ceiling</text>
+        <rect x="620" y="52" width="12" height="3" fill="#4cc9f0"/><text x="640" y="57" fill="#4cc9f0">sequential, markCellUpdated (the real baseline)</text>
+        <rect x="620" y="70" width="12" height="3" fill="#66bb6a"/><text x="640" y="75" fill="#66bb6a">parallel two-phase</text>
+      </g>
+    </svg>
+    <figcaption><b>The red line is impossible.</b> A naive shuffled sweep re-visits a particle that moved into a not-yet-visited cell, so one particle moves 1.61 times per generation at 10 % fill — for a rule that moves an entity <em>at most one cell per step</em>. <code class="inl">markCellUpdated</code> exists precisely to suppress this. Against the corrected (blue) baseline, the green line is <b>nearly coincident below ~35 % occupancy</b>.</figcaption>
+  </figure>
+  <table>
+    <tr><th>Fill</th><th class="num">seq, naive</th><th class="num">seq, markCellUpdated</th><th class="num">parallel</th><th class="num">retention</th></tr>
+    <tr><td>10 %</td><td class="num bad">1.614</td><td class="num">1.000</td><td class="num">0.966</td><td class="num ok">97 %</td></tr>
+    <tr><td>20 %</td><td class="num bad">1.570</td><td class="num">0.999</td><td class="num">0.918</td><td class="num ok">92 %</td></tr>
+    <tr><td>35 %</td><td class="num bad">1.496</td><td class="num">0.992</td><td class="num">0.831</td><td class="num ok">84 %</td></tr>
+    <tr><td>50 %</td><td class="num bad">1.351</td><td class="num">0.954</td><td class="num">0.679</td><td class="num">71 %</td></tr>
+    <tr><td>65 %</td><td class="num bad">1.110</td><td class="num">0.844</td><td class="num">0.467</td><td class="num">55 %</td></tr>
+    <tr><td>76 %</td><td class="num">0.844</td><td class="num">0.684</td><td class="num">0.293</td><td class="num">43 %</td></tr>
+    <tr><td>90 %</td><td class="num">0.382</td><td class="num">0.337</td><td class="num">0.103</td><td class="num">31 %</td></tr>
+  </table>
+
+  <h3>7.3 · Order independence — the parallel-safety proof</h3>
+  <div class="callout good">
+    Self-write-only resolve: <b>30 generations × 4 random visit orders → 0 mismatching cells.</b><br>
+    Target-writes-source resolve: <b>4 policies × 25 generations × 5 orders → 0 mismatches.</b><br>
+    <span class="small">A parallel dispatch may schedule cells in any order; the result is invariant.</span>
+  </div>
+
+  <h3>7.4 · Determinism</h3>
+  <p>Same seed, two runs, 50 generations, board hashes compared: <b>MATCH</b> for all four policies under the shared <code class="inl">xorshift32</code>, and <b>MATCH</b> for all four under the per-cell hash. Being a pure function of <code class="inl">(cellIdx, generation, salt)</code>, the hash source is independent of dispatch order — which is what makes it the cross-target-reproducible option.</p>
+
+  <h3>7.5 · Swap needs no arbitration</h3>
+  <p>64×64 at <b>100 % occupancy</b>, 100 generations: <b>51 174 mutual-intent swaps</b> (511.7 per generation), occupancy 4096 → 4096 (<span class="ok">exact</span>). The only mechanism that mixes a grid with no vacancies at all.</p>
+
+  <h3>7.6 · The chain extension — and the version that broke</h3>
+  <figure>
+    <svg viewBox="0 0 900 230" role="img" aria-label="The train: vacancy-only versus chain-aware">
+      <text x="16" y="20" class="svgtxt b">A packed “train” of movers, one vacancy ahead — moves in ONE generation</text>
+      <!-- row A -->
+      <text x="16" y="52" class="svgtxt sm" fill="#8b929c">vacancy-only</text>
+      <g transform="translate(150,34)">
+        <g>
+          <rect x="0" y="0" width="34" height="30" fill="#2a3a2f" stroke="#66bb6a"/>
+          <rect x="34" y="0" width="34" height="30" fill="#2a3a2f" stroke="#66bb6a"/>
+          <rect x="68" y="0" width="34" height="30" fill="#2a3a2f" stroke="#66bb6a"/>
+          <rect x="102" y="0" width="34" height="30" fill="#2a3a2f" stroke="#66bb6a"/>
+          <rect x="136" y="0" width="34" height="30" fill="#22262f" stroke="#e8a13a" stroke-dasharray="4 3"/>
+          <rect x="170" y="0" width="34" height="30" fill="#22262f" stroke="#3a3f4a"/>
+        </g>
+        <path d="M120 15 L150 15" stroke="#66bb6a" stroke-width="3" marker-end="url(#ar-g)"/>
+        <text x="240" y="20" class="svgmono" fill="#8b929c">only the head can even PROPOSE →</text>
+        <text x="470" y="20" class="svgmono" fill="#e8a13a">1 move</text>
+      </g>
+      <!-- row B -->
+      <text x="16" y="112" class="svgtxt sm" fill="#8b929c">chain-aware</text>
+      <g transform="translate(150,94)">
+        <g>
+          <rect x="0" y="0" width="34" height="30" fill="#2a3a2f" stroke="#66bb6a"/>
+          <rect x="34" y="0" width="34" height="30" fill="#2a3a2f" stroke="#66bb6a"/>
+          <rect x="68" y="0" width="34" height="30" fill="#2a3a2f" stroke="#66bb6a"/>
+          <rect x="102" y="0" width="34" height="30" fill="#2a3a2f" stroke="#66bb6a"/>
+          <rect x="136" y="0" width="34" height="30" fill="#22262f" stroke="#e8a13a" stroke-dasharray="4 3"/>
+          <rect x="170" y="0" width="34" height="30" fill="#22262f" stroke="#3a3f4a"/>
+        </g>
+        <g stroke="#4cc9f0" stroke-width="2.5" fill="none">
+          <path d="M18 40 L46 40" marker-end="url(#ar-c)"/><path d="M52 40 L80 40" marker-end="url(#ar-c)"/>
+          <path d="M86 40 L114 40" marker-end="url(#ar-c)"/><path d="M120 40 L148 40" marker-end="url(#ar-c)"/>
+        </g>
+        <text x="240" y="20" class="svgmono" fill="#8b929c">each may name a target that is ITSELF leaving →</text>
+        <text x="470" y="44" class="svgmono" fill="#66bb6a">K moves</text>
+      </g>
+      <!-- row C -->
+      <line x1="0" y1="168" x2="900" y2="168" stroke="#2a2e37"/>
+      <text x="16" y="192" class="svgtxt b" fill="#e8a13a">Async is already order-dependent here</text>
+      <text x="16" y="214" class="svgmono" fill="#cdd3da">same state, markCellUpdated ON:   seq right→left = K moves     ·     seq left→right = 1 move</text>
+      <text x="640" y="214" class="svgmono" fill="#66bb6a">parallel = 1, always</text>
+    </svg>
+    <figcaption>The parallel answer is <b>one of the answers async already produces</b> — deterministically, instead of re-rolled by the shuffle every generation.</figcaption>
+  </figure>
+
+  <div class="callout danger">
+    <b>⚠ The naive chain rule BREAKS conservation, and the prototype caught it.</b> “I may enter T because T is committed to leave” is <b>unsound</b>: T’s commitment can be revoked when T loses the arbitration at <em>its own</em> target. Then I overwrite a payload that never left. Measured <span class="bad">BROKEN</span> at 35 / 65 / 76 / 90 % fill.<br><br>
+    <b>The fix is to make commitment monotone:</b> a destination, once claimed, leaves play, and a claim is only ever granted to the winner of that destination’s arbitration.
+  </div>
+
+  <table>
+    <tr><th>Fill</th><th class="num">R=0</th><th class="num">R=1</th><th class="num">R=2</th><th class="num">R=4</th><th class="num">R=8</th><th class="num">seq (marked)</th><th>Conservation</th></tr>
+    <tr><td>35 %</td><td class="num">845</td><td class="num">1007</td><td class="num">1051</td><td class="num">1063</td><td class="num">1063</td><td class="num">1430</td><td class="ok">EXACT</td></tr>
+    <tr><td>50 %</td><td class="num">875</td><td class="num">1128</td><td class="num">1207</td><td class="num">1241</td><td class="num">1245</td><td class="num">2006</td><td class="ok">EXACT</td></tr>
+    <tr><td>65 %</td><td class="num">738</td><td class="num">1007</td><td class="num">1124</td><td class="num">1187</td><td class="num">1199</td><td class="num">2289</td><td class="ok">EXACT</td></tr>
+    <tr><td>76 %</td><td class="num">552</td><td class="num">797</td><td class="num">907</td><td class="num">991</td><td class="num">1004</td><td class="num">2156</td><td class="ok">EXACT</td></tr>
+    <tr><td>90 %</td><td class="num">248</td><td class="num">379</td><td class="num">448</td><td class="num">507</td><td class="num">521</td><td class="num">1251</td><td class="ok">EXACT</td></tr>
+  </table>
+  <p class="small">Retention vs. sequential rises from <b>20 % → 42 %</b> at 90 % fill for 8 extra rounds; R rounds move chains of depth up to R+1. <b>These absolute numbers use a “blind walk” proposal rule</b>, so they are internally consistent but <b>not</b> cell-for-cell comparable with §7.2 — the R=0 → R=8 <em>ratios</em> are the meaningful figures. <b>Cost:</b> R extra parallel passes = R extra GPU dispatches. <b>Recommendation: not in v1.</b></p>
+
+  <h3>7.7 · Margolus, for comparison</h3>
+  <p>200 generations, 2×2 alternating blocks with a random per-block rotation: n₀ 1463 → 1463, min = max = 1463 (<span class="ok">exact</span>), 1463 moves/generation, <b>deterministic across runs</b>. Conflict-free by construction; no policy exists to choose.</p>
+
+  <h3>7.8 · Does it still behave like the same model?</h3>
+  <p><b>Diffusion.</b> Both rules produce ordinary random walks (MSD linear in <em>t</em>). The parallel one diffuses more slowly, in proportion to its lower accepted-move rate — a <b>time rescaling</b>, not different physics.</p>
+  <p><b>Column separation</b> — a Chromatography-shaped fixture (43×200, gravity bias, two solutes of different stickiness, 400 generations, mean <em>unwrapped</em> downward displacement):</p>
+  <table>
+    <tr><th>Model</th><th class="num">S1 (weak)</th><th class="num">S2 (strong)</th><th class="num">separation</th><th class="num">occupancy</th></tr>
+    <tr><td>sequential (marked)</td><td class="num">16.8</td><td class="num">7.3</td><td class="num">9.5</td><td class="num ok">5220 exact</td></tr>
+    <tr><td>parallel two-phase</td><td class="num">8.4</td><td class="num">4.8</td><td class="num">3.6</td><td class="num ok">5220 exact</td></tr>
+  </table>
+  <p>Both separate the solutes in the <b>same order and direction</b> — the weak solute elutes ahead of the strong one. Same phenomenon, rescaled clock.</p>
+</div></section>
+
+<!-- ============================================================ 8 -->
+<section id="s8"><div class="card">
+  <h2><span class="n">8</span> Recommendation</h2>
+  <div class="callout good">
+    <b>Build (A).</b> A new <code class="inl">proposeMove</code> node plus an engine-owned resolve pass, with the conflict policy as an explicit per-model setting. <b>Keep async mode exactly as it is</b> — this is an <em>additional</em> way to express movement, not a replacement.
+  </div>
+  <p><b>Name it honestly.</b> The setting should say what it is — e.g. <code class="inl">moverPolicy: 'index' | 'hash' | 'attribute' | 'reject'</code> on <code class="inl">ModelProperties</code>, absent ⇒ the feature is off ⇒ every existing model byte-identical. Nothing here should be called “async on the GPU”; it is a different, deterministic semantic.</p>
+
+  <h3 id="s9">8.1 · Impact map</h3>
+  <table>
+    <tr><th>#</th><th>Subsystem</th><th>Change</th></tr>
+    <tr><td>1</td><td>Schema</td><td><code class="inl">ModelProperties.moverPolicy?</code> + <code class="inl">moverNeighborhoodId?</code>. Additive + optional; <b>absent ⇒ off ⇒ no migration</b>.</td></tr>
+    <tr><td>2</td><td>ModelContext</td><td>Cascade <code class="inl">moverNeighborhoodId</code> on neighbourhood delete (existing <code class="inl">clearDeletedId</code> pattern).</td></tr>
+    <tr><td>3</td><td>Node</td><td>New <code class="inl">proposeMove</code> cloning <code class="inl">moveSelfToNeighbor</code>’s ports and <b>entire config schema</b>. <code class="inl">requirements: {}</code> (sync-legal).</td></tr>
+    <tr><td>4</td><td>Validation</td><td>Badge a <code class="inl">proposeMove</code> with no policy set. <b>Refuse a sub-attribute payload in v1.</b> Both movement nodes in one graph ⇒ compile error.</td></tr>
+    <tr><td>5</td><td>Layout</td><td><code class="inl">intentOffset</code>/<code class="inl">intentBytes</code>, appended <b>after <code class="inl">generationOffset</code></b>; bytes gated, offset never.</td></tr>
+    <tr><td>6</td><td>JS compiler</td><td>The propose emitter + a <b>new resolve entry point</b>. Append <code class="inl">_intent</code> to the three param builders <b>after <code class="inl">_generation</code></b>.</td></tr>
+    <tr><td>7</td><td>WASM compiler</td><td>Same two emitters; a second exported function alongside <code class="inl">step</code>/<code class="inl">init</code>/<code class="inl">inputColor_*</code>/<code class="inl">outputMapping_*</code>.</td></tr>
+    <tr><td>8</td><td>WebGPU compiler</td><td><code class="inl">intentWordOffset</code> inside <code class="inl">attrs</code>; a <code class="inl">resolve</code> entry point dispatched with the swapped bind group. <code class="inl">emitPerCellCopyPreamble</code> must <b>skip</b> the intent region. Must use <code class="inl">dispatchCells</code>.</td></tr>
+    <tr><td>9</td><td>Worker</td><td>The intent view; the resolve call and second ping-pong in <code class="inl">runStep</code>; the WASM sync bulk copy <b>replaced</b> by the resolve’s carry-forward.</td></tr>
+    <tr><td>10</td><td>Indicators</td><td>Move the linked/spatial scan hook to after the resolve.</td></tr>
+    <tr><td>11</td><td>Sparse stepping</td><td>Dilate the active set by the mover neighbourhood.</td></tr>
+    <tr><td>12</td><td>Save / load</td><td><b>Nothing</b> — per-generation scratch, never serialised.</td></tr>
+    <tr><td>13</td><td>UI</td><td>A “Movement” block in Properties → Execution, shown only when a <code class="inl">proposeMove</code> exists (enabled-control doctrine).</td></tr>
+    <tr><td>14</td><td>Docs</td><td>CLAUDE.md · HelpView · README (if the Features summary changes) · NODES_REFERENCE table + counts.</td></tr>
+    <tr><td>15</td><td>Harnesses</td><td><code class="inl">check-compile-identity.mjs</code> <b>100 % unchanged</b> — the gate. A new <code class="inl">test-lattice-movers.mjs</code> (conservation, order independence, determinism) with source-mutation negative controls. JS↔WASM bit-parity. A real-GPU run.</td></tr>
+  </table>
+
+  <h3>8.2 · Phased plan</h3>
+  <p class="small">Honouring <b>ALL-TARGET DELIVERY</b> and <b>2D + 3D from day one</b> — neither is a later phase.</p>
+  <table>
+    <tr><th>Phase</th><th>Scope</th><th>Gate</th></tr>
+    <tr><td><b>P0</b></td><td>This document + <code class="inl">PLAN_LATTICE_MOVERS.md</code> + HTML mockup</td><td>Owner decision on §5 (A vs D) and the v1 policy set</td></tr>
+    <tr><td><b>P1</b></td><td>The mechanism: schema, node, intent buffer, propose + resolve on <b>JS, WASM and WebGPU</b>, <b>2D and 3D</b>, <code class="inl">copyTo</code> only, policies <b>index</b> + <b>hash</b></td><td>compile-identity 100 % unchanged; conservation + order-independence + determinism harness with negative controls; JS↔WASM bit-parity; a real-GPU run</td></tr>
+    <tr><td><b>P2</b></td><td><code class="inl">swap</code>, <code class="inl">attribute</code>, <code class="inl">reject</code></td><td>Harness extended per policy</td></tr>
+    <tr><td><b>P3</b></td><td>Samples: a <b>parallel</b> Amphiphile/Chromatography variant shipped <em>alongside</em> the async originals (they remain the reference semantics), and one <b>new large-grid model that is inexpressible today</b> — the feature’s actual justification</td><td>Real-GPU run at ≥ 1 M cells</td></tr>
+    <tr><td><b>P4</b></td><td>Docs sweep; NODES_REFERENCE counts</td><td>—</td></tr>
+    <tr><td class="small">later</td><td class="small">Chain extension with a bounded R · <code class="inl">copyFrom</code> · bounce / overlap</td><td class="small">Re-measure before committing</td></tr>
+  </table>
+
+  <h3>8.3 · What would kill this</h3>
+  <div class="callout danger">
+    <b>Stated up front, as falsifiers.</b>
+    <ul style="margin:8px 0 0;padding-left:20px">
+      <li><b>If the resolve pass costs more than one extra dispatch’s worth of time.</b> Two <code class="inl">O(nbrSize)</code> scans is one ordinary gather; if a real GPU at scale says otherwise, the economics change.</li>
+      <li><b>If nobody wants a large moving-entity model.</b> The four existing ones gain little. P3’s new sample is the test — if it cannot be made compelling, choose (D).</li>
+      <li><b>If the semantic difference is unacceptable to the owner.</b> The parallel rule is <em>a</em> correct parallel exclusion process — deterministic and exactly conserving — but a model ported across will not reproduce its old trajectory. That is a product judgement, and it belongs to the owner.</li>
+    </ul>
+  </div>
+</div></section>
+
+<footer>
+  <b>docs/INVESTIGATION_LATTICE_MOVERS.html</b> — companion to <code class="inl">INVESTIGATION_LATTICE_MOVERS.md</code>, which carries the full appendix of codebase facts verified while writing this.
+  No engine, compiler, node or UI code was changed. Prototype sources live in the session scratchpad; every figure in §7 is measured output.
+</footer>
+
+</div>
+</body>
+</html>

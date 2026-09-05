@@ -1168,6 +1168,7 @@ WASM has full node-catalogue coverage including the multi-source `groupOperator.
 - `updateIndicator` with `toggle` / `next` / `previous` (order-dependent non-commutative mutation of one shared accumulator by parallel writers — the lone node-op-level fundamental; or/and/max/min/inc/dec ARE supported via atomics).
 
 These two are the **complete** WebGPU-grid reject set. f32 precision + per-cell PCG bar NO node.
+- **Design study — could a mass-conserving MOVE run on WebGPU anyway?** [docs/INVESTIGATION_LATTICE_MOVERS.md](docs/INVESTIGATION_LATTICE_MOVERS.md) (+ `.html`): a two-phase `proposeMove` + engine resolve makes move-into-a-vacancy a CONFLICT problem instead of an ordering one, so it parallelises — measured exactly conserving, order-independent and deterministic. NOTHING SHIPPED; async itself stays a genuine fundamental.
 
 ### Known target-specific differences (intentional, documented)
 - WGSL has no f64. Float arithmetic runs in f32 — small precision differences vs JS/WASM accumulate over many generations on chaotic models. Bit-exact parity is NOT a goal.
