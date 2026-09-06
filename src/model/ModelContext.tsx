@@ -32,6 +32,7 @@ import type {
   OverseerConfig,
 } from './types';
 import { DEFAULT_MODEL, EMPTY_MODEL } from './defaultModel';
+import { deepEqualPlain, graphWriteIsNoop } from './graphEquality';
 import { defaultCenterBasedConfig } from './centerBased';
 import { defaultAgentCapabilities, migrateAgentCapabilities } from './agentCapabilities';
 import { defaultTagColor } from '../modeler/vpl/compiler/linkedOutputMappings';
@@ -1494,7 +1495,19 @@ export function modelReducer(state: ModelState, action: ModelAction): ModelState
         },
       };
 
+    // THE GRAPH WRITE-BACKS ARE NO-OPS WHEN NOTHING CHANGED. The GraphEditor
+    // syncs its canvas to the model on every React Flow change it deems
+    // structural — and that includes the `dimensions` change React Flow emits
+    // for EVERY node when it first measures them after the editor mounts. So
+    // merely opening the Modeler on a freshly loaded model dispatched a graph
+    // whose payload deep-equalled the stored one; flipping `isDirty` there put
+    // a " *" after the file name with no edit made (and SimulatorView
+    // soft-recompiled for nothing). A write whose nodes AND edges deep-equal
+    // what the model already holds therefore returns the SAME state reference:
+    // no dirty flag, no re-render, no recompile. A genuine edit still differs
+    // and still dirties. See graphEquality.ts for what "equal" means.
     case 'SET_GRAPH':
+      if (graphWriteIsNoop(state.model.graphNodes, state.model.graphEdges, action.nodes, action.edges)) return state;
       return {
         ...state,
         isDirty: true,
@@ -1509,6 +1522,7 @@ export function modelReducer(state: ModelState, action: ModelAction): ModelState
       // Bond-Graph Agents: write-back for the SECOND (agent) rule graph. The
       // GraphEditor's scheduleSync forks to this when the Agents sub-tab is
       // active (mirrors SET_GRAPH for the Cells graph).
+      if (graphWriteIsNoop(state.model.agentGraphNodes, state.model.agentGraphEdges, action.nodes, action.edges)) return state;
       return {
         ...state,
         isDirty: true,
@@ -1523,6 +1537,7 @@ export function modelReducer(state: ModelState, action: ModelAction): ModelState
       // Overseer: write-back for the THIRD (experiment orchestration) graph.
       // The GraphEditor's scheduleSync forks to this when the Overseer sub-tab
       // is active (mirrors SET_GRAPH / SET_AGENT_GRAPH).
+      if (graphWriteIsNoop(state.model.overseerGraphNodes, state.model.overseerGraphEdges, action.nodes, action.edges)) return state;
       return {
         ...state,
         isDirty: true,
@@ -1596,7 +1611,11 @@ export function modelReducer(state: ModelState, action: ModelAction): ModelState
       return { ...state, isDirty: true, model };
     }
 
-    case 'UPDATE_MACRO':
+    case 'UPDATE_MACRO': {
+      // The macro-scope write-back takes the same no-op guard as the three
+      // graph writes above (the editor syncs a macro's canvas through here).
+      const cur = (state.model.macroDefs || []).find(m => m.id === action.id);
+      if (cur && deepEqualPlain({ ...cur, ...action.changes }, cur)) return state;
       return {
         ...state,
         isDirty: true,
@@ -1607,6 +1626,7 @@ export function modelReducer(state: ModelState, action: ModelAction): ModelState
           ),
         },
       };
+    }
 
     /**
      * MOVE ACROSS A MACRO BOUNDARY — the LINKED-INSTANCE cascade.

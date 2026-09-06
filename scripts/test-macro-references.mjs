@@ -815,7 +815,7 @@ const planGate = M.planImport(roundTripped(), bare);
 check('an agent element warns when the Agents topology is off',
   /Bond-Graph Agents/.test(rowOf(planGate, 'ag_facing')?.inertWarning ?? ''));
 check('a bond attribute warns when Bonds is off',
-  /Bonds is enabled/.test(rowOf(planGate, 'bond_w')?.inertWarning ?? ''));
+  /Bonds capability/.test(rowOf(planGate, 'bond_w')?.inertWarning ?? ''));
 check('a face palette warns when Variegated Cells is off',
   /Variegated/.test(rowOf(planGate, 'fp1')?.inertWarning ?? ''));
 check('a gated element still IMPORTS (warn, never block)',
