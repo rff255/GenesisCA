@@ -2,6 +2,10 @@
 
 > Area doc for **GenesisCA**. The full annotated tree of src/, scripts/, docs/ and public/. Read when you need to find where something lives, or when adding a file that needs a tree entry.
 >
+> **Also read** — a change here usually reaches [`architecture.md`](architecture.md).
+> Keep following those onward until a pass turns up nothing new; the reading is not done at the first
+> doc that answers your question. See *Read to CLOSURE, not to the first hit* in `../../CLAUDE.md`.
+>
 > Sections below were moved **verbatim** out of `CLAUDE.md` (2026-09-06) so the always-loaded
 > file could stay small. Nothing was rewritten or deleted. See `../../CLAUDE.md` for the
 > project-wide rules and the routing table, and `docs/HANDOFF_*.md` for the full build narratives.

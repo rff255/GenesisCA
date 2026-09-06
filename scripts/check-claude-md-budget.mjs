@@ -11,13 +11,18 @@
 // TABLE; subsystem detail lives in `docs/areas/*.md` and is read on demand. This
 // gate is what keeps that true, since the failure mode is silent and gradual.
 //
-// It checks three things:
+// It checks four things:
 //   1. SIZE      — CLAUDE.md stays within the budget below.
 //   2. POINTERS  — every `docs/areas/*.md` named in CLAUDE.md actually exists
 //                  (a dead routing entry is worse than a long file: the reader
 //                  is sent somewhere and finds nothing).
 //   3. ORPHANS   — every file in `docs/areas/` is reachable from CLAUDE.md
 //                  (an unrouted area doc is a doc nobody will ever open).
+//   4. CLOSURE   — every area doc carries an "Also read" line, and every area
+//                  it cross-links to exists. The routing table is only an ENTRY
+//                  POINT; the docs are a graph an agent is required to walk to
+//                  closure, and a dead cross-link silently ends that walk one
+//                  hop early (see "Read to CLOSURE" in CLAUDE.md).
 //
 //   node scripts/check-claude-md-budget.mjs           # gate
 //   node scripts/check-claude-md-budget.mjs --top     # what is taking the room
@@ -89,6 +94,33 @@ if (orphans.length) {
   console.error('  Add a row to the routing table, or nobody will ever open it.\n');
 }
 
+// ---------------------------------------------------------------- 4. closure
+const areas = [...present].filter((a) => a !== 'README');
+const noAlsoRead = [];
+const deadLinks = [];
+for (const a of areas) {
+  const t = fs.readFileSync(path.join(AREAS_DIR, `${a}.md`), 'utf8');
+  if (!/^> \*\*Also read\*\*/m.test(t)) { noAlsoRead.push(a); continue; }
+  const refs = new Set([
+    ...[...t.matchAll(/\]\(([A-Za-z0-9._-]+)\.md\)/g)].map((m) => m[1]),
+    ...[...t.matchAll(/docs\/areas\/([A-Za-z0-9._-]+)\.md/g)].map((m) => m[1]),
+  ]);
+  for (const r of refs) if (!present.has(r)) deadLinks.push(`${a}.md -> ${r}.md`);
+}
+if (noAlsoRead.length) {
+  bad = true;
+  console.error(`FAIL — ${noAlsoRead.length} area doc(s) have no "> **Also read**" line:`);
+  for (const a of noAlsoRead) console.error(`  docs/areas/${a}.md`);
+  console.error('  Without it the reader stops here instead of walking on to the areas this');
+  console.error('  change also reaches — the exact failure "Read to CLOSURE" exists to prevent.\n');
+}
+if (deadLinks.length) {
+  bad = true;
+  console.error(`FAIL — ${deadLinks.length} cross-link(s) point at a missing area doc:`);
+  for (const l of deadLinks) console.error(`  ${l}`);
+  console.error('');
+}
+
 // ---------------------------------------------------------------- --top
 if (showTop) {
   const secs = [];
@@ -110,4 +142,4 @@ if (showTop) {
 }
 
 if (bad) process.exit(1);
-console.log(`OK — ${present.size} area docs, all routed, all present.`);
+console.log(`OK — ${areas.length} area docs, all routed, all present, all cross-linked.`);

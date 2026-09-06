@@ -2,6 +2,10 @@
 
 > Area doc for **GenesisCA**. React Flow graph editor, CaNode, panels, reroutes, the cross-tab clipboard, and the large "Key Patterns" catalogue of editor gotchas. Read before touching src/modeler/**.
 >
+> **Also read** — a change here usually reaches [`compiler-core.md`](compiler-core.md) · [`macros.md`](macros.md) · [`agent-nodes.md`](agent-nodes.md) · [`project-structure.md`](project-structure.md).
+> Keep following those onward until a pass turns up nothing new; the reading is not done at the first
+> doc that answers your question. See *Read to CLOSURE, not to the first hit* in `../../CLAUDE.md`.
+>
 > Sections below were moved **verbatim** out of `CLAUDE.md` (2026-09-06) so the always-loaded
 > file could stay small. Nothing was rewritten or deleted. See `../../CLAUDE.md` for the
 > project-wide rules and the routing table, and `docs/HANDOFF_*.md` for the full build narratives.

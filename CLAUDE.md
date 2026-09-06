@@ -8,6 +8,10 @@
 > and read that file BEFORE you start editing.** Those files hold the invariants, the gotchas and the
 > traps for each subsystem; they were moved out of this file verbatim, so nothing was lost.
 >
+> **One doc is rarely enough.** Each area doc names the other areas a change there reaches; follow them
+> until a pass turns up nothing new — see [Read to CLOSURE](#read-to-closure-not-to-the-first-hit).
+> Almost every expensive defect recorded in these docs came from stopping at the first one.
+>
 > Full build narratives — measurements, verification logs, phase reports, design rationale — live in
 > `docs/HANDOFF_*.md`, `docs/PLAN_*.md`, `docs/IMPACT_MAP_*.md` and `docs/INVESTIGATION_*.md`.
 
@@ -132,6 +136,10 @@ full precisely because they are the part no session should have to go looking fo
   one-to-three-sentence summaries); (6) for node-system changes (new nodes, port types, redundancies) also
   `docs/NODES_REFERENCE.md` (table + node count + Mermaid diagrams). Drift between any of these silently
   degrades every later change, so treat them as one atomic update.
+- **"The" area doc is usually more than one.** The areas you had to READ to make the change safely (see
+  [Read to CLOSURE](#read-to-closure-not-to-the-first-hit)) are the areas whose docs may now need a line —
+  and if you discovered a coupling nobody had written down, say so on *both* ends and add it to the
+  `Also read` line, so the next agent's walk reaches it without having to rediscover it.
 - **This file (`CLAUDE.md`) is NOT where feature detail goes.** It is loaded into *every* session, so it holds
   only project-wide rules and the routing table. Adding a section here for a feature costs every future session
   forever. **`node scripts/check-claude-md-budget.mjs` enforces it** — see [Keeping this file small](#keeping-this-file-small).
@@ -154,10 +162,14 @@ Browsable index with sizes: [`docs/areas/README.md`](docs/areas/README.md).
 
 | You are touching | Read first |
 |---|---|
-| `src/modeler/vpl/compiler/**` — shared passes, JS emit, any schema feature that lowers to nodes | `docs/areas/compiler-core.md` |
+| `src/modeler/vpl/compiler/**` — the shared passes (sinking, CSE, hazards, lowerings) and JS emit | `docs/areas/compiler-core.md` |
+| `src/modeler/vpl/compiler/expandComposites.ts`, `vectorAttr.ts`, `colorHex.ts`, anything about a value's TYPE | `docs/areas/value-types.md` |
+| `src/modeler/vpl/compiler/variegation.ts`, `subAttribute.ts`, `linkedOutputMappings.ts` | `docs/areas/cell-features.md` |
 | `src/modeler/vpl/compiler/wasm/**` | `docs/areas/compiler-wasm.md` |
 | `src/modeler/vpl/compiler/webgpu/**`, `webgpuRuntime.ts` | `docs/areas/compiler-webgpu.md` |
-| `src/modeler/vpl/compiler/agentWasm/**`, `agentWebgpu/**`, `agentAbi.ts` | `docs/areas/agent-engine.md` |
+| `src/modeler/vpl/compiler/agentWasm/**`, `agentWebgpu/**` | `docs/areas/agent-compilers.md` |
+| `src/modeler/vpl/compiler/agentAbi.ts`, `src/model/agentCapabilities.ts` | `docs/areas/agent-capabilities.md` |
+| `src/modeler/vpl/nodes/**` — a node DEFINITION (ports, config, validation) | `docs/areas/compiler-core.md`; an agent node → `docs/areas/agent-nodes.md` |
 | `src/modeler/vpl/**` — the graph editor, `CaNode`, node UX, reroutes, clipboard | `docs/areas/modeler-ui.md` |
 | `src/modeler/panels/**` — the Modeler's side panels | `docs/areas/modeler-ui.md` |
 | `src/simulator/engine/sim.worker.ts`, the SoA grid, stepping, sparse stepping | `docs/areas/simulation-engine.md` |
@@ -179,15 +191,59 @@ Browsable index with sizes: [`docs/areas/README.md`](docs/areas/README.md).
 | The thing you are doing | Read first |
 |---|---|
 | Adding or changing a **node type** | `docs/areas/compiler-core.md` (+ the per-target docs, + `docs/NODES_REFERENCE.md`) |
+| Adding or changing an **agent node** | `docs/areas/agent-nodes.md` |
+| Adding a **value type**, an attribute type, or anything about **colour / alpha** | `docs/areas/value-types.md` |
+| **Variegation**, sub-attributes, lookup tables, the auto colour pass | `docs/areas/cell-features.md` |
 | Changing the **model schema** (`types.ts`) or a file format | `docs/areas/architecture.md` |
 | A model **runs on an unexpected engine**, or a gate rejects it | `docs/areas/engines-and-targets.md` |
 | **Macros** — defs, expansion, references, explicit controls | `docs/areas/macros.md` |
 | **Indicators**, charts, end conditions, stop events | `docs/areas/indicators.md` |
 | **Bond topology** — bond attributes, the request queue, rewiring | `docs/areas/graph-rewriting.md` |
 | Anything that must also work in **3D** | `docs/areas/grid-3d.md` |
-| **Agent capabilities** / physics profiles | `docs/areas/agent-engine.md` |
+| **Agent capabilities** / physics profiles / the agent ABI | `docs/areas/agent-capabilities.md` |
+| Emitting an agent graph on **WASM or WebGPU** | `docs/areas/agent-compilers.md` |
 | **GPU residency**, direct render, the UI-sync policy | `docs/areas/agent-render.md` |
 | Writing or extending a **verification harness** | `docs/areas/testing-harnesses.md` |
+
+---
+
+# Read to CLOSURE, not to the first hit
+
+**The routing table gives you an ENTRY POINT, not the reading list.** Each area doc names the other
+areas a change there reaches — in its `Also read` line and inline in the prose — and following those
+names is **not optional**. Nearly every expensive defect recorded in these docs was written by someone
+who read one doc, made a locally-correct change, and never learned that the thing they touched has a
+mirror somewhere else.
+
+**The procedure, every time:**
+
+1. **ROUTE** — find the area for what you are about to edit, and read it.
+2. **BLAST RADIUS** — from what you now know, list every OTHER area your change reaches. The table
+   below is the floor, not the ceiling.
+3. **FOLLOW** — read those docs too, including the parts that look unrelated to your fix. That is where
+   the mirror you did not know about is described.
+4. **REPEAT** until a pass turns up nothing new. *Then* write code.
+
+Re-skipping a doc you have already read costs nothing. A doc you never opened costs a silent,
+plausible-looking bug that compiles, passes tsc, and is caught by no gate. **Stopping at the first doc
+that answers "how do I make this work" is the failure this rule exists to prevent** — so is asking a
+subagent for a summary in place of reading the area doc yourself.
+
+| If your change… | you MUST also read |
+|---|---|
+| emits or changes **compiled output** — any node, any pass, even an error string | every per-target doc for that layer (`compiler-wasm.md`, `compiler-webgpu.md`, `agent-compilers.md`): ALL-TARGET DELIVERY is non-negotiable, and `check-compile-identity` hashes error strings too |
+| touches an **agent node** | `agent-nodes.md` → `agent-compilers.md` (three emitters) → `agent-capabilities.md` (does it need a capability? an ABI field?) → `agent-engine.md` (does the engine read what it writes?) |
+| touches the **agent SoA, a memory layout, or an ABI** | `agent-capabilities.md` (the descriptor + the gates), `agent-compilers.md` (every mirror), `agent-render.md` (the snapshot and the GPU round-trip). A missed mirror shifts every later field silently. |
+| touches **any per-cell or per-agent geometry** | `grid-3d.md` — 2D and 3D are one code path plus a layer axis, and fixing one while regressing the other is the most common defect in this repo |
+| adds or changes a **UI control** | `modeler-ui.md` or `simulator-ui.md` for the doctrine (hide vs grey vs tooltip), **plus** the area doc for whatever the control actually resolves |
+| changes **what a model can declare** (`types.ts`) | `architecture.md`, then every area that READS the new field — a resolver has one home and many callers |
+| **deletes or renames** a model element | the element's own area doc for the `ModelContext` cascade, **and** `macros.md` (element references travel inside `.gcamacro`) |
+| changes a **worker message** | `simulation-engine.md`, `agent-render.md` (staleness + defer sets), and `io-and-formats.md` if the payload can be serialised |
+| touches **rendering** | `agent-render.md` and `grid-3d.md` — the free/frame flip means one visual can have three implementations that must agree |
+| adds a **fast path or a gate** | `engines-and-targets.md` — every verdict must come from the function that ENFORCES it, never a re-implementation |
+
+**The same closure decides where the documentation goes when you finish**: every area you had to READ
+is an area whose doc may now need a line. See *Documentation consistency* above.
 
 ---
 

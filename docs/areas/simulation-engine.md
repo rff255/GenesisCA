@@ -2,6 +2,10 @@
 
 > Area doc for **GenesisCA**. sim.worker.ts, the Structure-of-Arrays grid, step batching, the busy overlay, sparse stepping, the Grid Init Event. Read before touching the worker or the grid step loop.
 >
+> **Also read** — a change here usually reaches [`compiler-core.md`](compiler-core.md) · [`compiler-wasm.md`](compiler-wasm.md) · [`compiler-webgpu.md`](compiler-webgpu.md) · [`agent-engine.md`](agent-engine.md) · [`grid-3d.md`](grid-3d.md) · [`io-and-formats.md`](io-and-formats.md).
+> Keep following those onward until a pass turns up nothing new; the reading is not done at the first
+> doc that answers your question. See *Read to CLOSURE, not to the first hit* in `../../CLAUDE.md`.
+>
 > Sections below were moved **verbatim** out of `CLAUDE.md` (2026-09-06) so the always-loaded
 > file could stay small. Nothing was rewritten or deleted. See `../../CLAUDE.md` for the
 > project-wide rules and the routing table, and `docs/HANDOFF_*.md` for the full build narratives.
