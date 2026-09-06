@@ -1,0 +1,409 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>GenesisCA — See-through node canvas (brainstorm)</title>
+<style>
+  :root{
+    --bg:#0c0d10; --panel:#16181d; --elev:#1c1f26; --border:#2a2e37;
+    --text:#d8dae0; --muted:#8a8f9a; --accent:#e8a13a; --rec:#e05050; --ok:#5bc98a; --cyan:#4cc9f0; --flow:#66bb6a;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;padding:32px 28px 64px;background:var(--bg);color:var(--text);
+       font-family:system-ui,-apple-system,"Segoe UI",sans-serif;font-size:14px;line-height:1.55}
+  .wrap{max-width:1120px;margin:0 auto}
+  h1{font-size:22px;margin:0 0 6px;letter-spacing:.2px}
+  h2{font-size:16px;margin:40px 0 4px;color:var(--accent);letter-spacing:.3px}
+  h2 .tag{font-size:11px;color:var(--muted);font-weight:400;letter-spacing:.4px;margin-left:8px}
+  h3{font-size:12px;margin:18px 0 6px;color:var(--muted);text-transform:uppercase;letter-spacing:.7px;font-weight:600}
+  p{margin:8px 0} .lead{color:var(--muted);max-width:86ch}
+  ul{margin:6px 0 6px 18px;padding:0} li{margin:3px 0}
+  .rule{height:1px;background:var(--border);margin:26px 0 0}
+  .cap{font-size:12px;color:var(--muted);margin:10px 0 0} .cap b{color:var(--text);font-weight:600}
+  .note{font-size:12px;color:var(--muted);border-left:2px solid var(--border);padding-left:10px;margin:12px 0}
+  .warn{border-left-color:var(--accent)}
+  .kbd{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:11px;background:#12141a;border:1px solid var(--border);
+       border-radius:3px;padding:0 4px;color:#eaeaea}
+  code{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px;color:#c9d1d9}
+  .pill{display:inline-block;font-size:10.5px;padding:1px 7px;border-radius:9px;border:1px solid var(--border);color:var(--muted);margin-left:6px;vertical-align:middle}
+  .pill.rec{color:var(--ok);border-color:#26402f}
+  .pill.warnp{color:var(--accent);border-color:#4a3a1e}
+
+  /* ── mock app frame ── */
+  .app{position:relative;height:420px;border:1px solid var(--border);border-radius:9px;overflow:hidden;background:#0a0b0e;margin:12px 0 4px;
+       font-size:11px}
+  .nav{position:absolute;inset:0 0 auto 0;height:34px;background:var(--panel);border-bottom:1px solid var(--border);display:flex;align-items:center;padding:0 10px;gap:8px;z-index:30}
+  .nav .logo{width:14px;height:14px;border-radius:3px;background:linear-gradient(135deg,#e8a13a,#4cc9f0)}
+  .nav .t{font-weight:600;color:#eaeaea}
+  .nav .modes{margin-left:auto;margin-right:auto;display:flex;gap:2px}
+  .nav .m{padding:3px 9px;border-radius:5px;color:var(--muted);border:1px solid transparent}
+  .nav .m.on{color:#eaeaea;background:#22262e;border-color:#33383f}
+  .nav .m.live{color:var(--accent);border-color:#4a3a1e}
+  .nav .right{display:flex;gap:6px;color:var(--muted)}
+  .ears{position:absolute;left:0;top:34px;bottom:0;width:36px;display:flex;flex-direction:column;justify-content:center;gap:5px;padding:0 5px;z-index:20}
+  .ear{height:24px;border-radius:6px;background:var(--panel);border:1px solid #33383f;color:var(--muted);display:flex;align-items:center;justify-content:center;font-size:10px}
+  .ear.on{color:var(--accent);border-color:#5a4320;background:#241d12}
+  .area{position:absolute;top:34px;bottom:0;left:36px;right:0}
+
+  /* sim layer */
+  .sim{position:absolute;inset:0}
+  .sim canvas{width:100%;height:100%;display:block;image-rendering:pixelated}
+  /* graph layer */
+  .graph{position:absolute;inset:0}
+  .pane{position:absolute;inset:0;background:var(--bg);
+        background-image:radial-gradient(#242830 1px,transparent 1px);background-size:18px 18px}
+  .pane.glass{background:rgba(12,13,16,var(--dim,.55));background-image:radial-gradient(rgba(60,66,80,.6) 1px,transparent 1px);background-size:18px 18px}
+  .edges{position:absolute;inset:0;pointer-events:none}
+  .node{position:absolute;width:150px;background:var(--elev);border:1px solid #2f343d;border-radius:6px;box-shadow:0 3px 10px #0008;overflow:hidden}
+  .node .hd{padding:3px 8px;font-weight:600;font-size:10.5px;color:#fff;display:flex;align-items:center;justify-content:space-between}
+  .node .bd{padding:5px 8px;color:var(--muted);font-size:10px;line-height:1.4}
+  .node.evt .hd{background:#ffffff;color:#1e2a3a}
+  .node.data .hd{background:#1565c0}
+  .node.math .hd{background:#6a1b9a}
+  .node.logic .hd{background:#00838f}
+  .node.out .hd{background:#c62828}
+  .port{position:absolute;width:8px;height:8px;border-radius:50%;background:var(--cyan);border:1px solid #0a0b0e}
+  .port.f{border-radius:0;clip-path:polygon(0 0,100% 50%,0 100%);background:var(--flow);width:9px;height:9px}
+  .port.l{left:-5px} .port.r{right:-5px}
+  .pills{position:absolute;top:8px;left:50%;transform:translateX(-50%);display:flex;gap:2px;background:var(--panel);border:1px solid var(--border);border-radius:8px;padding:2px;z-index:15}
+  .pills span{padding:2px 8px;border-radius:6px;color:var(--muted)} .pills span.on{color:#eaeaea;background:#22262e}
+  .pills i{display:inline-block;width:6px;height:6px;border-radius:50%;margin-right:5px;vertical-align:middle}
+  .transport{position:absolute;bottom:10px;left:50%;transform:translateX(-50%);display:flex;gap:3px;align-items:center;background:var(--panel);border:1px solid var(--border);border-radius:9px;padding:4px 6px;box-shadow:0 4px 18px #000a;z-index:15}
+  .tb{min-width:24px;height:22px;padding:0 6px;border:1px solid var(--border);border-radius:5px;display:flex;align-items:center;justify-content:center;color:var(--text);font-size:10.5px;background:#12141a}
+  .tb.play{color:var(--ok);border-color:#26402f;font-size:12px;min-width:30px}
+  .tb.amber{color:var(--accent);border-color:#4a3a1e}
+  .tb.muted{color:var(--muted)}
+  .stats{position:absolute;right:10px;bottom:10px;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:10px;color:#8f98a6;text-align:right;line-height:1.5;z-index:15}
+  .livechip{position:absolute;top:8px;right:10px;display:flex;align-items:center;gap:8px;background:var(--panel);border:1px solid var(--border);border-radius:8px;padding:4px 8px;z-index:15;color:var(--muted)}
+  .livechip b{color:var(--accent);font-weight:600}
+  .livechip input[type=range]{width:90px;accent-color:var(--accent)}
+  .livechip label{display:flex;align-items:center;gap:4px;cursor:pointer}
+  .livechip input[type=checkbox]{accent-color:var(--accent);margin:0}
+  .cursor{position:absolute;width:26px;height:26px;border:1.5px solid #fff;mix-blend-mode:difference;border-radius:50%;pointer-events:none;z-index:14}
+  .focusring{position:absolute;inset:0;pointer-events:none;border:2px solid transparent;transition:border-color .2s}
+  .reach .focusring{border-color:var(--accent)}
+  .reach .graph{opacity:.32;transition:opacity .2s}
+  .graph{transition:opacity .2s}
+  .badge{position:absolute;top:-6px;right:-6px;width:14px;height:14px;border-radius:50%;background:var(--accent);color:#000;font-size:9px;font-weight:700;display:flex;align-items:center;justify-content:center}
+  .dirty{position:absolute;top:6px;right:6px;font-size:9px;color:var(--accent)}
+
+  /* split */
+  .split .graph{right:42%}
+  .split .pane{background-color:var(--bg)}
+  .split .sim{left:58%}
+  .divider{position:absolute;top:0;bottom:0;left:calc(58% - 3px);width:6px;background:#1e2229;cursor:col-resize;z-index:16;display:flex;align-items:center;justify-content:center}
+  .divider i{width:2px;height:28px;border-radius:2px;background:#454b56}
+  .simbar{position:absolute;top:0;left:58%;right:0;height:22px;background:#111318cc;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:6px;padding:0 8px;color:var(--muted);font-size:10px;z-index:15}
+  .simbar b{color:#eaeaea;font-weight:600}
+  .simbar .sp{margin-left:auto;display:flex;gap:4px}
+  .simbar .ico{width:16px;height:16px;border:1px solid var(--border);border-radius:3px;display:flex;align-items:center;justify-content:center}
+
+  /* pip */
+  .pip{position:absolute;right:14px;bottom:14px;width:300px;height:190px;background:#0a0b0e;border:1px solid #3a4049;border-radius:7px;box-shadow:0 10px 30px #000c;z-index:18;overflow:hidden}
+  .pip .ttl{height:20px;background:var(--panel);border-bottom:1px solid var(--border);display:flex;align-items:center;gap:5px;padding:0 6px;font-size:10px;color:var(--muted);cursor:move}
+  .pip .ttl b{color:#eaeaea;font-weight:600}
+  .pip .ttl .sp{margin-left:auto;display:flex;gap:3px}
+  .pip .ttl .ico{width:14px;height:14px;border:1px solid var(--border);border-radius:3px;display:flex;align-items:center;justify-content:center;font-size:9px}
+  .pip .body{position:absolute;top:20px;left:0;right:0;bottom:0}
+  .pip .body canvas{width:100%;height:100%;display:block;image-rendering:pixelated}
+  .pip .grip{position:absolute;right:0;bottom:0;width:12px;height:12px;background:linear-gradient(135deg,transparent 50%,#4a5160 50%);cursor:nwse-resize}
+  .pip .mini{position:absolute;bottom:5px;left:50%;transform:translateX(-50%);display:flex;gap:2px;z-index:2}
+  .pip .mini .tb{height:18px;min-width:20px;font-size:9.5px;padding:0 4px}
+
+  /* misc diagrams */
+  table{border-collapse:collapse;width:100%;font-size:12.5px;margin:10px 0}
+  th,td{border:1px solid var(--border);padding:6px 9px;text-align:left;vertical-align:top}
+  th{background:var(--panel);color:var(--muted);font-weight:600;font-size:11px;text-transform:uppercase;letter-spacing:.5px}
+  td.good{color:var(--ok)} td.bad{color:var(--rec)} td.mid{color:var(--accent)}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+  .box{background:var(--panel);border:1px solid var(--border);border-radius:8px;padding:10px 12px;font-size:12.5px}
+  .box h4{margin:0 0 6px;font-size:12px;color:#eaeaea}
+  .flow{display:flex;align-items:stretch;gap:6px;flex-wrap:wrap;margin:10px 0}
+  .step{background:var(--panel);border:1px solid var(--border);border-radius:7px;padding:7px 10px;font-size:11.5px;min-width:120px;position:relative}
+  .step small{display:block;color:var(--muted);font-size:10.5px;margin-top:2px}
+  .step.exists{border-color:#26402f} .step.exists::before{content:"exists";position:absolute;top:-8px;right:8px;font-size:9px;color:var(--ok);background:var(--bg);padding:0 4px}
+  .step.new{border-color:#4a3a1e} .step.new::before{content:"new";position:absolute;top:-8px;right:8px;font-size:9px;color:var(--accent);background:var(--bg);padding:0 4px}
+  .arrow{align-self:center;color:var(--muted)}
+  .layers{display:flex;gap:10px;align-items:flex-end;margin:10px 0}
+  .layer{flex:1;border:1px solid var(--border);border-radius:6px;padding:6px 8px;font-size:11px;background:var(--panel)}
+  .layer .z{font-size:9.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>See-through node canvas — editing the model while it plays</h1>
+<p class="lead">Blender's compositor/shader editors let you keep a live render behind the node graph and see every edit land. GenesisCA has the two halves already — a node editor and a simulator that soft-recompiles on every graph edit — but they are mutually exclusive: switching to the Modeler <em>unmounts</em> the simulator's UI and auto-pauses the run. This brainstorm proposes three ways to put the running simulation and the rule graph on screen at once, and the mechanics they all share. <b>Nothing here is built.</b> The mockups below are live HTML: the background is a small Game of Life actually running, so the overlay can be judged with something moving behind it.</p>
+
+<div class="note">What already exists and makes this cheap: (1) <code>SimulatorView</code> is always mounted, hidden by <code>display:none</code>, and its worker survives tab switches; (2) a graph edit is synced to the model after 100 ms and triggers a <em>soft recompile</em> that keeps the grid state (a structural change forces a reinit); (3) every GPU display path presents into a real DOM canvas the browser composites, so stacking the graph over it is CSS z-order, not new rendering. What is missing is only <em>seeing</em> the run while the graph is on screen, and deciding who owns the keyboard and the pointer.</div>
+
+<!-- ────────────────────────────────────────────────────────────── -->
+<h2>Option A — Backdrop overlay <span class="tag">the Blender look</span><span class="pill rec">most "see-through"</span></h2>
+<p class="lead">The simulator canvas fills the modeler's canvas area, full-bleed. The node graph's pane becomes translucent glass: nodes and wires stay fully opaque, the pane's dotted background becomes a dimming scrim with an <b>opacity slider</b>. The pointer belongs to the graph; holding a modifier (or a toggle) "reaches through" to the simulation, fading the graph so the brush, pan, and orbit gestures land on the board.</p>
+
+<div class="app" id="appA">
+  <div class="nav"><div class="logo"></div><span class="t">GenesisCA</span><span style="color:var(--muted)">File ▾ &nbsp; Library</span>
+    <div class="modes"><span class="m on">⬚ Modeler</span><span class="m">▷ Simulator</span><span class="m live">◐ Live</span></div>
+    <div class="right"><span>?</span><span>⌨</span><span>◑</span></div></div>
+  <div class="ears"><div class="ear">i</div><div class="ear">⚙</div><div class="ear on">≡</div><div class="ear">⊞</div><div class="ear">⇄</div><div class="ear">∿</div></div>
+  <div class="area">
+    <div class="sim"><canvas id="lifeA"></canvas><div class="cursor" style="left:62%;top:58%;display:none" id="curA"></div></div>
+    <div class="graph" id="graphA"><div class="pane glass" id="paneA"></div></div>
+    <div class="focusring"></div>
+    <div class="pills"><span class="on"><i style="background:var(--cyan)"></i>Cells</span><span><i style="background:#7e57c2"></i>Agents</span></div>
+    <div class="livechip"><b>◐ Live</b>
+      <label>dim <input type="range" id="dimA" min="0" max="100" value="55"></label>
+      <label><input type="checkbox" id="reachA"> reach through <span class="kbd">Alt</span></label>
+    </div>
+    <div class="transport"><span class="tb muted">FPS 30</span><span class="tb muted">G/F 1</span><span class="tb play">▮▮</span><span class="tb">⏭</span><span class="tb">■</span><span class="tb amber" title="last edit applied 0.3 s ago">● synced</span></div>
+    <div class="stats">Gen 1 284 · 30 fps<br>alive 2 011<br>⚙ WebGPU</div>
+  </div>
+</div>
+<p class="cap"><b>Try it:</b> drag the <em>dim</em> slider to change the scrim; tick <em>reach through</em> to see the graph fade while the board takes the pointer (an amber focus ring marks which surface owns input). Nodes keep full opacity at every dim level — legibility comes from the node bodies, not the pane.</p>
+
+<div class="grid2">
+  <div class="box"><h4>What changes on screen</h4>
+    <ul>
+      <li>A third top-level mode, <b>Live</b> (or a toggle inside the Modeler). The ear-tabs, side panels, graph pills, and macro breadcrumb stay exactly where they are.</li>
+      <li>React Flow's <code>Background</code> dots become the scrim; the pane's <code>--color-bg-canvas</code> fill is replaced by <code>rgba(bg, dim)</code>.</li>
+      <li>Node bodies gain a faint frosted backing (no blur — a 2 px shadow + the existing opaque body is enough); comment and group tints get one notch more transparent so they don't wall off the board.</li>
+      <li>A <b>compact transport bar</b> floats at the bottom of the canvas (play/pause, step, reset, FPS, G/F) — the simulator's own bar, re-docked. The mapping viewer tabs collapse into a dropdown on the same bar.</li>
+      <li>The stats overlay and the compile-target chip keep their bottom-right corner; the capture cluster is left out of Live mode (record from the Simulator tab).</li>
+    </ul></div>
+  <div class="box"><h4>Reach-through (input ownership)</h4>
+    <ul>
+      <li>Default: the graph owns pointer <em>and</em> keyboard. Wheel zooms the graph; RMB pans the graph.</li>
+      <li><span class="kbd">Alt</span> held (or the chip's toggle, or a middle-click latch): the graph fades to ~30 % and every gesture goes to the simulator — brush, RMB pan, wheel zoom, 3D orbit. The brush cursor appears; a focus ring shows who has input.</li>
+      <li>Release <span class="kbd">Alt</span> → graph comes back. The sim's camera and the graph's viewport are independent; a "Fit board to graph viewport" button aligns them once.</li>
+      <li>Nothing dual-purpose is ever active on both surfaces at once — this is how <span class="kbd">Space</span> (quick-add in the Modeler, step in the Simulator) stops conflicting.</li>
+    </ul></div>
+</div>
+
+<h3>Layer stack (2D, and it is the same in 3D)</h3>
+<div class="layers">
+  <div class="layer"><div class="z">z 0</div>simulator display canvas<br><small style="color:var(--muted)">CPU blit, WebGPU direct-render blit, or E2 composite — unchanged</small></div>
+  <div class="layer"><div class="z">z 1</div>cursor overlays<br><small style="color:var(--muted)">neg-silhouette + highlight canvases — visible only while reaching through</small></div>
+  <div class="layer"><div class="z">z 2</div>React Flow pane (scrim)<br><small style="color:var(--muted)">transparent fill × dim</small></div>
+  <div class="layer"><div class="z">z 3</div>edges + nodes + minimap + menus<br><small style="color:var(--muted)">opaque, as today</small></div>
+  <div class="layer"><div class="z">z 4</div>Live chip · transport · stats<br><small style="color:var(--muted)">data-sim-overlay, never paint the board</small></div>
+</div>
+<p class="cap">In 3D the sphere/voxel free-mode canvases already sit under gl3d's overlay canvas as layered DOM elements; the graph goes on top of that stack unchanged. Orbit requires reach-through, which is the honest answer — a graph drag and an orbit drag cannot share LMB.</p>
+
+<div class="note warn">Cost to watch: the browser composites a full-viewport translucent layer over a canvas that repaints at up to 60 fps. On integrated GPUs this is fine for a 2D grid but the Live chip should offer "pause rendering while dragging nodes" (the simulation keeps stepping; only the blit skips), and Live mode should default the sim's FPS cap to 30.</div>
+
+<!-- ────────────────────────────────────────────────────────────── -->
+<h2>Option B — Split workspace <span class="tag">Blender areas</span><span class="pill rec">cheapest, most legible</span></h2>
+<p class="lead">The canvas area is divided by a draggable splitter: node graph on one side, the full simulator viewport on the other, both fully interactive with no modifier games. This is how most people actually use Blender's node editors — a render viewport <em>next to</em> the graph, not behind it. The graph keeps its opaque pane and full contrast; the viewport keeps its own transport bar, viewer tabs and brush.</p>
+
+<div class="app split" id="appB">
+  <div class="nav"><div class="logo"></div><span class="t">GenesisCA</span><span style="color:var(--muted)">File ▾ &nbsp; Library</span>
+    <div class="modes"><span class="m on">⬚ Modeler</span><span class="m">▷ Simulator</span><span class="m live">◐ Live</span></div>
+    <div class="right"><span>?</span><span>⌨</span><span>◑</span></div></div>
+  <div class="ears"><div class="ear">i</div><div class="ear">⚙</div><div class="ear on">≡</div><div class="ear">⊞</div><div class="ear">⇄</div><div class="ear">∿</div></div>
+  <div class="area">
+    <div class="graph" id="graphB"><div class="pane"></div></div>
+    <div class="pills" style="left:29%"><span class="on"><i style="background:var(--cyan)"></i>Cells</span><span><i style="background:#7e57c2"></i>Agents</span></div>
+    <div class="divider"><i></i></div>
+    <div class="sim"><canvas id="lifeB"></canvas></div>
+    <div class="simbar"><b>Game of Life</b><span>default-viz ▾</span><span class="sp"><span class="ico" title="dock right">▥</span><span class="ico" title="dock bottom">▤</span><span class="ico" title="swap sides">⇄</span><span class="ico" title="collapse">⤡</span></span></div>
+    <div class="transport" style="left:79%"><span class="tb play">▮▮</span><span class="tb">⏭</span><span class="tb">■</span><span class="tb amber">● synced</span></div>
+    <div class="stats">Gen 1 284 · 30 fps<br>alive 2 011</div>
+  </div>
+</div>
+<p class="cap"><b>Layout menu</b> (top-right of the viewport): dock right / dock bottom / swap / collapse. The splitter position persists like the panel widths. A double-click on the splitter snaps to 50 %.</p>
+
+<div class="grid2">
+  <div class="box"><h4>Why it is the cheapest</h4>
+    <ul>
+      <li>Both views render in their own box — no transparency, no input arbitration, no z-order across two React trees. The keyboard owner is simply the box under the last click / hover (a 1 px accent border on the focused box).</li>
+      <li>The simulator's right panel (brush, indicators) and the modeler's detail panels compete for width. Live mode collapses the simulator's side panels by default and exposes the brush as a small popover from the viewport bar.</li>
+      <li>Reuses <code>PanelShell</code>'s resize handle pattern and the modeler's panel-collapse machinery.</li>
+    </ul></div>
+  <div class="box"><h4>What it gives up</h4>
+    <ul>
+      <li>Half the width for the graph. Big graphs need the minimap more; a "graph focus" key (<span class="kbd">F</span> already collapses side panels) can temporarily shrink the viewport to a strip.</li>
+      <li>The "watching the run through the wires" feel — the overlay's real appeal for demos and for cause→effect intuition.</li>
+    </ul></div>
+</div>
+
+<!-- ────────────────────────────────────────────────────────────── -->
+<h2>Option C — Live viewport window <span class="tag">picture-in-picture</span><span class="pill warnp">best for multi-monitor</span></h2>
+<p class="lead">A small floating window over the graph shows the running simulation. It drags, resizes from a corner, snaps to the nearest canvas corner, and expands to full viewport with one click. A <b>pop-out</b> button moves it into a real OS window via the Document Picture-in-Picture API (Chromium, which is what WebGPU already requires), so on a two-monitor desk the simulation lives on the second screen while the graph fills the first.</p>
+
+<div class="app" id="appC">
+  <div class="nav"><div class="logo"></div><span class="t">GenesisCA</span><span style="color:var(--muted)">File ▾ &nbsp; Library</span>
+    <div class="modes"><span class="m on">⬚ Modeler</span><span class="m">▷ Simulator</span></div>
+    <div class="right"><span>?</span><span>⌨</span><span>◑</span></div></div>
+  <div class="ears"><div class="ear">i</div><div class="ear">⚙</div><div class="ear on">≡</div><div class="ear">⊞</div><div class="ear">⇄</div><div class="ear">∿</div></div>
+  <div class="area">
+    <div class="graph" id="graphC"><div class="pane"></div></div>
+    <div class="pills"><span class="on"><i style="background:var(--cyan)"></i>Cells</span><span><i style="background:#7e57c2"></i>Agents</span></div>
+    <div class="pip">
+      <div class="ttl"><b>◐ Game of Life</b><span>Gen 1 284</span><span class="sp"><span class="ico" title="snap corner">⌗</span><span class="ico" title="expand">⤢</span><span class="ico" title="pop out to a window">⧉</span><span class="ico" title="close">×</span></span></div>
+      <div class="body"><canvas id="lifeC"></canvas>
+        <div class="mini"><span class="tb play">▮▮</span><span class="tb">⏭</span><span class="tb">■</span><span class="tb amber">●</span></div>
+        <div class="grip"></div></div>
+    </div>
+  </div>
+</div>
+<p class="cap">The window is view-only by default (no brush, no inspect) — it is a monitor, not a workbench. Clicking it is what switches to the Simulator tab if the user wants to interact. A "follow inspected agent" would work here too, since Follow mode already tracks a camera target.</p>
+
+<div class="note">The pop-out is the interesting half. <code>documentPictureInPicture.requestWindow()</code> gives an always-on-top window the page fully controls; the simulator's display canvas can be <em>moved</em> into it (the worker's transferred OffscreenCanvas keeps presenting into the same DOM element), and it returns to the main document when closed. It is Chromium-only and needs a user gesture — the same constraints the app already accepts for WebGPU and the Tauri shell.</div>
+
+<!-- ────────────────────────────────────────────────────────────── -->
+<h2>Side by side</h2>
+<table>
+<tr><th>Criterion</th><th>A · Backdrop overlay</th><th>B · Split workspace</th><th>C · Live window</th></tr>
+<tr><td>Graph legibility</td><td class="mid">good at dim ≥ 50 %; busy boards fight the wires</td><td class="good">unchanged</td><td class="good">unchanged (window occludes a corner)</td></tr>
+<tr><td>Board legibility</td><td class="mid">dimmed; fine for spotting change, poor for detail</td><td class="good">full, own zoom</td><td class="mid">small unless expanded / popped out</td></tr>
+<tr><td>Interact with the board (brush, orbit, inspect)</td><td class="mid">through a modifier</td><td class="good">directly</td><td class="bad">not in the window; switch tabs</td></tr>
+<tr><td>3D models</td><td class="mid">works; orbit needs reach-through</td><td class="good">works</td><td class="good">works (view-only)</td></tr>
+<tr><td>Multi-monitor</td><td class="bad">no</td><td class="bad">no</td><td class="good">pop-out</td></tr>
+<tr><td>"Feel the edit land" (the Blender appeal)</td><td class="good">strongest</td><td class="mid">good</td><td class="mid">weaker (peripheral)</td></tr>
+<tr><td>Input arbitration risk</td><td class="bad">highest — two surfaces, one pointer</td><td class="good">none</td><td class="good">none</td></tr>
+<tr><td>Rendering cost</td><td class="mid">translucent full-viewport layer over a live canvas</td><td class="good">two opaque boxes</td><td class="good">small box; pop-out is a separate compositor</td></tr>
+<tr><td>Implementation size</td><td class="mid">M — mount both views + scrim + reach-through + focus owner</td><td class="good">S–M — mount both views + splitter + panel policy</td><td class="mid">M — floating window + Document PiP + canvas move</td></tr>
+</table>
+
+<h3>Recommendation</h3>
+<div class="box">
+<p><b>Build B as the base, and make A a layout setting on top of it.</b> One "Live" mode with a layout knob: <em>Split right · Split bottom · Overlay</em>. Overlay is Split with the divider pushed to the edge and the graph pane's fill turned to glass — the same two mounted views, the same transport bar, only the CSS placement and the reach-through modifier differ. That way the input-arbitration work is scoped to Overlay and can ship later without redoing the plumbing, and users who dislike the see-through look never meet it. C's pop-out is a follow-up that reuses the same mounted viewport; its floating in-page form is the least valuable of the three and could be skipped.</p>
+</div>
+
+<!-- ────────────────────────────────────────────────────────────── -->
+<h2>Mechanics every option shares</h2>
+<h3>1 · The edit → running-rule pipeline (mostly built)</h3>
+<div class="flow">
+  <div class="step exists">Graph edit<small>React Flow state</small></div><span class="arrow">→</span>
+  <div class="step exists">100 ms debounce<small><code>scheduleSync</code> → SET_GRAPH</small></div><span class="arrow">→</span>
+  <div class="step exists">model change<small><code>useEffect([model])</code> in SimulatorView</small></div><span class="arrow">→</span>
+  <div class="step exists">soft recompile<small>JS/WASM/WebGPU compile, grid state kept</small></div><span class="arrow">→</span>
+  <div class="step new">swap on next batch<small>keep the last good fn while compiling</small></div><span class="arrow">→</span>
+  <div class="step exists">worker steps on<small>never paused by the edit</small></div>
+</div>
+<ul>
+  <li><b>Last-good-rule semantics.</b> A half-wired graph compiles with errors dozens of times per minute while the user works. The run must keep the previous compiled function and show the error where it belongs — an amber <span class="kbd">!</span> on the offending node (the existing badge) plus a small <span class="tb amber" style="display:inline-flex">● stale</span> state on the transport chip — instead of the red banner that stops everything today. The banner stays for the Simulator tab.</li>
+  <li><b>Apply policy.</b> A per-session switch on the Live chip: <em>Auto (100 ms)</em> — Blender's behaviour — or <em>On demand</em> (the chip turns amber "● pending", <span class="kbd">Ctrl+Enter</span> applies). On-demand matters for slow compiles (large WebGPU shaders, big agent graphs) and for deliberate multi-node edits that should land atomically.</li>
+  <li><b>Structural edits do not silently reset.</b> Adding an attribute, changing grid dimensions, flipping a capability profile → <code>needsFullInit</code> → today's reinit re-seeds the board. In Live mode that should be a prompt on the chip ("Rebuild needed · the board will re-seed · Apply / Later"), so a dozen structural edits cost one reset, and the running board is never lost by accident. If the model carries a saved board, <em>Reset restores the saved board</em> already answers what comes back.</li>
+  <li><b>RNG / determinism.</b> A recompile mid-run is a new rule from generation N; the shared stream advances continuously. Fine for exploration, but the Overseer must refuse to run while Live is on (a sweep under a moving rule is meaningless) — the same mutual exclusion it already has with manual play.</li>
+</ul>
+
+<h3>2 · Mounting both views</h3>
+<ul>
+  <li><code>ModelerView</code> is conditionally rendered and rebuilds React Flow on every mount (its layout state survives via <code>modelerUiState</code>); <code>SimulatorView</code> is always mounted and auto-pauses on <code>visible=false</code>. Live mode renders both with a new <code>visible</code>-like flag that means "shown" rather than "the active tab", so the auto-pause does not fire and the simulator's <code>draw()</code> keeps running.</li>
+  <li>Both views measure their canvas from their container; the splitter / overlay just changes the containers. The direct-render re-attach on resize already exists (it tracks a splitter drag today).</li>
+  <li>The two side-panel systems (modeler ears + detail panel; simulator left/right panels) both push the canvas. Live mode gives the graph the modeler's panels and hides the simulator's, exposing brush + indicators as popovers from the viewport bar.</li>
+</ul>
+
+<h3>3 · Who owns the keyboard</h3>
+<table>
+<tr><th>Key</th><th>Modeler today</th><th>Simulator today</th><th>Live mode</th></tr>
+<tr><td><span class="kbd">Space</span></td><td>quick-add menu at cursor</td><td>single step (pauses)</td><td>goes to the focused surface; the focus ring makes it visible</td></tr>
+<tr><td><span class="kbd">Enter</span></td><td>—</td><td>play / pause</td><td>always play/pause <b>unless</b> a text field or menu has focus — the one global exception, because it is the reason Live exists</td></tr>
+<tr><td><span class="kbd">Esc</span></td><td>close menu / dialog</td><td>reset</td><td>graph-first: closes a menu if one is open, else does nothing. Reset stays a button; a stray Esc must never wipe the run</td></tr>
+<tr><td><span class="kbd">Ctrl+Z</span></td><td>graph undo</td><td>—</td><td>graph undo (the run is not undoable)</td></tr>
+<tr><td><span class="kbd">F</span></td><td>collapse panels</td><td>collapse panels</td><td>collapse both</td></tr>
+<tr><td><span class="kbd">Alt</span> (hold)</td><td>—</td><td>—</td><td>Overlay only: reach through to the board</td></tr>
+</table>
+
+<h3>4 · Performance guards</h3>
+<ul>
+  <li>Default the Live FPS cap to 30 and skip the blit (not the step) while a node drag is in progress — <code>draw()</code> is the expensive main-thread part; the worker keeps stepping.</li>
+  <li>Large grids on the CPU path ship a colours buffer per frame; the WebGPU/direct-render paths do not. Live mode changes nothing there.</li>
+  <li>A compile every 100 ms on a 500-node graph is noticeable; the debounce should stretch to ~400 ms while the pointer is down and collapse back when it lifts.</li>
+</ul>
+
+<h3>5 · Open questions to decide before an impact map</h3>
+<ul>
+  <li>Is Live a third top-level mode (Modeler · Simulator · Live) or a toggle inside the Modeler? A mode is discoverable and keeps the two existing tabs pure; a toggle avoids a third place to be.</li>
+  <li>Should the Agents graph and the Cells graph overlay differently (agents drawn over the graph even at full dim, since they are sparse)? Cheap to try with the overlay's scrim.</li>
+  <li>Does the standalone <code>.html</code> export ever want this? Probably not — it ships the simulator only.</li>
+  <li>Macro scope: editing inside a macro while it runs is the same pipeline, but the breadcrumb and the boundary nodes take vertical space the overlay could use.</li>
+</ul>
+
+<p class="cap" style="margin-top:28px">Companion note: <code>docs/BRAINSTORM_SEE_THROUGH_CANVAS.md</code>. No code changes, no schema, no compiler impact in any option — this is layout, mounting, and input ownership.</p>
+</div>
+
+<script>
+// ── a small Game of Life so the mockups have something moving behind them ──
+function startLife(canvas, cols, rows, fps){
+  const ctx=canvas.getContext('2d');
+  let W=0,H=0,cw=0,ch=0;
+  function fit(){
+    const dpr=Math.min(2,window.devicePixelRatio||1);
+    const w=Math.floor(canvas.clientWidth*dpr), h=Math.floor(canvas.clientHeight*dpr);
+    if(w<=0||h<=0) return false;
+    if(w!==W||h!==H){ W=w;H=h; canvas.width=W; canvas.height=H; cw=W/cols; ch=H/rows; }
+    return true;
+  }
+  let a=new Uint8Array(cols*rows), b=new Uint8Array(cols*rows);
+  for(let i=0;i<a.length;i++) a[i]=Math.random()<0.32?1:0;
+  function step(){
+    for(let r=0;r<rows;r++)for(let c=0;c<cols;c++){
+      let n=0;
+      for(let dr=-1;dr<=1;dr++)for(let dc=-1;dc<=1;dc++){
+        if(!dr&&!dc)continue;
+        n+=a[((r+dr+rows)%rows)*cols+((c+dc+cols)%cols)];
+      }
+      const i=r*cols+c; b[i]=(n===3||(a[i]&&n===2))?1:0;
+    }
+    const t=a;a=b;b=t;
+  }
+  function draw(){
+    if(!fit()) return;
+    ctx.fillStyle='#0b0c10'; ctx.fillRect(0,0,W,H);
+    ctx.fillStyle='#4cc9f0';
+    for(let r=0;r<rows;r++)for(let c=0;c<cols;c++) if(a[r*cols+c]) ctx.fillRect(c*cw,r*ch,Math.ceil(cw)-1,Math.ceil(ch)-1);
+  }
+  let last=0, gen=0;
+  function tick(t){
+    if(t-last>1000/fps){ last=t; step(); draw(); if(++gen%400===0){ for(let i=0;i<a.length;i++) if(Math.random()<0.02) a[i]=1; } }
+    requestAnimationFrame(tick);
+  }
+  draw(); requestAnimationFrame(tick);
+}
+startLife(document.getElementById('lifeA'),128,64,10);
+startLife(document.getElementById('lifeB'),64,64,10);
+startLife(document.getElementById('lifeC'),60,36,10);
+
+// ── a fake rule graph ──
+const NODES=[
+  {id:'step',cls:'evt',x:40,y:60,hd:'Generation Step',bd:'per cell',outs:['f']},
+  {id:'get',cls:'data',x:40,y:150,hd:'Get Neighbors Attribute',bd:'alive · moore',outs:['v']},
+  {id:'agg',cls:'math',x:230,y:150,hd:'Aggregate',bd:'Sum',ins:['v'],outs:['v']},
+  {id:'cmp',cls:'logic',x:410,y:110,hd:'Logical Expression',bd:'n == 3 OR (alive AND n == 2)',ins:['v','v'],outs:['v']},
+  {id:'set',cls:'out',x:610,y:60,hd:'Set Attribute',bd:'alive ← value',ins:['f','v'],outs:['f'],badge:true},
+  {id:'self',cls:'data',x:230,y:240,hd:'Get Self Attribute',bd:'alive',outs:['v']},
+];
+const EDGES=[['step',0,'set',0,'f'],['get',0,'agg',0,'v'],['agg',0,'cmp',0,'v'],['self',0,'cmp',1,'v'],['cmp',0,'set',1,'v']];
+function buildGraph(el, scale, ox, oy){
+  const svg=document.createElementNS('http://www.w3.org/2000/svg','svg'); svg.setAttribute('class','edges'); svg.setAttribute('width','100%'); svg.setAttribute('height','100%');
+  el.appendChild(svg);
+  const pos={};
+  NODES.forEach(n=>{
+    const d=document.createElement('div'); d.className='node '+n.cls; d.style.left=(ox+n.x*scale)+'px'; d.style.top=(oy+n.y*scale)+'px'; d.style.width=(150*scale)+'px';
+    d.innerHTML=`<div class="hd">${n.hd}</div><div class="bd">${n.bd}</div>`+(n.badge?'<div class="badge">!</div>':'');
+    (n.ins||[]).forEach((k,i)=>{const p=document.createElement('div');p.className='port l '+(k==='f'?'f':'');p.style.top=(22+i*16)*scale+'px';d.appendChild(p);pos[n.id+':in'+i]=[ox+n.x*scale,oy+(n.y+26+i*16)*scale];});
+    (n.outs||[]).forEach((k,i)=>{const p=document.createElement('div');p.className='port r '+(k==='f'?'f':'');p.style.top=(22+i*16)*scale+'px';d.appendChild(p);pos[n.id+':out'+i]=[ox+(n.x+150)*scale,oy+(n.y+26+i*16)*scale];});
+    el.appendChild(d);
+  });
+  EDGES.forEach(([a,ai,b,bi,k])=>{
+    const [x1,y1]=pos[a+':out'+ai],[x2,y2]=pos[b+':in'+bi]; const dx=Math.max(40,(x2-x1)/2);
+    const p=document.createElementNS('http://www.w3.org/2000/svg','path');
+    p.setAttribute('d',`M${x1},${y1} C${x1+dx},${y1} ${x2-dx},${y2} ${x2},${y2}`); p.setAttribute('fill','none');
+    p.setAttribute('stroke',k==='f'?'#66bb6a':'#4cc9f0'); p.setAttribute('stroke-width','2'); svg.appendChild(p);
+  });
+}
+buildGraph(document.getElementById('graphA'),1,60,60);
+buildGraph(document.getElementById('graphB'),0.72,20,60);
+buildGraph(document.getElementById('graphC'),1,60,60);
+
+// ── option A interactivity ──
+const paneA=document.getElementById('paneA'), dimA=document.getElementById('dimA'), reachA=document.getElementById('reachA'), appA=document.getElementById('appA'), curA=document.getElementById('curA');
+dimA.addEventListener('input',()=>paneA.style.setProperty('--dim',(dimA.value/100).toFixed(2)));
+reachA.addEventListener('change',()=>{appA.classList.toggle('reach',reachA.checked); curA.style.display=reachA.checked?'block':'none';});
+document.addEventListener('keydown',e=>{ if(e.key==='Alt'){e.preventDefault(); reachA.checked=true; reachA.dispatchEvent(new Event('change'));} });
+document.addEventListener('keyup',e=>{ if(e.key==='Alt'){ reachA.checked=false; reachA.dispatchEvent(new Event('change'));} });
+</script>
+</body>
+</html>
