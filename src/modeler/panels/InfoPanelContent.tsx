@@ -233,7 +233,7 @@ export function InfoPanelContent(_props: PanelContentProps = {}) {
               simulator (SLEUTH's hillshade layer / QGIS's basemap). Presentation
               only: no rule reads it. Its opacity + Show toggle are per-USER view
               settings and live in the Simulator, not here.
-              Behind the Geographic tools (GIS) gate in Properties → Structure —
+              Behind the Geographic tools (GIS) gate in Properties › Setup › Extensions —
               hidden rather than disabled, since a non-map model can do nothing
               with it. A stored backdrop is KEPT when the gate is turned off. */}
           {properties.gisTools === true && (

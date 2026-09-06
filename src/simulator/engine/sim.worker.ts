@@ -3774,7 +3774,7 @@ function runAgentStructuralPhase(): void {
   // invariant harness exercises the shipped code, not a copy; here we only
   // surface the overflow notice.
   if (drainAgentBondRequests(s, lambda)) {
-    self.postMessage({ type: 'agentOverflow', message: `Bond request queue full (depth ${s.bondReqSlots - 1}). Some Form / Break / Rewire Bond requests were dropped this step. Raise "Bond Requests / Agent / Step" in Model Properties > Bond-Graph Agents.` });
+    self.postMessage({ type: 'agentOverflow', message: `Bond request queue full (depth ${s.bondReqSlots - 1}). Some Form / Break / Rewire Bond requests were dropped this step. Raise "Bond requests / agent / step" under Properties > Agents > Advanced.` });
   }
 
   // 1b. Death ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â recycle killed agents (breaks all bonds + bumps the epoch).
@@ -3837,7 +3837,7 @@ function runAgentStructuralPhase(): void {
       // Disambiguated from the step-1 notice (Impact Map §5.7): the same
       // sentence twice in one step reads as a bug, and the two passes have
       // different causes and different fixes.
-      self.postMessage({ type: 'agentOverflow', message: `Bond request queue full during division events (depth ${s.bondReqSlots - 1}). Some Form / Break / Rewire Bond requests issued by the Division Event were dropped this step. Raise "Bond Requests / Agent / Step" in Model Properties > Bond-Graph Agents.` });
+      self.postMessage({ type: 'agentOverflow', message: `Bond request queue full during division events (depth ${s.bondReqSlots - 1}). Some Form / Break / Rewire Bond requests issued by the Division Event were dropped this step. Raise "Bond requests / agent / step" under Properties > Agents > Advanced.` });
     }
   }
 

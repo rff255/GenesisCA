@@ -370,9 +370,9 @@ export function HelpView() {
             that decide what you can build come first and the read-only readouts come last:
           </p>
           <ul className={styles.list}>
-            <li><strong>Setup</strong> &mdash; <em>Layers</em> (Grid Cells / Bond-Graph Agents, each a card that names the node families it unlocks), <em>Grid</em> (dimension, width / height / depth, boundary) and <em>Extensions</em> (Variegated Cells, Overseer, Geographic tools &mdash; the georeference lives inside that card). This is the tab that decides which nodes exist at all: when its choices hide nodes, the Palette says how many and links straight here.</li>
-            <li><strong>Execution</strong> &mdash; the reproducibility contract, the grid engine (update mode, async scheme, Auto / WASM / WebGPU &mdash; Debug JS and the WebGPU stop-check interval sit under <em>Advanced</em>), the agent engine, and performance (Skip Isolated Empty Cells).</li>
-            <li><strong>Agents</strong> (present only while the Bond-Graph Agents layer is on) &mdash; the capability profile, population, motion and bonding physics; layout iterations and the bond request depth sit under <em>Advanced</em>.</li>
+            <li><strong>Setup</strong> &mdash; <em>Layers</em> (Grid Cells / Bond-Graph Agents, each a card that names the node families it unlocks), <em>Space</em> (dimension, width / height / depth, boundary &mdash; ONE frame shared by the cell lattice and the agent world, so it is shown for an agents-only model too) and <em>Extensions</em> (Variegated Cells, Overseer, Geographic tools &mdash; the georeference lives inside that card). This is the tab that decides which nodes exist at all: when its choices hide nodes, the Palette says how many and links straight here.</li>
+            <li><strong>Execution</strong> &mdash; the reproducibility contract, the grid engine (update mode, async scheme, Auto / WASM / WebGPU &mdash; Debug JS and the WebGPU stop-check interval sit under <em>Advanced</em>), the agent engine, performance (Skip Isolated Empty Cells) and, when the model carries a saved board, a <em>Reset</em> section (&ldquo;Reset restores the saved board&rdquo;).</li>
+            <li><strong>Agents</strong> (present only while the Bond-Graph Agents layer is on) &mdash; the capability profile (each capability row owns its own tuning knobs &mdash; collision stiffness, adhesion, springs, auto-bond, growth rate, the neighbour query radius &mdash; revealed only while that capability is on), population and motion (rows the current Motion mode makes inert are greyed with the reason); layout iterations and the bond request depth sit under <em>Advanced</em>.</li>
             <li><strong>Diagnostics</strong> &mdash; the read-only <em>Compatibility</em> and <em>Generation Pipeline</em> readouts (each with a Copy button) and the per-agent memory footprint. Nothing here is a setting.</li>
           </ul>
           <p className={styles.p}>
@@ -1735,7 +1735,7 @@ export function HelpView() {
             landing order only the sequential CPU engines define.
           </p>
           <p className={styles.p}>
-            <strong>Asynchronous mode</strong> (set in Model Properties &gt; Execution) updates
+            <strong>Asynchronous mode</strong> (set in Properties &rarr; Execution &rarr; Grid engine) updates
             cells one at a time using a single buffer, so each cell sees previous
             updates within the same generation. Combined with the expanded <em>Writability</em> rules
             (cells can modify neighbor attributes directly), this enables <em>number-conserving</em> models
@@ -1895,7 +1895,7 @@ export function HelpView() {
           <p className={styles.p}>
             GenesisCA models are 2D by default &mdash; a flat <code>W&times;H</code> grid.
             Flipping <strong>Dimension</strong> to <strong>3D</strong> in
-            Properties&nbsp;&rarr;&nbsp;Setup&nbsp;&rarr;&nbsp;Grid turns the lattice into a
+            Properties&nbsp;&rarr;&nbsp;Setup&nbsp;&rarr;&nbsp;Space turns the lattice into a
             <code>W&times;H&times;D</code> <strong>volume</strong> (a Grid&nbsp;Depth field
             appears). Everything you already know carries over: attributes, the rule
             graph, indicators, and all three compile targets (JavaScript / WebAssembly /
@@ -2087,12 +2087,13 @@ export function HelpView() {
             with an <code>(x, y)</code> position, a radius, and bonds to other agents.
             By default agents move only by the forces <em>your rule graph</em> applies
             (Apply Force / Set Velocity) &mdash; ideal for flocking, chemotaxis, or a
-            grid-of-agents. Tick <strong>Use bonding physics</strong> (Properties &rarr;
-            Agents &rarr; Bonding physics) to switch on the built-in center-based engine: agents then push
-            each other apart (soft-sphere repulsion), can be joined by springs
-            (<strong>bonds</strong>), <strong>grow</strong> toward a target size, and
-            <strong> divide</strong> into a connected tissue &mdash; how you model
-            <strong> morphogenesis</strong> (tissue that grows into shape). With it off, none of
+            grid-of-agents. Turn on the physics capabilities in the <strong>Capability
+            profile</strong> (Properties &rarr; Agents) to switch on the built-in center-based
+            engine: <strong>Collision</strong> makes agents push each other apart (soft-sphere
+            repulsion), <strong>Bonds = Physics</strong> joins them by springs, <strong>Growth</strong>{' '}
+            ramps the radius toward a target size, and <strong>Division</strong> splits them into a
+            connected tissue &mdash; how you model <strong>morphogenesis</strong> (tissue that grows
+            into shape). Each row reveals its own tuning knobs when it is on; with them off, none of
             those automatic behaviours apply, so an agent model that has nothing to do with bonds
             stays clean.
           </p>
@@ -2512,8 +2513,10 @@ export function HelpView() {
             transiently overlap) while <em>Positional</em> is a rigid no-overlap constraint (billiard
             balls; tune with <em>Positional iterations</em>) &mdash; <strong>Bonds = Physics</strong>{' '}
             makes bonds spring (Data bonds are force-free edges), and{' '}
-            <strong>Growth</strong> runs the radius ramp &mdash; each independently of the legacy
-            &ldquo;Use bonding physics&rdquo; master toggle. The profile also <strong>shrinks the
+            <strong>Growth</strong> runs the radius ramp &mdash; each on its own row, which also carries that
+            capability&rsquo;s tuning knobs (stiffness, rest length, growth rate&hellip;). There is no
+            separate physics toggle any more; the one legacy flag left, <strong>Adhesion</strong>{' '}
+            (free-agent stickiness), is a checkbox beside Collision. The profile also <strong>shrinks the
             per-agent memory the engine allocates</strong>: a capability that is off, and whose field
             no node reads, is simply <em>not allocated</em> &mdash; sprite state (36 B/agent), age,
             target radius and neighbour density all drop out, and the footprint readout shows what
@@ -2860,7 +2863,7 @@ export function HelpView() {
               between two agents.</li>
             <li><strong>Apply Force</strong> &mdash; add a force vector to the agent; the engine
               integrates the sum of all your Apply Force contributions (plus its built-in
-              soft-sphere repulsion + bond springs when <em>Use bonding physics</em> is on). This
+              soft-sphere repulsion when <em>Collision</em> is on, and bond springs when <em>Bonds = Physics</em>). This
               is how you build <strong>boids</strong> (separation + alignment + cohesion),
               <strong> chemotaxis</strong> (force up a Field Gradient), or self-propulsion. With
               <strong> Momentum</strong> &gt; 0 the force changes velocity (flocking inertia). In a
@@ -3638,8 +3641,10 @@ export function HelpView() {
               <strong> Max Bonds / Agent</strong>. These are over-allocated ceilings; running
               past them <strong>rejects</strong> the new agent/bond (it never wraps or corrupts).
               <strong> Max Bonds / Agent can be 0</strong> for a pure-force / charged-particle
-              model (no bonds at all); turning on Use bonding physics bumps it to a default if
-              it&rsquo;s still 0. Changing a ceiling re-initialises the engine. A generous
+              model (no bonds at all); switching the Bonds capability to Data or Physics bumps it to a
+              default if it&rsquo;s still 0, and with Bonds <em>Off</em> the field is greyed with the
+              reason (the engine allocates no store whatever it says). Changing a ceiling
+              re-initialises the engine. A generous
               <em> Max Agents</em> is cheap: memory is reserved for it, but the per-generation
               work &mdash; including the WebGPU target&rsquo;s CPU&harr;GPU transfers &mdash;
               tracks the LIVE population, not the ceiling.</li>
@@ -3690,17 +3695,19 @@ export function HelpView() {
               does it in the graph is purely authoring: a model attribute is a <em>live Simulator
               slider</em>, while Momentum lives in the Modeler&rsquo;s Properties panel (it is still
               live-tunable there &mdash; changing it needs no re-init).</li>
-            <li><strong>Use bonding physics</strong> &mdash; the coarse legacy master toggle for the
-              built-in engine, <strong>off by default</strong> when you enable Agents. Turn it on to
-              reveal (and turn on together): <strong>Forces</strong> (the soft-sphere law:
-              <strong> Repulsion</strong>, <strong>Adhesion</strong>, <strong>Interaction Range</strong>,
-              <strong> Growth Rate</strong>) and <strong>Bonds</strong> (<strong>Auto-bond by
-              distance</strong>, <strong>Bond Stiffness</strong>, and the <strong>Form / Break
-              Distances</strong> &mdash; a hysteresis band so bonds don't flicker).{' '}
-              <em>For finer control the Agents tab's <strong>Capability profile</strong> section drives these
-              individually and independently of this toggle: <strong>Collision</strong> runs the
-              repulsion on its own (a pure gas), <strong>Bonds = Physics</strong> the springs, and
-              <strong> Growth</strong> the radius ramp.</em> With both this toggle and the physics
+            <li><strong>The physics knobs live on their capability rows</strong> (Properties &rarr;
+              Agents &rarr; Capability profile), revealed only while that capability is on &mdash; so a
+              knob you can see is always live and a live knob is never hidden. <strong>Collision =
+              Soft-sphere</strong> reveals <strong>Repulsion μ</strong> and the <strong>Interaction
+              range</strong> (a multiplier of the contact distance, not a distance); <strong>Positional</strong>{' '}
+              reveals its iteration count. <strong>Bonds = Physics</strong> reveals <strong>Bond
+              stiffness λ</strong>, the <strong>rest length</strong> and <strong>Auto-bond by
+              distance</strong> with its <strong>Form / Break distances</strong> (a hysteresis band so
+              bonds don&rsquo;t flicker). <strong>Growth</strong> reveals the <strong>growth
+              rate</strong>; <strong>Sensing</strong> the <strong>Neighbour query radius</strong> (the
+              spatial-hash bin the neighbour queries are sized to). <strong>Adhesion</strong> &mdash;
+              free-agent stickiness (μ<sub>A</sub>) &mdash; is a checkbox beside Collision: the one
+              legacy engine flag no capability governs yet; it needs Motion = Force. With the physics
               capabilities off, agents move only by your Apply Force / Set Velocity.</li>
           </ul>
           <p className={styles.p}>
@@ -3711,7 +3718,8 @@ export function HelpView() {
             that profile into the file. The old <em>Use bonding physics</em> pair survives only as a
             fallback for a hand-edited file; if one ever reaches the engine, a notice says so and asks
             you to re-save. Adhesion is the exception worth knowing: it is still driven by that
-            toggle alone, because no capability governs it yet.
+            flag alone (the <em>Adhesion</em> checkbox beside Collision), because no capability
+            governs it yet.
           </p>
           <p className={styles.p}>
             In the Simulator, the <strong>Agents</strong> panel (docked in the right side panel)
@@ -4305,7 +4313,7 @@ export function HelpView() {
               <em>reseed from the rules</em>: defaults, then the model&apos;s Init Events. A model
               whose board is <em>data</em> (imported map layers, a hand-painted starting
               configuration) can declare that saved board as its initial state instead &mdash;{' '}
-              <em>Properties &rarr; Execution &rarr; Reproducibility &rarr; &ldquo;Reset restores the saved board&rdquo;</em>,
+              <em>Properties &rarr; Execution &rarr; Reset &rarr; &ldquo;Reset restores the saved board&rdquo;</em>,
               or the <em>Use as initial state</em> box in the Save dialog &mdash; and then Reset
               reseeds <em>and</em> applies that board on top. Whichever is the default,{' '}
               <strong>hover or right-click the Reset button</strong> to pick either action
@@ -4514,7 +4522,7 @@ export function HelpView() {
             to run with no network &mdash; and <strong>Reset puts the landscape back</strong>.
             Imported data is not an Init Event, so a plain reseed would wipe it; both models
             therefore declare their saved board as their <em>initial state</em>
-            (<em>Properties &rarr; Execution &rarr; Reproducibility</em>), which makes Reset reseed and then apply that
+            (<em>Properties &rarr; Execution &rarr; Reset</em>), which makes Reset reseed and then apply that
             board on top. To reseed from the rules alone, hover or right-click the Reset button
             and pick <em>Reseed from rules</em>. <strong>Your own imports get this
             automatically</strong>: applying a <code>.asc</code> / GeoTIFF / GeoJSON import
