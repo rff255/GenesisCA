@@ -2,6 +2,10 @@
 
 > Area doc for **GenesisCA**. Macro defs, boundary nodes, expansion, reference export/import, explicit controls, moving a selection across a boundary, linked vs independent copies.
 >
+> **Also read** — a change here usually reaches [`compiler-core.md`](compiler-core.md) · [`modeler-ui.md`](modeler-ui.md) · [`io-and-formats.md`](io-and-formats.md).
+> Keep following those onward until a pass turns up nothing new; the reading is not done at the first
+> doc that answers your question. See *Read to CLOSURE, not to the first hit* in `../../CLAUDE.md`.
+>
 > Sections below were moved **verbatim** out of `CLAUDE.md` (2026-09-06) so the always-loaded
 > file could stay small. Nothing was rewritten or deleted. See `../../CLAUDE.md` for the
 > project-wide rules and the routing table, and `docs/HANDOFF_*.md` for the full build narratives.

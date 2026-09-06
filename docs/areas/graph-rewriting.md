@@ -2,6 +2,10 @@
 
 > Area doc for **GenesisCA**. Neighbour census, bond attributes, the structural request queue, rewire/transfer/form-between verbs, division partitions, graph indicators and the flagship samples. Read before touching bond topology or the request queue.
 >
+> **Also read** — a change here usually reaches [`agent-engine.md`](agent-engine.md) · [`agent-nodes.md`](agent-nodes.md) · [`agent-compilers.md`](agent-compilers.md) · [`indicators.md`](indicators.md) · [`model-library.md`](model-library.md).
+> Keep following those onward until a pass turns up nothing new; the reading is not done at the first
+> doc that answers your question. See *Read to CLOSURE, not to the first hit* in `../../CLAUDE.md`.
+>
 > Sections below were moved **verbatim** out of `CLAUDE.md` (2026-09-06) so the always-loaded
 > file could stay small. Nothing was rewritten or deleted. See `../../CLAUDE.md` for the
 > project-wide rules and the routing table, and `docs/HANDOFF_*.md` for the full build narratives.

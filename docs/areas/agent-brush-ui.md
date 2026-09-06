@@ -2,6 +2,10 @@
 
 > Area doc for **GenesisCA**. The agent brush (add/remove/move/edit/push/pull/glue/cut/paint), brush kinds, the 3D control overhaul, inspectors, vision cones and follow mode. Read before touching the agent brush in SimulatorView.
 >
+> **Also read** — a change here usually reaches [`agent-render.md`](agent-render.md) · [`agent-engine.md`](agent-engine.md) · [`simulator-ui.md`](simulator-ui.md) · [`grid-3d.md`](grid-3d.md).
+> Keep following those onward until a pass turns up nothing new; the reading is not done at the first
+> doc that answers your question. See *Read to CLOSURE, not to the first hit* in `../../CLAUDE.md`.
+>
 > Sections below were moved **verbatim** out of `CLAUDE.md` (2026-09-06) so the always-loaded
 > file could stay small. Nothing was rewritten or deleted. See `../../CLAUDE.md` for the
 > project-wide rules and the routing table, and `docs/HANDOFF_*.md` for the full build narratives.

@@ -2,6 +2,10 @@
 
 > Area doc for **GenesisCA**. The W×H×D lattice across all three targets, 3D neighbourhoods, the WebGL2 voxel renderer, the worker WGSL voxel pass, the 3D viewport and its gizmo. Read before any change that must work in 3D.
 >
+> **Also read** — a change here usually reaches [`simulation-engine.md`](simulation-engine.md) · [`compiler-wasm.md`](compiler-wasm.md) · [`compiler-webgpu.md`](compiler-webgpu.md) · [`agent-render.md`](agent-render.md) · [`simulator-ui.md`](simulator-ui.md).
+> Keep following those onward until a pass turns up nothing new; the reading is not done at the first
+> doc that answers your question. See *Read to CLOSURE, not to the first hit* in `../../CLAUDE.md`.
+>
 > Sections below were moved **verbatim** out of `CLAUDE.md` (2026-09-06) so the always-loaded
 > file could stay small. Nothing was rewritten or deleted. See `../../CLAUDE.md` for the
 > project-wide rules and the routing table, and `docs/HANDOFF_*.md` for the full build narratives.

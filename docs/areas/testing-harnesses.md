@@ -1,6 +1,10 @@
 # Verification harnesses (`scripts/*.mjs`)
 
 > Area doc for **GenesisCA**. The project's regression net: 67 Node harnesses that run the SHIPPED
+>
+> **Also read** — a change here usually reaches [`compiler-core.md`](compiler-core.md) · [`agent-compilers.md`](agent-compilers.md) · [`agent-engine.md`](agent-engine.md).
+> Keep following those onward until a pass turns up nothing new; the reading is not done at the first
+> doc that answers your question. See *Read to CLOSURE, not to the first hit* in `../../CLAUDE.md`.
 > modules (esbuild-bundled where needed) rather than re-implementations. Generated from the script
 > headers on 2026-09-06 — regenerate rather than hand-editing when scripts are added.
 >

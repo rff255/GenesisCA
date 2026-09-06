@@ -2,6 +2,10 @@
 
 > Area doc for **GenesisCA**. Drawing agents: the worker-side GPU direct render (A1/A2/A1.5/C/D/E2), the UI-sync policy, sprites on all three targets, 3D billboards, residency and the active window. Read before touching agentWebgpuRuntime.ts render paths or drawAgentsOverlay.
 >
+> **Also read** — a change here usually reaches [`agent-engine.md`](agent-engine.md) · [`simulator-ui.md`](simulator-ui.md) · [`grid-3d.md`](grid-3d.md) · [`agent-brush-ui.md`](agent-brush-ui.md) · [`engines-and-targets.md`](engines-and-targets.md).
+> Keep following those onward until a pass turns up nothing new; the reading is not done at the first
+> doc that answers your question. See *Read to CLOSURE, not to the first hit* in `../../CLAUDE.md`.
+>
 > Sections below were moved **verbatim** out of `CLAUDE.md` (2026-09-06) so the always-loaded
 > file could stay small. Nothing was rewritten or deleted. See `../../CLAUDE.md` for the
 > project-wide rules and the routing table, and `docs/HANDOFF_*.md` for the full build narratives.
