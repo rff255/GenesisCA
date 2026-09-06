@@ -1,0 +1,567 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Neural networks &amp; Neural CA in GenesisCA — what exists, what is missing, how to train</title>
+<style>
+  :root{
+    color-scheme: dark;
+    --bg:#0c0d10; --panel:#16181d; --panel2:#1c1f26; --panel3:#22262f;
+    --border:#2a2e37; --border2:#3a3f4a;
+    --ink:#e9ebee; --muted:#9aa0aa; --faint:#6b7280;
+    --accent:#e8a13a; --accent2:#f4c06a; --accent-soft:rgba(232,161,58,.13);
+    --cyan:#4cc9f0; --green:#66bb6a; --red:#e0566a; --purple:#b08cff; --pink:#f06aa8;
+    --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;
+    --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth;background:#0c0d10}
+  body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);line-height:1.6;
+    background-image:radial-gradient(1100px 480px at 82% -8%,rgba(176,140,255,.07),transparent 60%),
+      radial-gradient(900px 420px at 0% 0%,rgba(76,201,240,.05),transparent 55%);}
+  a{color:var(--accent2);text-decoration:none} a:hover{text-decoration:underline}
+  .wrap{max-width:1180px;margin:0 auto;padding:0 22px 90px}
+  header.hero{padding:56px 22px 22px;max-width:1180px;margin:0 auto}
+  .kicker{display:inline-flex;align-items:center;gap:8px;font-size:12px;letter-spacing:.16em;text-transform:uppercase;
+    color:var(--accent);border:1px solid var(--border2);background:var(--accent-soft);padding:5px 11px;border-radius:999px}
+  h1{font-size:clamp(27px,4.4vw,44px);line-height:1.08;margin:18px 0 10px;letter-spacing:-.02em}
+  h1 .sub{display:block;font-size:clamp(15px,2.1vw,19px);font-weight:500;color:var(--muted);margin-top:12px;letter-spacing:0;max-width:94ch}
+  .status{display:inline-block;margin-top:18px;font-size:13px;color:var(--accent2);border:1px solid rgba(232,161,58,.35);
+    background:rgba(232,161,58,.07);border-radius:8px;padding:7px 12px}
+  blockquote.brainstorm{margin:24px 0 0;padding:14px 18px;border-left:3px solid var(--purple);
+    background:rgba(176,140,255,.07);border-radius:0 10px 10px 0;color:#d4d7dd;font-size:14.5px}
+  nav.toc{position:sticky;top:0;z-index:20;background:rgba(12,13,16,.86);backdrop-filter:blur(10px);
+    border-top:1px solid var(--border);border-bottom:1px solid var(--border);margin-top:30px}
+  nav.toc .row{max-width:1180px;margin:0 auto;padding:9px 22px;display:flex;flex-wrap:wrap;gap:5px 6px;font-size:12.5px}
+  nav.toc a{color:var(--muted);padding:5px 9px;border-radius:7px;white-space:nowrap}
+  nav.toc a:hover{color:var(--ink);background:var(--panel2);text-decoration:none}
+  section{margin-top:38px}
+  .card{background:linear-gradient(180deg,var(--panel),#131519);border:1px solid var(--border);border-radius:16px;
+    padding:24px 26px;box-shadow:0 1px 0 rgba(255,255,255,.02) inset, 0 20px 40px -30px rgba(0,0,0,.8)}
+  h2{font-size:23px;margin:0 0 4px;letter-spacing:-.01em;display:flex;align-items:baseline;gap:12px}
+  h2 .n{font-family:var(--mono);font-size:14px;color:var(--accent);border:1px solid var(--border2);
+    background:var(--accent-soft);border-radius:8px;padding:2px 9px;flex:none}
+  h2 .n.alt{color:var(--cyan);background:rgba(76,201,240,.1);border-color:rgba(76,201,240,.35)}
+  h2 .n.warn{color:var(--red);background:rgba(224,86,106,.09);border-color:rgba(224,86,106,.35)}
+  .lede{color:var(--muted);font-size:15.5px;margin:6px 0 18px;max-width:90ch}
+  h3{font-size:16.5px;margin:24px 0 8px;color:var(--accent2)}
+  h3:first-of-type{margin-top:8px}
+  p{margin:10px 0;color:#d4d7dd}
+  .small{font-size:13px;color:var(--faint)}
+  b.hl{color:var(--accent2)}
+  code{font-family:var(--mono);font-size:12.5px;background:var(--panel3);border:1px solid var(--border);
+    border-radius:5px;padding:1px 5px;color:#dfe3ea}
+  pre{background:#0e1014;border:1px solid var(--border);border-radius:10px;padding:14px 16px;overflow-x:auto;
+    font-family:var(--mono);font-size:12.5px;line-height:1.55;color:#cfd4dc;margin:12px 0}
+  pre .k{color:var(--purple)} pre .s{color:var(--green)} pre .c{color:var(--faint)} pre .a{color:var(--cyan)}
+  figure{margin:20px 0 6px;background:#0e1014;border:1px solid var(--border);border-radius:12px;padding:16px}
+  figure svg{display:block;width:100%;height:auto}
+  figcaption{color:var(--muted);font-size:13px;margin-top:12px;padding-top:10px;border-top:1px dashed var(--border2)}
+  figcaption b{color:var(--ink)}
+  ul.clean{margin:10px 0;padding-left:0;list-style:none}
+  ul.clean li{position:relative;padding:5px 0 5px 26px;color:#d4d7dd}
+  ul.clean li::before{content:"";position:absolute;left:6px;top:13px;width:7px;height:7px;border-radius:2px;
+    background:var(--accent);transform:rotate(45deg)}
+  ul.clean li.g::before{background:var(--green)} ul.clean li.c::before{background:var(--cyan)}
+  ul.clean li.r::before{background:var(--red)} ul.clean li.p::before{background:var(--purple)}
+  .tblwrap{overflow-x:auto;margin:14px 0}
+  table{width:100%;border-collapse:collapse;font-size:13.5px;min-width:560px}
+  th,td{text-align:left;padding:9px 11px;border-bottom:1px solid var(--border);vertical-align:top}
+  th{color:var(--muted);font-weight:600;font-size:12px;letter-spacing:.04em;text-transform:uppercase}
+  tr:hover td{background:rgba(255,255,255,.014)}
+  td b{color:var(--ink)}
+  td.num{font-family:var(--mono);font-size:12.5px;text-align:right;white-space:nowrap}
+  .tag{display:inline-block;font-size:11px;font-weight:600;padding:2px 8px;border-radius:6px;border:1px solid var(--border2);white-space:nowrap}
+  .t-have{color:var(--green);border-color:rgba(102,187,106,.4);background:rgba(102,187,106,.08)}
+  .t-part{color:var(--accent);border-color:rgba(232,161,58,.4);background:var(--accent-soft)}
+  .t-none{color:var(--red);border-color:rgba(224,86,106,.4);background:rgba(224,86,106,.08)}
+  .t-new{color:var(--cyan);border-color:rgba(76,201,240,.4);background:rgba(76,201,240,.08)}
+  .t-free{color:var(--purple);border-color:rgba(176,140,255,.4);background:rgba(176,140,255,.09)}
+  .callout{border:1px solid var(--border2);border-left:3px solid var(--accent);background:rgba(232,161,58,.06);
+    border-radius:0 10px 10px 0;padding:13px 16px;margin:16px 0;color:#dfe3ea;font-size:14.5px}
+  .callout.warn{border-left-color:var(--red);background:rgba(224,86,106,.07)}
+  .callout.good{border-left-color:var(--green);background:rgba(102,187,106,.06)}
+  .callout.info{border-left-color:var(--cyan);background:rgba(76,201,240,.06)}
+  .callout b{color:var(--ink)}
+  .grid2{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:16px;margin:14px 0}
+  .mini{background:var(--panel2);border:1px solid var(--border);border-radius:11px;padding:14px 16px}
+  .mini h4{margin:0 0 6px;font-size:14px;color:var(--accent2)}
+  .mini p{margin:4px 0;font-size:13.5px}
+  footer{margin-top:48px;padding-top:20px;border-top:1px solid var(--border);color:var(--faint);font-size:13px}
+</style>
+</head>
+<body>
+
+<header class="hero">
+  <span class="kicker">Investigation · brainstorm · 2026-09-05</span>
+  <h1>Neural networks &amp; Neural CA in GenesisCA
+    <span class="sub">Three shapes the question contains, the one weight store that already runs on every compile
+      target, the three primitives that are missing, and an honest map of how a network could be trained here.</span>
+  </h1>
+  <div class="status">Status: research / brainstorm only — no code, no decisions. Architecture numbers verified against
+    the primary papers; performance figures are estimates from operation counts.</div>
+  <blockquote class="brainstorm">Investigate and make a plan on what is missing for us to implement Neural Networks
+    inside GenesisCA, whether as standalone neural network graphs themselves, or as part of the cells/agents as
+    being part of their internal models so some of their attributes would be outputs of the networks that would be
+    running on their inputs. And how we could train, save, load, study it and all that. Related to this
+    investigation is how we could implement Neural Cellular Automata.</blockquote>
+</header>
+
+<nav class="toc"><div class="row">
+  <a href="#tldr">TL;DR</a><a href="#shapes">1 · Three shapes</a><a href="#nca">2 · What an NCA is</a>
+  <a href="#today">3 · Expressible today</a><a href="#design">4 · The design</a><a href="#standalone">5 · Standalone nets</a>
+  <a href="#training">6 · Training</a><a href="#study">7 · Save / load / study</a><a href="#plan">8 · The plan</a>
+</div></nav>
+
+<div class="wrap">
+
+<!-- ───────────────────────────────────────────── TL;DR ─────────────────────────────── -->
+<section id="tldr">
+  <div class="card">
+    <h2><span class="n">TL;DR</span> A Neural CA is a GenesisCA model with learned constants. The constants already have a home.</h2>
+    <p class="lede">Every piece of a Growing NCA except the dense layers is a shipped node; the weights fit the
+      <b>Lookup Table</b> model attribute, which runs on JS, WASM and WebGPU, is live-updatable, and travels in the
+      <code>.gcaproj</code>. Three primitives, a weight importer and a gradient-free training loop on the Overseer
+      close the gap. Gradient training stays outside in v1 — the practitioners' own workflow.</p>
+    <div class="grid2">
+      <div class="mini"><h4><span class="tag t-have">have</span> &nbsp;Weight store, on every target</h4>
+        <p>A Lookup Table is a flat float array with a live update seam on all three targets
+          (<code>updateLookupTable</code> → the <code>wasmMemory</code> view + the WebGPU <code>varAux</code>/<code>auxF32</code>
+          upload), N-D axes up to 1 M entries, a seeded Randomize block, presets as checkpoints. <b>Verified.</b></p></div>
+      <div class="mini"><h4><span class="tag t-none">gap</span> &nbsp;No dense layer, no array ⇄ attributes bridge</h4>
+        <p>There is no weighted sum over an array (<code>Aggregate</code> is sum/product/min/max/avg/median; <code>Vector Op dot</code>
+          is 2–3 wide). A Growing NCA by hand is ~2 000 nodes. <b>Verified against the catalogue.</b></p></div>
+      <div class="mini"><h4><span class="tag t-part">gap</span> &nbsp;Training: the loop exists, the verbs do not</h4>
+        <p>The Overseer already re-rolls tables from a seed, resets, runs fixed counts, reads indicators and keeps
+          statistics. It lacks <i>perturb</i>, <i>snapshot/restore</i> and <i>commit</i>. Local (Hebbian) rules are
+          expressible <b>today</b>.</p></div>
+      <div class="mini"><h4><span class="tag t-new">honest</span> &nbsp;Gradient training belongs outside (v1)</h4>
+        <p>Backprop through 64–96 unrolled generations needs a differentiable framework (ORT WASM ≈ 20 MB / 8 MB /
+          3 MB minimal) <i>and</i> a fourth compile target — or a hand-rolled BPTT for the NCA subgraph. Import the
+          weights; keep the hand-rolled route on the table.</p></div>
+    </div>
+    <div class="callout good"><b>The organising observation.</b> An NCA update is one neighbourhood gather, two dense
+      layers, one random mask, one 3×3 max, one residual add. GenesisCA has the gather, the mask (<code>Get Random</code>),
+      the max (<code>Aggregate max</code> with the centre cell included) and the residual add (<code>Update Attribute increment</code>).
+      What is missing is the dense layer — and that is a primitive, not a rewrite.</div>
+  </div>
+</section>
+
+<!-- ───────────────────────────────────────────── SHAPES ────────────────────────────── -->
+<section id="shapes">
+  <div class="card">
+    <h2><span class="n">1</span> The three shapes the question contains</h2>
+    <p class="lede">The brainstorm names two; a third appears the moment weights differ per agent. They have different
+      weight stores, activation stores and training families, so they must be designed apart.</p>
+    <figure>
+      <svg viewBox="0 0 1080 400" role="img" aria-label="Three shapes: A standalone network as agents and bonds; B a shared per-cell MLP with weights in a lookup table; C per-agent brains as rows of a weight bank">
+        <defs>
+          <marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#9aa0aa"/></marker>
+        </defs>
+        <!-- panel A -->
+        <rect x="14" y="14" width="340" height="372" rx="14" fill="#16181d" stroke="#2a2e37"/>
+        <text x="30" y="42" fill="#f4c06a" font-size="15" font-weight="700">A · Standalone network</text>
+        <text x="30" y="62" fill="#9aa0aa" font-size="12">neurons = AGENTS · synapses = BONDS</text>
+        <g stroke="#4cc9f0" stroke-width="1.5" opacity=".8">
+          <line x1="80" y1="130" x2="180" y2="100"/><line x1="80" y1="130" x2="180" y2="180"/><line x1="80" y1="220" x2="180" y2="180"/>
+          <line x1="80" y1="220" x2="180" y2="260"/><line x1="180" y1="100" x2="280" y2="140"/><line x1="180" y1="180" x2="280" y2="140"/>
+          <line x1="180" y1="260" x2="280" y2="220"/><line x1="180" y1="180" x2="280" y2="220"/><line x1="180" y1="100" x2="180" y2="180" stroke="#b08cff"/>
+        </g>
+        <g fill="#0e1014" stroke="#66bb6a" stroke-width="2">
+          <circle cx="80" cy="130" r="13"/><circle cx="80" cy="220" r="13"/><circle cx="180" cy="100" r="13"/><circle cx="180" cy="180" r="13"/><circle cx="180" cy="260" r="13"/><circle cx="280" cy="140" r="13"/><circle cx="280" cy="220" r="13"/>
+        </g>
+        <text x="130" y="122" fill="#4cc9f0" font-size="10.5" font-family="monospace">w (bond attr)</text>
+        <text x="60" y="290" fill="#d4d7dd" font-size="12">activation = agent attribute</text>
+        <text x="60" y="308" fill="#d4d7dd" font-size="12">weight = <tspan fill="#4cc9f0">float bond attribute</tspan></text>
+        <text x="60" y="326" fill="#d4d7dd" font-size="12">learning = <tspan fill="#66bb6a">Set Bond Attribute</tspan> (Hebb, STDP)</text>
+        <text x="60" y="352" fill="#9aa0aa" font-size="11.5">Hopfield · spiking · SOM · reservoir · Graph NCA</text>
+        <text x="60" y="370" fill="#66bb6a" font-size="11.5" font-weight="700">expressible today (§5)</text>
+        <!-- panel B -->
+        <rect x="370" y="14" width="340" height="372" rx="14" fill="#16181d" stroke="#2a2e37"/>
+        <text x="386" y="42" fill="#f4c06a" font-size="15" font-weight="700">B · Shared per-cell model = NCA</text>
+        <text x="386" y="62" fill="#9aa0aa" font-size="12">every cell runs the SAME small MLP</text>
+        <g>
+          <rect x="400" y="86" width="150" height="90" fill="#0e1014" stroke="#3a3f4a" rx="6"/>
+          <g fill="#22262f" stroke="#2a2e37"><rect x="404" y="90" width="26" height="26"/><rect x="432" y="90" width="26" height="26"/><rect x="460" y="90" width="26" height="26"/><rect x="404" y="118" width="26" height="26"/><rect x="432" y="118" width="26" height="26" fill="#e8a13a"/><rect x="460" y="118" width="26" height="26"/><rect x="404" y="146" width="26" height="26"/><rect x="432" y="146" width="26" height="26"/><rect x="460" y="146" width="26" height="26"/><rect x="488" y="90" width="26" height="26"/><rect x="516" y="90" width="26" height="26"/><rect x="488" y="118" width="26" height="26"/><rect x="516" y="118" width="26" height="26"/><rect x="488" y="146" width="26" height="26"/><rect x="516" y="146" width="26" height="26"/></g>
+          <text x="404" y="190" fill="#9aa0aa" font-size="11">the cell grid (or agents)</text>
+        </g>
+        <rect x="570" y="86" width="126" height="92" rx="8" fill="#0e1014" stroke="#e8a13a"/>
+        <text x="633" y="106" text-anchor="middle" fill="#f4c06a" font-size="11" font-weight="700">Lookup Table</text>
+        <text x="633" y="122" text-anchor="middle" fill="#d4d7dd" font-size="10.5" font-family="monospace">W1 48×128</text>
+        <text x="633" y="137" text-anchor="middle" fill="#d4d7dd" font-size="10.5" font-family="monospace">W2 128×16</text>
+        <text x="633" y="152" text-anchor="middle" fill="#d4d7dd" font-size="10.5" font-family="monospace">b1, b2 (1-axis)</text>
+        <text x="633" y="169" text-anchor="middle" fill="#9aa0aa" font-size="10">model-level · all targets</text>
+        <line x1="550" y1="131" x2="568" y2="131" stroke="#9aa0aa" stroke-width="1.5" marker-end="url(#ar)"/>
+        <text x="386" y="222" fill="#d4d7dd" font-size="12">weights = <tspan fill="#f4c06a">Lookup Table</tspan> (shared)</text>
+        <text x="386" y="240" fill="#d4d7dd" font-size="12">activations = <tspan fill="#b08cff">Local Variable arrays</tspan></text>
+        <text x="386" y="258" fill="#d4d7dd" font-size="12">outputs → attributes via <tspan fill="#4cc9f0">Unpack</tspan></text>
+        <text x="386" y="290" fill="#9aa0aa" font-size="11.5">Growing / texture / steerable / Graph NCA,</text>
+        <text x="386" y="306" fill="#9aa0aa" font-size="11.5">dense MLP on one agent</text>
+        <text x="386" y="334" fill="#e0566a" font-size="11.5" font-weight="700">needs Dense Layer + Gather + Pack/Unpack (§4)</text>
+        <text x="386" y="352" fill="#9aa0aa" font-size="11.5">train: outside → import · ES on the Overseer</text>
+        <!-- panel C -->
+        <rect x="726" y="14" width="340" height="372" rx="14" fill="#16181d" stroke="#2a2e37"/>
+        <text x="742" y="42" fill="#f4c06a" font-size="15" font-weight="700">C · Per-agent brains</text>
+        <text x="742" y="62" fill="#9aa0aa" font-size="12">each agent carries its OWN weights</text>
+        <rect x="760" y="86" width="280" height="110" rx="8" fill="#0e1014" stroke="#e8a13a"/>
+        <text x="900" y="104" text-anchor="middle" fill="#f4c06a" font-size="11" font-weight="700">weight BANK table [genome × param]</text>
+        <g font-family="monospace" font-size="10.5" fill="#d4d7dd">
+          <text x="772" y="124">row 0 ▏0.12 -0.4 0.9 … </text>
+          <text x="772" y="140">row 1 ▏-0.3 0.7 0.1 … </text>
+          <text x="772" y="156" fill="#4cc9f0">row 2 ▏0.5 0.02 -0.8 … ◄ rowOffset = genomeId</text>
+          <text x="772" y="172">row 3 ▏… </text>
+        </g>
+        <text x="742" y="230" fill="#d4d7dd" font-size="12">weights = <tspan fill="#f4c06a">one row</tspan> of a bank table</text>
+        <text x="742" y="248" fill="#d4d7dd" font-size="12">selected by <tspan fill="#4cc9f0">Get Self Attribute(genomeId)</tspan></text>
+        <text x="742" y="266" fill="#d4d7dd" font-size="12">selection = <tspan fill="#66bb6a">Kill Agent / Create Agent</tspan> (shipped)</text>
+        <text x="742" y="298" fill="#9aa0aa" font-size="11.5">4 096 genomes × 256 params, or 128 × 8 192</text>
+        <text x="742" y="316" fill="#9aa0aa" font-size="11.5">(the 1 M-entry table cap)</text>
+        <text x="742" y="344" fill="#e0566a" font-size="11.5" font-weight="700">needs Dense rowOffset + a mutate-row verb</text>
+        <text x="742" y="362" fill="#9aa0aa" font-size="11.5">train: neuroevolution in-app (§6.3)</text>
+      </svg>
+      <figcaption><b>Shapes A, B, C.</b> B is exactly a Neural Cellular Automaton; Graph NCAs are B on the agent
+        tier. A needs almost nothing new; B and C need the same three primitives. The bridge between A and B is one
+        sentence — <i>a standalone MLP is a population of size 1 running Dense Layer nodes.</i></figcaption>
+    </figure>
+  </div>
+</section>
+
+<!-- ───────────────────────────────────────────── NCA ───────────────────────────────── -->
+<section id="nca">
+  <div class="card">
+    <h2><span class="n alt">2</span> What a Neural CA actually is — the verified architecture</h2>
+    <p class="lede">Quoted from the Distill article (Mordvintsev, Randazzo, Niklasson &amp; Levin 2020) this session;
+      the variants from their primary pages.</p>
+    <div class="tblwrap"><table>
+      <thead><tr><th>Piece</th><th>Growing NCA (verified)</th><th>GenesisCA counterpart</th><th></th></tr></thead>
+      <tbody>
+        <tr><td><b>State</b></td><td>16 floats per cell: RGB + alpha + 12 hidden</td><td>16 float cell attributes</td><td><span class="tag t-have">have</span></td></tr>
+        <tr><td><b>Perception</b></td><td>fixed identity + Sobel x + Sobel y per channel → 48-vector</td><td><code>Gather</code> (144 raw values) → <code>Dense</code> with a FIXED table (perception is linear)</td><td><span class="tag t-new">new</span></td></tr>
+        <tr><td><b>Update net</b></td><td>dense(48→128, ReLU) · dense(128→16, zero-init) · ~8 000 params</td><td>two <code>Dense Layer</code> nodes over two Lookup Tables</td><td><span class="tag t-new">new</span></td></tr>
+        <tr><td><b>Residual</b></td><td><code>state += ds</code></td><td><code>Unpack(add)</code> → multi-slot <code>Update Attribute increment</code></td><td><span class="tag t-part">lowering</span></td></tr>
+        <tr><td><b>Stochastic update</b></td><td>per-cell mask zeroes <code>ds</code> with p = 0.5</td><td><code>Get Random</code> (bool) → <code>If</code></td><td><span class="tag t-have">have</span></td></tr>
+        <tr><td><b>Alive mask</b></td><td>empty unless a 3×3 neighbour has alpha &gt; 0.1 (before <i>and</i> after)</td><td><code>Get Neighbors Attribute</code>(alpha, Moore + centre) → <code>Aggregate max</code> → <code>Compare</code></td><td><span class="tag t-have">have</span></td></tr>
+        <tr><td><b>Training</b></td><td>L2 on RGBA after 64–96 steps, BPTT, Adam; 1 024-sample pool, batch 32; circular damage</td><td>outside (v1); hand-rolled BPTT (route 2) later</td><td><span class="tag t-none">outside</span></td></tr>
+        <tr><td><b>Deployment</b></td><td>TensorFlow.js + WebGL/GLSL shaders, 8-bit quantised</td><td>the WebGPU target emits the shader; JS/WASM are the reference + fallback</td><td><span class="tag t-have">have</span></td></tr>
+      </tbody>
+    </table></div>
+    <div class="grid2">
+      <div class="mini"><h4>μNCA (2021)</h4><p>Texture NCAs down to <b>68 parameters</b> — "a few lines of GLSL or C". Expressible by hand today with <code>Expression</code> nodes (§3).</p></div>
+      <div class="mini"><h4>Graph NCA (Grattarola 2021)</h4><p>"NCA can be seen as a special case of Graph Neural Networks." Shape B on agents + bonds: <code>Gather</code> over <code>Get Bonded Agents</code>.</p></div>
+      <div class="mini"><h4>DiffLogic CA (2025)</h4><p>Binary states, a learned logic circuit frozen to pure gates — Game of Life in <b>336 gates</b>, a checkerboard in <b>5</b>. The artifact IS a Boolean rule graph: GenesisCA's <code>Logical Expression</code> nodes.</p></div>
+      <div class="mini"><h4>Steerable / self-classifying</h4><p>A per-cell angle (the shipped Variegated orientation, or a float attribute); a static input attribute the rule never writes. Nothing new.</p></div>
+    </div>
+  </div>
+</section>
+
+<!-- ───────────────────────────────────────────── TODAY ─────────────────────────────── -->
+<section id="today">
+  <div class="card">
+    <h2><span class="n">3</span> What is expressible today — verified against the catalogue</h2>
+    <p class="lede">156 registered node types, three compile targets. The line between "yes" and "in principle" is
+      the node count.</p>
+    <div class="tblwrap"><table>
+      <thead><tr><th>Need</th><th>Today</th><th>Gap</th></tr></thead>
+      <tbody>
+        <tr><td>Shared weight store, all targets, in the file</td><td><span class="tag t-have">Lookup Table</span></td><td>none</td></tr>
+        <tr><td>Per-cell activation scratch</td><td><span class="tag t-have">Local Variable (array)</span></td><td>none — sizes must be compile-time constants</td></tr>
+        <tr><td>Gather ONE attribute over a neighbourhood</td><td><span class="tag t-have">Get Neighbors Attribute</span></td><td>K attributes as one array → <b>Gather</b> (a lowering)</td></tr>
+        <tr><td><b>Dense layer</b> <code>y = act(Wx + b)</code></td><td><span class="tag t-none">no</span></td><td><b>Dense Layer</b> — the one real emit</td></tr>
+        <tr><td>Array ⇄ K attributes</td><td><span class="tag t-none">no</span> (Make/Break Vector are 2–3 wide)</td><td><b>Pack / Unpack</b> (lowerings)</td></tr>
+        <tr><td>Random per-cell mask · alive mask · residual add</td><td><span class="tag t-have">Get Random · Aggregate max · Update Attribute</span></td><td>none</td></tr>
+        <tr><td>Local learning rules (Hebb, Oja, STDP, delta)</td><td><span class="tag t-have">Set Bond Attribute in For Each Bond</span></td><td>none — shape A trains <b>today</b></td></tr>
+        <tr><td>Weight import</td><td><span class="tag t-none">no</span></td><td>safetensors / npy / TF.js JSON → tables</td></tr>
+        <tr><td>Gradient-free training</td><td><span class="tag t-part">Overseer has the loop</span></td><td>perturb / snapshot-restore / commit verbs</td></tr>
+        <tr><td>Gradient training</td><td><span class="tag t-none">no</span></td><td>outside (v1)</td></tr>
+      </tbody>
+    </table></div>
+    <div class="callout warn"><b>Why a primitive and not "just wire it".</b> A Growing NCA by hand: the perception
+      alone is 48 weighted sums of 9 taps with no weighted-sum node (~500 nodes), and dense 48→128 through 8-input
+      Expression nodes is ~1 400 more. Two thousand nodes for four operations — exactly the "lower it or emit it"
+      case the ALL-TARGET rule describes. A μNCA (68 params) is ~50 nodes and a fine demo <i>before</i> the primitive exists.</div>
+  </div>
+</section>
+
+<!-- ───────────────────────────────────────────── DESIGN ────────────────────────────── -->
+<section id="design">
+  <div class="card">
+    <h2><span class="n alt">4</span> The design — three primitives, one weight store, no new runtime type</h2>
+    <p class="lede">Weights are Lookup Tables, activations are Local Variable arrays, and the Growing NCA becomes a
+      ten-node graph. Only <code>Dense Layer</code> needs real per-target emit.</p>
+    <figure>
+      <svg viewBox="0 0 1080 420" role="img" aria-label="The Growing NCA as a GenesisCA node graph: Gather, three Dense layers, a random mask, Unpack with add, and the alive mask branch">
+        <defs><marker id="ar2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#9aa0aa"/></marker></defs>
+        <!-- root -->
+        <rect x="14" y="150" width="120" height="44" rx="8" fill="#e9ebee"/><text x="74" y="177" text-anchor="middle" fill="#1e2a3a" font-size="12" font-weight="700">Generation Step</text>
+        <!-- main chain -->
+        <g>
+          <rect x="170" y="60" width="150" height="56" rx="8" fill="#1976d2"/><text x="245" y="83" text-anchor="middle" fill="#fff" font-size="12" font-weight="700">Gather</text><text x="245" y="101" text-anchor="middle" fill="#dbe9ff" font-size="10.5">moore+self · ch0..ch15 → 144</text>
+          <rect x="350" y="60" width="150" height="56" rx="8" fill="#e8a13a"/><text x="425" y="83" text-anchor="middle" fill="#1e2a3a" font-size="12" font-weight="700">Dense (fixed)</text><text x="425" y="101" text-anchor="middle" fill="#3a2a10" font-size="10.5">percept 144→48 · identity+Sobel</text>
+          <rect x="530" y="60" width="150" height="56" rx="8" fill="#e8a13a"/><text x="605" y="83" text-anchor="middle" fill="#1e2a3a" font-size="12" font-weight="700">Dense</text><text x="605" y="101" text-anchor="middle" fill="#3a2a10" font-size="10.5">W1 48→128 · relu</text>
+          <rect x="710" y="60" width="150" height="56" rx="8" fill="#e8a13a"/><text x="785" y="83" text-anchor="middle" fill="#1e2a3a" font-size="12" font-weight="700">Dense</text><text x="785" y="101" text-anchor="middle" fill="#3a2a10" font-size="10.5">W2 128→16 · linear = ds</text>
+          <line x1="320" y1="88" x2="348" y2="88" stroke="#4cc9f0" stroke-width="2" marker-end="url(#ar2)"/>
+          <line x1="500" y1="88" x2="528" y2="88" stroke="#4cc9f0" stroke-width="2" marker-end="url(#ar2)"/>
+          <line x1="680" y1="88" x2="708" y2="88" stroke="#4cc9f0" stroke-width="2" marker-end="url(#ar2)"/>
+        </g>
+        <!-- mask + unpack -->
+        <rect x="170" y="150" width="150" height="44" rx="8" fill="#7e57c2"/><text x="245" y="171" text-anchor="middle" fill="#fff" font-size="12" font-weight="700">Get Random</text><text x="245" y="186" text-anchor="middle" fill="#e8dfff" font-size="10.5">bool · p = 0.5</text>
+        <rect x="350" y="150" width="150" height="44" rx="8" fill="#3c8f5a"/><text x="425" y="171" text-anchor="middle" fill="#fff" font-size="12" font-weight="700">If</text><text x="425" y="186" text-anchor="middle" fill="#d9f5e0" font-size="10.5">mask fired?</text>
+        <rect x="530" y="150" width="150" height="44" rx="8" fill="#1976d2"/><text x="605" y="171" text-anchor="middle" fill="#fff" font-size="12" font-weight="700">Unpack (add)</text><text x="605" y="186" text-anchor="middle" fill="#dbe9ff" font-size="10.5">ds → ch0..ch15 += </text>
+        <line x1="134" y1="172" x2="168" y2="172" stroke="#66bb6a" stroke-width="2" marker-end="url(#ar2)"/>
+        <line x1="320" y1="172" x2="348" y2="172" stroke="#4cc9f0" stroke-width="2" marker-end="url(#ar2)"/>
+        <line x1="500" y1="172" x2="528" y2="172" stroke="#66bb6a" stroke-width="2" marker-end="url(#ar2)"/>
+        <path d="M785,116 C785,140 720,120 682,166" fill="none" stroke="#4cc9f0" stroke-width="2" stroke-dasharray="4 3" marker-end="url(#ar2)"/>
+        <!-- alive mask branch -->
+        <rect x="170" y="250" width="150" height="56" rx="8" fill="#1976d2"/><text x="245" y="273" text-anchor="middle" fill="#fff" font-size="12" font-weight="700">Get Neighbors Attr</text><text x="245" y="291" text-anchor="middle" fill="#dbe9ff" font-size="10.5">alpha · moore + CENTRE</text>
+        <rect x="350" y="250" width="150" height="56" rx="8" fill="#1976d2"/><text x="425" y="273" text-anchor="middle" fill="#fff" font-size="12" font-weight="700">Aggregate</text><text x="425" y="291" text-anchor="middle" fill="#dbe9ff" font-size="10.5">max</text>
+        <rect x="530" y="250" width="150" height="56" rx="8" fill="#546e7a"/><text x="605" y="273" text-anchor="middle" fill="#fff" font-size="12" font-weight="700">Compare</text><text x="605" y="291" text-anchor="middle" fill="#e2e8ec" font-size="10.5">&gt; 0.1 → alive</text>
+        <rect x="710" y="250" width="150" height="56" rx="8" fill="#3c8f5a"/><text x="785" y="273" text-anchor="middle" fill="#fff" font-size="12" font-weight="700">If NOT alive</text><text x="785" y="291" text-anchor="middle" fill="#d9f5e0" font-size="10.5">→ Set Attribute ch0..15 = 0</text>
+        <line x1="320" y1="278" x2="348" y2="278" stroke="#4cc9f0" stroke-width="2" marker-end="url(#ar2)"/>
+        <line x1="500" y1="278" x2="528" y2="278" stroke="#4cc9f0" stroke-width="2" marker-end="url(#ar2)"/>
+        <line x1="680" y1="278" x2="708" y2="278" stroke="#4cc9f0" stroke-width="2" marker-end="url(#ar2)"/>
+        <path d="M134,172 C150,172 150,278 168,278" fill="none" stroke="#66bb6a" stroke-width="2" marker-end="url(#ar2)"/>
+        <path d="M500,172 C520,172 700,172 785,250" fill="none" stroke="#66bb6a" stroke-width="1.5" stroke-dasharray="3 3" opacity=".5"/>
+        <!-- weights box -->
+        <rect x="900" y="40" width="166" height="110" rx="10" fill="#0e1014" stroke="#e8a13a"/>
+        <text x="983" y="62" text-anchor="middle" fill="#f4c06a" font-size="12" font-weight="700">Lookup Tables</text>
+        <g font-family="monospace" font-size="10.5" fill="#d4d7dd"><text x="912" y="82">percept  48 × 144</text><text x="912" y="98">W1      128 × 48 + b1</text><text x="912" y="114">W2       16 × 128 + b2</text></g>
+        <text x="983" y="138" text-anchor="middle" fill="#9aa0aa" font-size="10">~8 200 entries · 64 KB</text>
+        <path d="M900,95 C880,95 870,88 862,88" fill="none" stroke="#e8a13a" stroke-width="1.5" stroke-dasharray="3 3"/>
+        <!-- output mapping -->
+        <rect x="900" y="250" width="166" height="56" rx="8" fill="#e9ebee"/><text x="983" y="273" text-anchor="middle" fill="#1e2a3a" font-size="12" font-weight="700">Output Mapping</text><text x="983" y="291" text-anchor="middle" fill="#3a4250" font-size="10.5">ch0..ch3 → RGBA</text>
+        <!-- legend -->
+        <g font-size="11" fill="#9aa0aa">
+          <rect x="30" y="360" width="12" height="12" fill="#e8a13a" rx="2"/><text x="48" y="371">new primitive (real emit)</text>
+          <rect x="220" y="360" width="12" height="12" fill="#1976d2" rx="2"/><text x="238" y="371">new lowering (Gather/Unpack) or shipped data node</text>
+          <rect x="520" y="360" width="12" height="12" fill="#7e57c2" rx="2"/><text x="538" y="371">shipped</text>
+          <line x1="610" y1="366" x2="640" y2="366" stroke="#66bb6a" stroke-width="2"/><text x="648" y="371">flow</text>
+          <line x1="700" y1="366" x2="730" y2="366" stroke="#4cc9f0" stroke-width="2"/><text x="738" y="371">value / array</text>
+        </g>
+        <text x="30" y="400" fill="#6b7280" font-size="11">3D is free: Gather over 26 + 1 neighbours gives a 432-wide input; only the perception table's dims change.</text>
+      </svg>
+      <figcaption><b>The Growing NCA as a GenesisCA graph.</b> Perception needs no primitive of its own: identity /
+        Sobel / Laplacian are linear, so "fixed filters" is <code>Gather</code> → <code>Dense</code> with a table the
+        importer writes once — more general (any kernel, any neighbourhood, 3D) and exactly how the reference
+        computes it. Everything blue-or-purple is shipped or a zero-emit lowering; the orange boxes are the one new
+        emitter, three times over.</figcaption>
+    </figure>
+
+    <h3>Why weights are Lookup Tables and not a new "tensor" type</h3>
+    <ul class="clean">
+      <li class="g"><b>Live on every target [verified]:</b> <code>updateLookupTable</code> copies into the existing view over
+        <code>wasmMemory</code> (the WASM step reads it through its baked offset) and uploads to the WebGPU <code>varAux</code>;
+        the agent targets carry tables in the agent memory region and the <code>auxF32</code> buffer.</li>
+      <li class="g"><b>N-D axes, sized for this:</b> <code>MAX_LOOKUP_AXES = 6</code>, <code>intRange</code> spans to 4 096,
+        1 048 576 entries per table. A weight matrix is a 2-axis <code>intRange × intRange</code> table; a bias a 1-axis one.</li>
+      <li class="g"><b>Persistence for free:</b> <code>tableData</code> rides the <code>.gcaproj</code>; a preset snapshots every table — a checkpoint.</li>
+      <li class="g"><b>Already has a UI and an Overseer verb:</b> the matrix widget, the seeded Randomize block (weight init), <code>ovRandomizeTable</code>.</li>
+      <li class="c"><b>Precision:</b> f64 on the CPU targets, f32 on the GPU — the documented stance; NCAs train in f32 and the Distill demo <i>ran</i> at 8 bits.</li>
+    </ul>
+
+    <h3>Dense Layer — the contract</h3>
+    <pre><span class="k">Dense Layer</span>
+  in:  x (array, float)          config: weights = &lt;table id&gt;    <span class="c">2-axis, out × in</span>
+  out: y (array, float)                  bias    = &lt;table id | none&gt; <span class="c">1-axis, out</span>
+                                         activation = linear | relu | leaky_relu | tanh | sigmoid
+                                         rowOffset (integer port, optional)   <span class="c">← shape C: a weight BANK row</span>
+
+  y[o] = act( b[o] + Σ_i W[o][i] · x[i] ),  <span class="s">i ascending — the accumulation ORDER is the contract</span>
+  <span class="c">JS ≡ WASM bit-identical (the Math.hypot lesson); WGSL f32. tanh/exp are already host imports on WASM.</span></pre>
+    <div class="callout info"><b>Cost model (estimates from operation counts — nothing here is measured).</b> ~8.6 k MAC
+      per cell per generation with fixed filters, ~15 k with a dense perception. 100×100 ≈ 90–150 M MAC: JS ~0.3–0.6 s,
+      WASM ~0.1–0.3 s, WebGPU ~1–3 ms. 1000×1000: WASM tens of seconds, WebGPU ~0.1–0.3 s. <b>An NCA at any interesting
+      size is a WebGPU feature</b> — and JS/WASM still run it, as the reference and the fallback. Cost a dense layer on its
+      <i>widest</i> layer: the WebGPU per-thread array budget is real (<code>AGENT_GPU_ARRAY_CAP = 2048</code>).</div>
+  </div>
+</section>
+
+<!-- ───────────────────────────────────────────── STANDALONE ────────────────────────── -->
+<section id="standalone">
+  <div class="card">
+    <h2><span class="n">5</span> Standalone networks as agents + bonds — what fits, and the ceiling</h2>
+    <div class="tblwrap"><table>
+      <thead><tr><th>Network</th><th>Mapping</th><th>Status</th></tr></thead>
+      <tbody>
+        <tr><td><b>Hopfield / attractor</b></td><td>activations as agent attrs, symmetric weights as a float bond attribute, the weighted sum in <code>For Each Bond</code></td><td><span class="tag t-have">today</span> incl. Hebbian storage</td></tr>
+        <tr><td><b>Spiking (LIF / Izhikevich) + STDP</b></td><td>membrane / recovery attrs, a <code>spike</code> bool, a <code>delay</code> integer bond attribute + <code>Get Generation</code>, last-spike generation per agent</td><td><span class="tag t-have">today</span> — a Brian/NEST-style SNN is a natural agent model</td></tr>
+        <tr><td><b>Kohonen SOM</b></td><td>the <i>cell</i> grid with K float attrs per cell; winner = a min-distance indicator + <code>groupOperator.min</code>'s position</td><td><span class="tag t-part">small K</span></td></tr>
+        <tr><td><b>Reservoir + linear readout</b></td><td>a random sparse recurrent agent graph + a readout on ONE agent running <code>Dense Layer</code></td><td><span class="tag t-new">with §4</span></td></tr>
+        <tr><td><b>Layered feed-forward MLP</b></td><td>a <code>layer</code> tag; layer ℓ updates on phase ℓ of an <code>Agent Periodic Step</code> — the rule-cadence feature exists for this</td><td><span class="tag t-part">expressible, costly</span></td></tr>
+        <tr><td><b>Graph NCA</b></td><td>§4's primitives on the agent tier, <code>Gather</code> over bonds</td><td><span class="tag t-new">with §4</span></td></tr>
+      </tbody>
+    </table></div>
+    <div class="callout warn"><b>The same <code>maxBonds</code> ceiling, from the other side.</b> A dense layer as bonds costs
+      <code>maxBonds = fan-in</code> slots for EVERY agent (the ELLPACK store the social-network investigation measured). A
+      784→100→10 MLP as agents is 894 agents at <code>maxBonds = 784</code>: ~19.6 MB for 79 400 real edges, and every step
+      is a <code>For Each Bond</code> over 784 slots — for a network one agent computes with a single Dense Layer in 78 k MACs.
+      <b>Shape A for networks whose topology is the model</b> (sparse, recurrent, spiking, plastic, growing);
+      <b>shape B for networks whose arithmetic is the model.</b></div>
+  </div>
+</section>
+
+<!-- ───────────────────────────────────────────── TRAINING ──────────────────────────── -->
+<section id="training">
+  <div class="card">
+    <h2><span class="n warn">6</span> Training — the honest map</h2>
+    <p class="lede">Four routes, ranked by what they cost the app. The recommendation is the practitioners' own
+      workflow for gradients, and the Overseer for everything gradient-free.</p>
+    <figure>
+      <svg viewBox="0 0 1080 300" role="img" aria-label="Four training routes: train outside and import weights; local learning rules on bonds; evolution strategies on the Overseer; in-app gradient training deferred">
+        <defs><marker id="ar3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#9aa0aa"/></marker></defs>
+        <g>
+          <rect x="14" y="20" width="250" height="250" rx="12" fill="#16181d" stroke="#66bb6a"/>
+          <text x="139" y="48" text-anchor="middle" fill="#66bb6a" font-size="13" font-weight="700">① Train outside, IMPORT</text>
+          <text x="139" y="66" text-anchor="middle" fill="#9aa0aa" font-size="11">v1 · the practitioners' workflow</text>
+          <rect x="34" y="84" width="210" height="34" rx="6" fill="#0e1014" stroke="#3a3f4a"/><text x="139" y="106" text-anchor="middle" fill="#d4d7dd" font-size="11">PyTorch / JAX / TF · BPTT · Adam</text>
+          <line x1="139" y1="118" x2="139" y2="140" stroke="#9aa0aa" stroke-width="1.5" marker-end="url(#ar3)"/>
+          <rect x="34" y="142" width="210" height="34" rx="6" fill="#0e1014" stroke="#3a3f4a"/><text x="139" y="164" text-anchor="middle" fill="#d4d7dd" font-size="11">safetensors · npy/npz · TF.js JSON</text>
+          <line x1="139" y1="176" x2="139" y2="198" stroke="#9aa0aa" stroke-width="1.5" marker-end="url(#ar3)"/>
+          <rect x="34" y="200" width="210" height="34" rx="6" fill="#0e1014" stroke="#e8a13a"/><text x="139" y="222" text-anchor="middle" fill="#f4c06a" font-size="11">Lookup Tables (weight importer)</text>
+          <text x="139" y="256" text-anchor="middle" fill="#9aa0aa" font-size="10.5">~40 lines per format, no dependency</text>
+        </g>
+        <g>
+          <rect x="284" y="20" width="250" height="250" rx="12" fill="#16181d" stroke="#66bb6a"/>
+          <text x="409" y="48" text-anchor="middle" fill="#66bb6a" font-size="13" font-weight="700">② Local rules on BONDS</text>
+          <text x="409" y="66" text-anchor="middle" fill="#9aa0aa" font-size="11">today · shape A</text>
+          <g font-family="monospace" font-size="10.5" fill="#d4d7dd">
+            <text x="304" y="98">w += η·a_i·a_j            Hebb</text>
+            <text x="304" y="118">w += η·a_j·(a_i − w·a_j)  Oja</text>
+            <text x="304" y="138">w += η·(t_i − a_i)·a_j    delta</text>
+            <text x="304" y="158">Δw = f(t_post − t_pre)    STDP</text>
+          </g>
+          <text x="409" y="196" text-anchor="middle" fill="#4cc9f0" font-size="11">For Each Bond → Set Bond Attribute</text>
+          <text x="409" y="222" text-anchor="middle" fill="#9aa0aa" font-size="10.5">all three agent targets (GRA P3)</text>
+          <text x="409" y="240" text-anchor="middle" fill="#9aa0aa" font-size="10.5">the biologically meaningful family</text>
+        </g>
+        <g>
+          <rect x="554" y="20" width="250" height="250" rx="12" fill="#16181d" stroke="#e8a13a"/>
+          <text x="679" y="48" text-anchor="middle" fill="#f4c06a" font-size="13" font-weight="700">③ ES on the OVERSEER</text>
+          <text x="679" y="66" text-anchor="middle" fill="#9aa0aa" font-size="11">NN2 · gradient-free · in-app</text>
+          <g font-size="11" fill="#d4d7dd">
+            <text x="574" y="96"><tspan fill="#66bb6a">have</tspan> reset · run N · read indicator · stats · seed policy · <tspan font-family="monospace">ovRandomizeTable</tspan></text>
+            <text x="574" y="130"><tspan fill="#e0566a">miss</tspan> <tspan font-family="monospace">ovPerturbTable</tspan> (σ, seed)</text>
+            <text x="574" y="148"><tspan fill="#e0566a">miss</tspan> <tspan font-family="monospace">ovSnapshot/RestoreTable</tspan></text>
+            <text x="574" y="166"><tspan fill="#e0566a">miss</tspan> <tspan font-family="monospace">ovCommitTable</tspan> (save)</text>
+            <text x="574" y="184"><tspan fill="#66bb6a">have</tspan> loss = target attr + Expression + Total indicator</text>
+          </g>
+          <text x="679" y="222" text-anchor="middle" fill="#9aa0aa" font-size="10.5">(1+λ)-ES realistic at μNCA scale;</text>
+          <text x="679" y="240" text-anchor="middle" fill="#9aa0aa" font-size="10.5">8 000 params = hours, one worker</text>
+        </g>
+        <g>
+          <rect x="824" y="20" width="242" height="250" rx="12" fill="#16181d" stroke="#e0566a" stroke-dasharray="5 4"/>
+          <text x="945" y="48" text-anchor="middle" fill="#e0566a" font-size="13" font-weight="700">④ Gradients IN the app</text>
+          <text x="945" y="66" text-anchor="middle" fill="#9aa0aa" font-size="11">NN3 · deferred</text>
+          <g font-size="11" fill="#d4d7dd">
+            <text x="840" y="98">a framework dep (ORT ≈ 20 / 8 / 3 MB)</text>
+            <text x="840" y="116">+ a 4th lockstep compile target</text>
+            <text x="840" y="134" fill="#e0566a">→ never</text>
+            <text x="840" y="166">a hand-rolled BPTT for the NCA</text>
+            <text x="840" y="184">subgraph only, WebGPU compute,</text>
+            <text x="840" y="202">gradient-checked vs JAX</text>
+            <text x="840" y="220" fill="#f4c06a">→ on the table, after NN1</text>
+          </g>
+          <text x="945" y="256" text-anchor="middle" fill="#9aa0aa" font-size="10.5">route 2 in the write-up</text>
+        </g>
+      </svg>
+      <figcaption><b>The training-route matrix.</b> ① and ② cost almost nothing and cover the literature's actual
+        practice; ③ is a handful of Overseer verbs on a loop that already exists; ④ is a milestone, and the framework
+        version of it is the wrong trade for an app whose single-file export already had to alias a 500 KB
+        reader out of the viewer.</figcaption>
+    </figure>
+    <div class="grid2">
+      <div class="mini"><h4>Shape C — neuroevolution</h4><p><code>rowOffset = genomeId</code>, a fitness attribute, <b>Kill / Create Agent</b> for selection (shipped), one <b>mutate-row</b> verb and a copy-row-on-division hook. Fixed topology, evolved weights — the NEAT-<i>style</i> regime. True NEAT is shape A's <code>Form / Rewire Bond</code> on neuron-agents: expressible, slow.</p></div>
+      <div class="mini"><h4>DiffLogic CA — import the circuit</h4><p>The frozen artifact is a gate list; a generator turns it into <code>Logical Expression</code> nodes. No engine or compiler change, <b>exact</b> Boolean parity on all three targets — the one NN family where the f32/f64 stance does not even apply. Game of Life's 336 gates are the regression fixture.</p></div>
+    </div>
+  </div>
+</section>
+
+<!-- ───────────────────────────────────────────── STUDY ─────────────────────────────── -->
+<section id="study">
+  <div class="card">
+    <h2><span class="n">7</span> Save, load, study — mostly already there</h2>
+    <div class="tblwrap"><table>
+      <thead><tr><th>Concern</th><th>Answer</th><th></th></tr></thead>
+      <tbody>
+        <tr><td><b>Save weights</b></td><td>lookup tables ⇒ <code>tableData</code> in the <code>.gcaproj</code></td><td><span class="tag t-have">today</span></td></tr>
+        <tr><td><b>Checkpoints</b></td><td>a preset snapshots every table — "epoch 500" is a preset; <code>.gcapreset</code> exports one</td><td><span class="tag t-have">today</span></td></tr>
+        <tr><td><b>Load pretrained</b></td><td>the weight importer → tables</td><td><span class="tag t-new">NN1</span></td></tr>
+        <tr><td><b>Read the model</b></td><td>Show Code prints every table dense with its dims/strides — the whole network is in the port-ready document</td><td><span class="tag t-have">today</span></td></tr>
+        <tr><td><b>Inspect activations</b></td><td>the inspectors show every attribute incl. the hidden channels; an Output Mapping colours by any of them</td><td><span class="tag t-have">today</span></td></tr>
+        <tr><td><b>Measure / reproduce</b></td><td>linked indicators (the loss idiom), the Overseer seed policy + journaled table seeds</td><td><span class="tag t-have">today</span></td></tr>
+        <tr><td><b>Share</b></td><td>the standalone <code>.html</code> export embeds the tables — a trained NCA is one self-running file</td><td><span class="tag t-have">today</span></td></tr>
+      </tbody>
+    </table></div>
+    <p class="small">That column is the reason to put weights in tables rather than anywhere new.</p>
+  </div>
+</section>
+
+<!-- ───────────────────────────────────────────── PLAN ──────────────────────────────── -->
+<section id="plan">
+  <div class="card">
+    <h2><span class="n">8</span> The recommendation</h2>
+    <p class="lede">Ship NN1 and NN2; write the NN0 samples first; keep NN3 as the honest "if we ever".</p>
+    <figure>
+      <svg viewBox="0 0 1080 200" role="img" aria-label="Phased plan: NN0 samples today, NN1 primitives and weight import, NN2 gradient-free training and DiffLogic import, NN3 deferred gradient training">
+        <line x1="40" y1="100" x2="1040" y2="100" stroke="#3a3f4a" stroke-width="2"/>
+        <g>
+          <circle cx="120" cy="100" r="9" fill="#66bb6a"/><text x="120" y="70" text-anchor="middle" fill="#66bb6a" font-size="13" font-weight="700">NN0 · no code</text>
+          <text x="120" y="130" text-anchor="middle" fill="#d4d7dd" font-size="11">Hebbian assembly · μNCA by hand</text><text x="120" y="147" text-anchor="middle" fill="#d4d7dd" font-size="11">the loss-indicator idiom</text>
+        </g>
+        <g>
+          <circle cx="400" cy="100" r="9" fill="#e8a13a"/><text x="400" y="70" text-anchor="middle" fill="#f4c06a" font-size="13" font-weight="700">NN1 · primitives + import ★</text>
+          <text x="400" y="130" text-anchor="middle" fill="#d4d7dd" font-size="11">Dense (emit ×6) · Gather / Pack / Unpack (lowerings)</text><text x="400" y="147" text-anchor="middle" fill="#d4d7dd" font-size="11">safetensors/npy/TF.js importer · pretrained Growing NCA sample</text>
+        </g>
+        <g>
+          <circle cx="700" cy="100" r="9" fill="#4cc9f0"/><text x="700" y="70" text-anchor="middle" fill="#4cc9f0" font-size="13" font-weight="700">NN2 · train without gradients</text>
+          <text x="700" y="130" text-anchor="middle" fill="#d4d7dd" font-size="11">ovPerturb / Snapshot / Restore / Commit · ES sample</text><text x="700" y="147" text-anchor="middle" fill="#d4d7dd" font-size="11">mutate-row + neuroevolution sample · DiffLogic import · table export</text>
+        </g>
+        <g>
+          <circle cx="960" cy="100" r="9" fill="#0e1014" stroke="#e0566a" stroke-width="2" stroke-dasharray="3 2"/><text x="960" y="70" text-anchor="middle" fill="#e0566a" font-size="13" font-weight="700">NN3 · deferred</text>
+          <text x="960" y="130" text-anchor="middle" fill="#9aa0aa" font-size="11">hand-rolled BPTT (WebGPU)</text><text x="960" y="147" text-anchor="middle" fill="#9aa0aa" font-size="11">array agent attrs · ONNX · attention</text>
+        </g>
+      </svg>
+      <figcaption><b>ALL-TARGET DELIVERY holds throughout.</b> <code>Dense Layer</code> emits on JS, WASM and WebGPU, cell
+        and agent; the other three nodes are lowerings and therefore run everywhere by construction. Nothing is JS-only,
+        nothing is clamped; WebGPU is the <i>fast</i> target, not the only one. A model without the nodes stays
+        byte-identical (<code>check-compile-identity</code>).</figcaption>
+    </figure>
+    <h3>NN1 — subsystem by subsystem</h3>
+    <div class="tblwrap"><table>
+      <thead><tr><th>Subsystem</th><th>Change</th><th>Notes</th></tr></thead>
+      <tbody>
+        <tr><td><b>schema</b></td><td><i>none</i></td><td>weights are tables; activations are Local Variables</td></tr>
+        <tr><td><b>nodes</b></td><td><code>denseLayer</code> (real emit), <code>gatherNeighborhood</code> / <code>packAttributes</code> / <code>unpackAttributes</code> (lowerings in a new <code>tensorExpand.ts</code>, after <code>collapseReroutes</code> in all six front-ends)</td><td>the <code>censusExpand</code> placement; accumulation order is the contract</td></tr>
+        <tr><td><b>compiler</b></td><td>WASM/WGSL emitters cell + agent; both agent supported-type sets; dims-vs-table validation; pure / CSE-eligible</td><td>byte-identical when absent</td></tr>
+        <tr><td><b>worker / engine</b></td><td><i>none</i></td><td><code>updateLookupTable</code> is the live seam</td></tr>
+        <tr><td><b>import</b></td><td>new <code>weightsImport.ts</code> (safetensors + npy/npz + TF.js JSON, dependency-free) + a tensor→table dialog + a menu item + a drop event</td><td>the <code>.asc</code>/GeoTIFF importer's shape; tiny, no viewer alias needed</td></tr>
+        <tr><td><b>harness</b></td><td><code>test-tensor-nodes.mjs</code>: Dense VALUES on JS + a real WASM module bit-identical; WGSL shape; a hand-computed 2-layer net; a permanent parity synthetic with a VALUE invariant</td><td>source-mutation negative controls</td></tr>
+        <tr><td><b>sample</b></td><td>Growing NCA (pretrained) — weights exported from the authors' Colab by the project author, not transcribed</td><td>regeneration on brush damage is the demo</td></tr>
+      </tbody>
+    </table></div>
+    <h3>Risks worth stating now</h3>
+    <ul class="clean">
+      <li class="r">JS/WASM dot products are bit-identical by contract; WGSL's f32 will diverge visibly after a few hundred NCA steps — the documented stance, but the first thing a user notices. Say it in the sample.</li>
+      <li class="r">The WebGPU per-thread array budget bounds the widest layer; the badge must state the number, not merely refuse.</li>
+      <li class="c">Weight names arrive as <code>dense_1/kernel:0</code> or <code>layers.0.weight</code>; remember the mapping per model.</li>
+      <li class="c">The alive mask needs <code>includeCentralCell</code> on the Moore neighbourhood, or every cell's own alpha is silently ignored.</li>
+      <li class="p">Where does "train" live in the UI? The Overseer panel is the honest home for ES; a dedicated Train panel is only justified by the hand-rolled BPTT route.</li>
+    </ul>
+  </div>
+</section>
+
+<footer>
+  <p><b>Status:</b> research / brainstorm only — no code, no decisions. Architecture numbers verified against the
+    Distill <i>Growing Neural Cellular Automata</i> article, the <i>Differentiable Logic CA</i> project page and the
+    μNCA abstract; framework bundle sizes from their own docs; every performance figure is an estimate from operation
+    counts. Codebase claims verified firsthand against the current tree.</p>
+  <p>Full write-up: <a href="INVESTIGATION_NEURAL_NETWORKS.md">INVESTIGATION_NEURAL_NETWORKS.md</a> ·
+    Sibling: <a href="INVESTIGATION_SOCIAL_NETWORKS.html">Social networks in GenesisCA</a> (shape A's import target
+    and the <code>maxBonds</code> ceiling) ·
+    <a href="PLAN_ND_LOOKUP_TABLES.md">PLAN_ND_LOOKUP_TABLES.md</a> (the table plumbing this reuses) ·
+    <a href="PLAN_OVERSEER.md">PLAN_OVERSEER.md</a> (the training loop's home).</p>
+</footer>
+
+</div>
+</body>
+</html>

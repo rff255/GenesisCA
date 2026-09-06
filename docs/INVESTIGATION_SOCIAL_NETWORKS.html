@@ -1,0 +1,800 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Social Networks in GenesisCA — how SNA stores graphs, and what the gap actually is</title>
+<style>
+  :root{
+    color-scheme: dark;
+    --bg:#0c0d10; --panel:#16181d; --panel2:#1c1f26; --panel3:#22262f;
+    --border:#2a2e37; --border2:#3a3f4a;
+    --ink:#e9ebee; --muted:#9aa0aa; --faint:#6b7280;
+    --accent:#e8a13a; --accent2:#f4c06a; --accent-soft:rgba(232,161,58,.13);
+    --cyan:#4cc9f0; --green:#66bb6a; --red:#e0566a; --purple:#b08cff; --pink:#f06aa8;
+    --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;
+    --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth;background:#0c0d10}
+  body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);line-height:1.6;
+    background-image:radial-gradient(1100px 480px at 82% -8%,rgba(176,140,255,.07),transparent 60%),
+      radial-gradient(900px 420px at 0% 0%,rgba(76,201,240,.05),transparent 55%);}
+  a{color:var(--accent2);text-decoration:none} a:hover{text-decoration:underline}
+  .wrap{max-width:1180px;margin:0 auto;padding:0 22px 90px}
+  header.hero{padding:56px 22px 22px;max-width:1180px;margin:0 auto}
+  .kicker{display:inline-flex;align-items:center;gap:8px;font-size:12px;letter-spacing:.16em;text-transform:uppercase;
+    color:var(--accent);border:1px solid var(--border2);background:var(--accent-soft);padding:5px 11px;border-radius:999px}
+  h1{font-size:clamp(27px,4.4vw,44px);line-height:1.08;margin:18px 0 10px;letter-spacing:-.02em}
+  h1 .sub{display:block;font-size:clamp(15px,2.1vw,19px);font-weight:500;color:var(--muted);margin-top:12px;letter-spacing:0;max-width:94ch}
+  .status{display:inline-block;margin-top:18px;font-size:13px;color:var(--accent2);border:1px solid rgba(232,161,58,.35);
+    background:rgba(232,161,58,.07);border-radius:8px;padding:7px 12px}
+  blockquote.brainstorm{margin:24px 0 0;padding:14px 18px;border-left:3px solid var(--purple);
+    background:rgba(176,140,255,.07);border-radius:0 10px 10px 0;color:#d4d7dd;font-size:14.5px}
+  nav.toc{position:sticky;top:0;z-index:20;background:rgba(12,13,16,.86);backdrop-filter:blur(10px);
+    border-top:1px solid var(--border);border-bottom:1px solid var(--border);margin-top:30px}
+  nav.toc .row{max-width:1180px;margin:0 auto;padding:9px 22px;display:flex;flex-wrap:wrap;gap:5px 6px;font-size:12.5px}
+  nav.toc a{color:var(--muted);padding:5px 9px;border-radius:7px;white-space:nowrap}
+  nav.toc a:hover{color:var(--ink);background:var(--panel2);text-decoration:none}
+  section{margin-top:38px}
+  .card{background:linear-gradient(180deg,var(--panel),#131519);border:1px solid var(--border);border-radius:16px;
+    padding:24px 26px;box-shadow:0 1px 0 rgba(255,255,255,.02) inset, 0 20px 40px -30px rgba(0,0,0,.8)}
+  h2{font-size:23px;margin:0 0 4px;letter-spacing:-.01em;display:flex;align-items:baseline;gap:12px}
+  h2 .n{font-family:var(--mono);font-size:14px;color:var(--accent);border:1px solid var(--border2);
+    background:var(--accent-soft);border-radius:8px;padding:2px 9px;flex:none}
+  h2 .n.alt{color:var(--cyan);background:rgba(76,201,240,.1);border-color:rgba(76,201,240,.35)}
+  h2 .n.warn{color:var(--red);background:rgba(224,86,106,.09);border-color:rgba(224,86,106,.35)}
+  .lede{color:var(--muted);font-size:15.5px;margin:6px 0 18px;max-width:90ch}
+  h3{font-size:16.5px;margin:24px 0 8px;color:var(--accent2)}
+  h3:first-of-type{margin-top:8px}
+  p{margin:10px 0;color:#d4d7dd}
+  .small{font-size:13px;color:var(--faint)}
+  b.hl{color:var(--accent2)}
+  code{font-family:var(--mono);font-size:12.5px;background:var(--panel3);border:1px solid var(--border);
+    border-radius:5px;padding:1px 5px;color:#dfe3ea}
+  pre{background:#0e1014;border:1px solid var(--border);border-radius:10px;padding:14px 16px;overflow-x:auto;
+    font-family:var(--mono);font-size:12.5px;line-height:1.55;color:#cfd4dc;margin:12px 0}
+  pre .k{color:var(--purple)} pre .s{color:var(--green)} pre .c{color:var(--faint)} pre .a{color:var(--cyan)}
+  figure{margin:20px 0 6px;background:#0e1014;border:1px solid var(--border);border-radius:12px;padding:16px}
+  figure svg{display:block;width:100%;height:auto}
+  figcaption{color:var(--muted);font-size:13px;margin-top:12px;padding-top:10px;border-top:1px dashed var(--border2)}
+  figcaption b{color:var(--ink)}
+  ul.clean{margin:10px 0;padding-left:0;list-style:none}
+  ul.clean li{position:relative;padding:5px 0 5px 26px;color:#d4d7dd}
+  ul.clean li::before{content:"";position:absolute;left:6px;top:13px;width:7px;height:7px;border-radius:2px;
+    background:var(--accent);transform:rotate(45deg)}
+  ul.clean li.g::before{background:var(--green)} ul.clean li.c::before{background:var(--cyan)}
+  ul.clean li.r::before{background:var(--red)} ul.clean li.p::before{background:var(--purple)}
+  .tblwrap{overflow-x:auto;margin:14px 0}
+  table{width:100%;border-collapse:collapse;font-size:13.5px;min-width:560px}
+  th,td{text-align:left;padding:9px 11px;border-bottom:1px solid var(--border);vertical-align:top}
+  th{color:var(--muted);font-weight:600;font-size:12px;letter-spacing:.04em;text-transform:uppercase}
+  tr:hover td{background:rgba(255,255,255,.014)}
+  td b{color:var(--ink)}
+  td.num{font-family:var(--mono);font-size:12.5px;text-align:right;white-space:nowrap}
+  .tag{display:inline-block;font-size:11px;font-weight:600;padding:2px 8px;border-radius:6px;border:1px solid var(--border2);white-space:nowrap}
+  .t-have{color:var(--green);border-color:rgba(102,187,106,.4);background:rgba(102,187,106,.08)}
+  .t-part{color:var(--accent);border-color:rgba(232,161,58,.4);background:var(--accent-soft)}
+  .t-none{color:var(--red);border-color:rgba(224,86,106,.4);background:rgba(224,86,106,.08)}
+  .t-new{color:var(--cyan);border-color:rgba(76,201,240,.4);background:rgba(76,201,240,.08)}
+  .t-free{color:var(--purple);border-color:rgba(176,140,255,.4);background:rgba(176,140,255,.09)}
+  .callout{border:1px solid var(--border2);border-left:3px solid var(--accent);background:rgba(232,161,58,.06);
+    border-radius:0 10px 10px 0;padding:13px 16px;margin:16px 0;color:#dfe3ea;font-size:14.5px}
+  .callout.warn{border-left-color:var(--red);background:rgba(224,86,106,.07)}
+  .callout.good{border-left-color:var(--green);background:rgba(102,187,106,.06)}
+  .callout.info{border-left-color:var(--cyan);background:rgba(76,201,240,.06)}
+  .callout b{color:var(--ink)}
+  .grid2{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:16px;margin:14px 0}
+  .mini{background:var(--panel2);border:1px solid var(--border);border-radius:11px;padding:14px 16px}
+  .mini h4{margin:0 0 6px;font-size:14px;color:var(--accent2)}
+  .mini p{margin:4px 0;font-size:13.5px}
+  footer{margin-top:48px;padding-top:20px;border-top:1px solid var(--border);color:var(--faint);font-size:13px}
+</style>
+</head>
+<body>
+
+<header class="hero">
+  <span class="kicker">Investigation · research only</span>
+  <h1>Social networks in GenesisCA
+    <span class="sub">How SNA practitioners define and store graphs and edge attributes — and what actually stands between that and simulating social-network models here.</span>
+  </h1>
+  <div class="status">Status: research / brainstorm only — no code, no decisions. 2026-09-05. Companion to
+    <a href="INVESTIGATION_SOCIAL_NETWORKS.md">INVESTIGATION_SOCIAL_NETWORKS.md</a>.</div>
+  <blockquote class="brainstorm">
+    <b>(brainstorm)</b> Investigate options and best practices/common usage of social network analysis ways to
+    define the graphs and edge attributes. How is it commonly defined/stored? so that we can investigate how can
+    GenesisCA also provide that, so we can model and simulate social network models on GenesisCA without having
+    to manually define things.
+  </blockquote>
+</header>
+
+<nav class="toc"><div class="row">
+  <a href="#answer">The one-line answer</a>
+  <a href="#formats">1 · Formats</a>
+  <a href="#mapping">2 · File → agents + bonds</a>
+  <a href="#coverage">3 · Model coverage</a>
+  <a href="#capacity">4 · The maxBonds ceiling</a>
+  <a href="#directed">5 · Directed edges</a>
+  <a href="#cost">6 · Measurement cost</a>
+  <a href="#plan">7 · The plan</a>
+</div></nav>
+
+<div class="wrap">
+
+<!-- ─────────────────────────────────────────── ANSWER ─────────────────────────────── -->
+<section id="answer">
+  <div class="card">
+    <h2><span class="n">TL;DR</span> The simulation tier is already there. The file seam is not.</h2>
+    <p class="lede">GenesisCA is already a graph-rewriting engine: <b>agents are nodes, bonds are edges, bond
+      attributes are edge attributes</b>, and <code>Rewire Bond</code> is an atomic primitive most SNA toolkits
+      do not have. Four things are missing, and only one of them is hard.</p>
+
+    <div class="grid2">
+      <div class="mini"><h4><span class="tag t-none">gap</span> &nbsp;Nothing can create a bond from data</h4>
+        <p><b>Verified:</b> a grep for <code>bond</code> across every importer and import dialog returns
+          <b>zero matches</b>. <code>pasteAgents</code> has no bond field; <code>formBondBatch</code> was removed
+          and exists nowhere in <code>src/</code>. The only bond-creating messages are the single-pair
+          <code>formBond</code> / <code>breakBond</code> the Glue&nbsp;/&nbsp;Cut brush sends.</p></div>
+      <div class="mini"><h4><span class="tag t-part">gap</span> &nbsp;No generators</h4>
+        <p>ER / WS / BA / SBM are all <i>expressible</i> as rule graphs — but hit an O(N²) enumeration, a
+          per-generation request-queue depth of 8, and the rule that bond verbs are invalid in the Agent Init
+          Event. Belongs in the importer, not the rule graph.</p></div>
+      <div class="mini"><h4><span class="tag t-part">gap</span> &nbsp;No centralities, no communities</h4>
+        <p>Six graph indicators ship (N, E, mean/max degree, degree histogram, components). Everything an SNA
+          user opens first — PageRank, betweenness, clustering, modularity — is absent.</p></div>
+      <div class="mini"><h4><span class="tag t-none">hard</span> &nbsp;The <code>maxBonds</code> ceiling</h4>
+        <p>The bond store is <b>ELLPACK</b> — <code>maxAgents × maxBonds</code> rectangular. Social graphs are
+          scale-free. A 100k-node BA graph would need <b>3.19&nbsp;GB</b> of bond store for 300k edges. See
+          <a href="#capacity">§4</a>.</p></div>
+    </div>
+
+    <div class="callout good"><b>The unusual strength, stated honestly.</b> Coevolving state-and-topology models
+      (adaptive voter, Holme–Newman rewire-on-disagreement, adaptive SIS) are awkward in NetworkX — you rebuild
+      the graph every step — and awkward in NetLogo. GenesisCA has an atomic per-agent structural request queue
+      with <code>Form / Break / Rewire / Transfer / Form Between / Break Between</code>, harness-checked
+      invariants, and a force layout that keeps up at 10⁴ nodes. That combination is genuinely rare, and it is
+      already shipped.</div>
+  </div>
+</section>
+
+<!-- ─────────────────────────────────────────── FORMATS ────────────────────────────── -->
+<section id="formats">
+  <div class="card">
+    <h2><span class="n">1</span> How SNA stores graphs</h2>
+    <p class="lede">Every format below is a dialect of one idea: <b>a node table and an edge table</b>. That is
+      literally Gephi's CSV import vocabulary, and it is the CSV agent importer's shape one table down.</p>
+
+<pre><span class="c"># nodes.csv                     # edges.csv  — Gephi's reserved column names</span>
+Id,Label,Group                  Source,Target,<span class="a">Type</span>,Weight
+1,Alice,A                       1,2,<span class="s">Undirected</span>,3
+2,Bob,A                         2,3,<span class="s">Undirected</span>,1
+3,Carol,B                       1,3,<span class="s">Directed</span>,7</pre>
+
+    <div class="tblwrap">
+    <table>
+      <thead><tr>
+        <th>Format</th><th>Directed</th><th>Typed attrs</th><th>Weights</th><th>Multi&#8209;edge</th>
+        <th>Self&#8209;loop</th><th>Time</th><th>Layout</th><th>Where you meet it</th>
+      </tr></thead>
+      <tbody>
+        <tr><td><b>Edge list CSV/TSV</b></td><td>by convention</td><td><span class="tag t-none">no</span></td>
+          <td>3rd column</td><td>yes</td><td>yes</td><td>a <code>t</code> column</td><td><span class="tag t-none">no</span></td>
+          <td><b>the default for published datasets</b> — SNAP, KONECT, Network Repository</td></tr>
+        <tr><td><b>Node + edge CSV pair</b></td><td><code>Type</code> column</td><td>untyped strings</td>
+          <td><code>Weight</code></td><td>via id</td><td>yes</td><td><code>timeset</code></td><td>via columns</td>
+          <td><b>Gephi's import; the practitioner's spreadsheet</b></td></tr>
+        <tr><td>Adjacency matrix</td><td>asymmetry</td><td><span class="tag t-none">no</span></td><td>cell value</td>
+          <td><span class="tag t-none">no</span></td><td>diagonal</td><td><span class="tag t-none">no</span></td>
+          <td><span class="tag t-none">no</span></td><td>small / classic, UCINET-era</td></tr>
+        <tr><td><b>GraphML</b> (XML)</td><td><code>edgedefault</code> + per-edge</td>
+          <td><span class="tag t-have">yes, declared</span></td><td>as an attr</td><td>yes</td><td>yes</td>
+          <td><span class="tag t-none">no</span></td><td>vendor ext</td><td><b>the best interchange target</b></td></tr>
+        <tr><td><b>GEXF</b> (Gephi)</td><td><code>defaultedgetype</code></td><td><span class="tag t-have">yes</span></td>
+          <td><code>weight</code></td><td>yes</td><td>yes</td><td><span class="tag t-have">yes, intervals</span></td>
+          <td><span class="tag t-have">yes, <code>viz:</code></span></td><td>the only common <i>dynamic</i> one</td></tr>
+        <tr><td>GML</td><td><code>directed 0/1</code></td><td>untyped</td><td>as an attr</td><td>yes</td><td>yes</td>
+          <td><span class="tag t-none">no</span></td><td>via attrs</td><td>Newman's classic dataset corpus</td></tr>
+        <tr><td><b>Pajek <code>.net</code></b></td><td><span class="tag t-have"><code>*Edges</code> vs <code>*Arcs</code></span></td>
+          <td>separate files</td><td>3rd number</td><td>yes</td><td>yes</td><td><span class="tag t-none">no</span></td>
+          <td>vertex coords</td><td>classic SNA, still taught</td></tr>
+        <tr><td>UCINET DL</td><td>matrix asymmetry</td><td>stacked (<code>NM=</code>)</td><td>cell value</td>
+          <td>via <code>NM=</code></td><td>diagonal</td><td><span class="tag t-none">no</span></td>
+          <td><span class="tag t-none">no</span></td><td>social-sciences legacy</td></tr>
+        <tr><td>DOT (Graphviz)</td><td><code>graph</code>/<code>digraph</code></td><td>strings</td><td>attr</td>
+          <td>yes</td><td>yes</td><td><span class="tag t-none">no</span></td><td>that's its job</td>
+          <td>drawing, not analysis</td></tr>
+        <tr><td><b>node-link JSON</b></td><td><code>"directed"</code></td><td>JSON types</td><td><code>weight</code></td>
+          <td><code>"multigraph"</code></td><td>yes</td><td><span class="tag t-none">no</span></td>
+          <td>via node fields</td><td><b>web / D3 / NetworkX</b></td></tr>
+        <tr><td>Cytoscape JSON</td><td><code>data</code> fields</td><td>JSON types</td><td><code>weight</code></td>
+          <td>yes</td><td>yes</td><td><span class="tag t-none">no</span></td>
+          <td><span class="tag t-have"><code>position</code></span></td><td>web viz</td></tr>
+      </tbody>
+    </table></div>
+
+    <h3>The attribute vocabulary that is effectively standard</h3>
+    <p>Not a spec — a convention consistent enough that auto-mapping on these names will hit most real files.</p>
+    <div class="grid2">
+      <div class="mini"><h4>Edge attributes</h4>
+        <p><code>weight</code> — <b>the one universal edge attribute</b>; NetworkX, igraph and Gephi all
+          special-case it. Then <code>type</code>&nbsp;/&nbsp;<code>kind</code>&nbsp;/&nbsp;<code>relation</code>
+          (multi-relational networks), <code>sign</code> (±1, balance theory),
+          <code>timestamp</code>&nbsp;/&nbsp;<code>start</code>&nbsp;/&nbsp;<code>end</code>.</p></div>
+      <div class="mini"><h4>Node attributes</h4>
+        <p><code>id</code>, <code>label</code>, <code>name</code>; <code>group</code>&nbsp;/&nbsp;<code>community</code>&nbsp;/&nbsp;<code>club</code>&nbsp;/&nbsp;<code>modularity_class</code>;
+          <code>x</code>, <code>y</code>, <code>size</code>, <code>color</code>; and the <b>computed</b> columns a
+          tool writes back — <code>degree</code>, <code>betweenness</code>, <code>pagerank</code>,
+          <code>eigencentrality</code>, <code>clustering</code>.</p></div>
+    </div>
+    <div class="callout info">That last group is the <b>practitioner's loop</b>: simulate → compute metrics →
+      write them onto the nodes → export → plot elsewhere. It is why the <i>export</i> side wants a node table
+      with metric columns, not just an edge list.</div>
+    <p class="small">Format sketches and keyword names were written from domain knowledge and then spot-checked
+      online. <b>Confirmed:</b> NetworkX deprecated the <code>link</code> keyword in 3.4 and flipped the default
+      serialization key <code>"links"</code>&nbsp;→&nbsp;<code>"edges"</code> in 3.6, so real files carry either —
+      <b>an importer must accept both keys</b>. Still from memory: UCINET DL's keyword casing (harmless — UCINET is
+      case-insensitive). Check the other specs before turning a sketch into a parser.</p>
+  </div>
+</section>
+
+<!-- ─────────────────────────────────────────── MAPPING ────────────────────────────── -->
+<section id="mapping">
+  <div class="card">
+    <h2><span class="n alt">2</span> The mapping: file → agents + bonds</h2>
+    <p class="lede">Every piece on the right already exists. The only thing that does not is the arrow in the
+      middle.</p>
+
+    <figure>
+      <svg viewBox="0 0 1080 560" role="img" aria-label="Diagram mapping a node table and edge table onto GenesisCA agents and bonds">
+        <defs>
+          <marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M0,0 L10,5 L0,10 z" fill="#4cc9f0"/>
+          </marker>
+          <marker id="arA" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M0,0 L10,5 L0,10 z" fill="#e8a13a"/>
+          </marker>
+          <marker id="arR" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M0,0 L10,5 L0,10 z" fill="#e0566a"/>
+          </marker>
+        </defs>
+        <rect x="0" y="0" width="1080" height="560" fill="#0e1014"/>
+
+        <!-- LEFT: the file -->
+        <text x="30" y="34" fill="#9aa0aa" font-family="ui-monospace,monospace" font-size="12" letter-spacing="1.5">THE FILE</text>
+
+        <rect x="30" y="48" width="300" height="152" rx="10" fill="#16181d" stroke="#3a3f4a"/>
+        <text x="46" y="72" fill="#f4c06a" font-family="ui-monospace,monospace" font-size="13" font-weight="700">nodes.csv</text>
+        <text x="46" y="98"  fill="#dfe3ea" font-family="ui-monospace,monospace" font-size="12.5">Id, Label, Group, Opinion</text>
+        <line x1="46" y1="108" x2="314" y2="108" stroke="#2a2e37"/>
+        <text x="46" y="128" fill="#cfd4dc" font-family="ui-monospace,monospace" font-size="12.5">1,  Alice, A,     0.71</text>
+        <text x="46" y="150" fill="#cfd4dc" font-family="ui-monospace,monospace" font-size="12.5">2,  Bob,   A,     0.12</text>
+        <text x="46" y="172" fill="#cfd4dc" font-family="ui-monospace,monospace" font-size="12.5">3,  Carol, B,     0.94</text>
+
+        <rect x="30" y="222" width="300" height="176" rx="10" fill="#16181d" stroke="#3a3f4a"/>
+        <text x="46" y="246" fill="#f4c06a" font-family="ui-monospace,monospace" font-size="13" font-weight="700">edges.csv</text>
+        <text x="46" y="272"  fill="#dfe3ea" font-family="ui-monospace,monospace" font-size="12.5">Source, Target, Weight, Type</text>
+        <line x1="46" y1="282" x2="314" y2="282" stroke="#2a2e37"/>
+        <text x="46" y="302" fill="#cfd4dc" font-family="ui-monospace,monospace" font-size="12.5">1,      2,      3.0,    Undir</text>
+        <text x="46" y="324" fill="#cfd4dc" font-family="ui-monospace,monospace" font-size="12.5">2,      3,      1.0,    Undir</text>
+        <text x="46" y="346" fill="#e0566a" font-family="ui-monospace,monospace" font-size="12.5">1,      3,      7.0,    Dir</text>
+        <text x="46" y="374" fill="#6b7280" font-family="ui-monospace,monospace" font-size="11.5">(an ARC — see §5)</text>
+
+        <rect x="30" y="420" width="300" height="106" rx="10" fill="#16181d" stroke="#3a3f4a"/>
+        <text x="46" y="444" fill="#9aa0aa" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif" font-size="12.5" font-weight="600">…or one file:</text>
+        <text x="46" y="468" fill="#cfd4dc" font-family="ui-monospace,monospace" font-size="12">GraphML · GEXF · GML</text>
+        <text x="46" y="490" fill="#cfd4dc" font-family="ui-monospace,monospace" font-size="12">Pajek .net · node-link JSON</text>
+        <text x="46" y="512" fill="#6b7280" font-family="ui-monospace,monospace" font-size="11.5">same two tables, one envelope</text>
+
+        <!-- MIDDLE: the missing importer -->
+        <rect x="384" y="196" width="196" height="140" rx="12" fill="rgba(224,86,106,.09)" stroke="#e0566a" stroke-dasharray="6 4" stroke-width="2"/>
+        <text x="482" y="234" fill="#e0566a" font-size="13" font-weight="700" text-anchor="middle" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif">DOES NOT EXIST</text>
+        <text x="482" y="258" fill="#dfe3ea" font-size="13.5" font-weight="600" text-anchor="middle" font-family="ui-monospace,monospace">networkImport.ts</text>
+        <text x="482" y="282" fill="#9aa0aa" font-size="12" text-anchor="middle" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif">parse · id→index map</text>
+        <text x="482" y="300" fill="#9aa0aa" font-size="12" text-anchor="middle" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif">capacity · dedupe · report</text>
+        <text x="482" y="322" fill="#4cc9f0" font-size="11.5" text-anchor="middle" font-family="ui-monospace,monospace">→ { agents, bonds }</text>
+
+        <path d="M334 124 C 360 124, 358 240, 382 250" fill="none" stroke="#4cc9f0" stroke-width="2" marker-end="url(#ar)"/>
+        <path d="M334 300 C 358 300, 360 282, 382 282" fill="none" stroke="#4cc9f0" stroke-width="2" marker-end="url(#ar)"/>
+
+        <!-- RIGHT: GenesisCA -->
+        <text x="640" y="34" fill="#9aa0aa" font-family="ui-monospace,monospace" font-size="12" letter-spacing="1.5">GENESISCA — ALL OF THIS ALREADY EXISTS</text>
+
+        <rect x="640" y="48" width="410" height="152" rx="10" fill="#16181d" stroke="#66bb6a"/>
+        <text x="656" y="72" fill="#66bb6a" font-family="ui-monospace,monospace" font-size="13" font-weight="700">AGENTS  (the nodes)</text>
+        <text x="656" y="98" fill="#dfe3ea" font-size="12.5" font-family="ui-monospace,monospace">allocAgentSlot() → initAgentSlot()</text>
+        <text x="656" y="122" fill="#cfd4dc" font-size="12.5" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif">Label, Group, Opinion &#8594; <tspan font-weight="700">agent attributes</tspan></text>
+        <text x="656" y="144" fill="#cfd4dc" font-size="12.5" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif">via <tspan font-family="ui-monospace,monospace">sets[{attrId, value}]</tspan> — pre-encoded</text>
+        <text x="656" y="168" fill="#cfd4dc" font-size="12.5" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif">Id &#8594; keep as an attribute (re-join later)</text>
+        <text x="656" y="190" fill="#6b7280" font-size="11.5" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif">x/y from the file, or the force layout</text>
+
+        <rect x="640" y="222" width="410" height="176" rx="10" fill="#16181d" stroke="#66bb6a"/>
+        <text x="656" y="246" fill="#66bb6a" font-family="ui-monospace,monospace" font-size="13" font-weight="700">BONDS  (the edges)</text>
+        <text x="656" y="272" fill="#dfe3ea" font-size="12.5" font-family="ui-monospace,monospace">formBond(store, a, b, L, λ, type, attrValues)</text>
+        <text x="656" y="296" fill="#cfd4dc" font-size="12.5" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif">Weight &#8594; a <tspan font-weight="700">float bond attribute</tspan></text>
+        <text x="656" y="318" fill="#cfd4dc" font-size="12.5" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif">Relation &#8594; a <tspan font-weight="700">tag bond attribute</tspan></text>
+        <text x="656" y="340" fill="#e0566a" font-size="12.5" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif">Direction &#8594; a bond attribute (never asymmetry)</text>
+        <text x="656" y="366" fill="#6b7280" font-size="11.5" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif">writes BOTH slots identically — invariant I2</text>
+        <text x="656" y="386" fill="#6b7280" font-size="11.5" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif">refuses: self · duplicate · dead · over capacity</text>
+
+        <rect x="640" y="420" width="410" height="106" rx="10" fill="#16181d" stroke="#3a3f4a"/>
+        <text x="656" y="444" fill="#f4c06a" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif" font-size="13" font-weight="600">…and it then travels for free</text>
+        <text x="656" y="468" fill="#cfd4dc" font-size="12.5" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif"><tspan font-family="ui-monospace,monospace">serializeAgentStore</tspan> already round-trips bonds</text>
+        <text x="656" y="490" fill="#cfd4dc" font-size="12.5" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif">+ <tspan font-family="ui-monospace,monospace">bondAttrs</tspan> &#8594; the graph rides the <tspan font-family="ui-monospace,monospace">.gcaproj</tspan></text>
+        <text x="656" y="512" fill="#66bb6a" font-size="12" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif"><tspan font-family="ui-monospace,monospace">resetRestoresBoard</tspan> makes it survive Reset</text>
+
+        <path d="M584 250 C 610 250, 614 124, 638 124" fill="none" stroke="#e8a13a" stroke-width="2" marker-end="url(#arA)"/>
+        <path d="M584 282 C 610 282, 614 300, 638 300" fill="none" stroke="#e8a13a" stroke-width="2" marker-end="url(#arA)"/>
+        <path d="M845 400 L845 418" fill="none" stroke="#66bb6a" stroke-width="2" marker-end="url(#arA)" opacity=".6"/>
+
+        <text x="482" y="176" fill="#e0566a" font-size="11.5" text-anchor="middle" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif" font-weight="600">the only missing piece</text>
+      </svg>
+      <figcaption><b>Everything on the right is shipped.</b> <code>formBond</code>'s signature already takes the
+        exact payload an importer would produce, including per-bond attribute values indexed in
+        <code>bondAttrSpecs</code> order. What does not exist is any way to <i>reach</i> it from a file:
+        <b>a grep for <code>bond</code> across every importer and import dialog returns zero matches</b>, and the
+        batch message <code>formBondBatch</code> was removed from the codebase entirely.</figcaption>
+    </figure>
+
+    <div class="callout warn"><b>The one non-obvious constraint.</b> <code>pasteAgents</code> allocates slots
+      with <code>allocAgentSlot()</code> in sequence and <i>replies with nothing</i> — so the file-id → slot-id
+      map exists only inside the paste loop. The bond list therefore cannot be a second message keyed on file
+      ids. Either agents and bonds travel <b>together</b> (recommended: an optional <code>bonds</code> member on
+      <code>pasteAgents</code>, indexed <i>positionally</i> into <code>agents</code>), or the paste must start
+      reporting its allocations. The first option is additive, and as a bonus it closes the documented
+      "<i>pasted agents arrive unbonded</i>" gap for the clipboard too.</div>
+  </div>
+</section>
+
+<!-- ─────────────────────────────────────────── COVERAGE ───────────────────────────── -->
+<section id="coverage">
+  <div class="card">
+    <h2><span class="n">3</span> What GenesisCA can already simulate</h2>
+    <p class="lede">Verified against the shipped agent node catalogue. The pattern is stark: <b>everything
+      dynamic is expressible today; everything static-analysis-shaped is absent.</b></p>
+
+    <div class="tblwrap">
+    <table>
+      <thead><tr><th style="width:210px">Model</th><th style="width:120px">Status</th><th>How, or what blocks it</th></tr></thead>
+      <tbody>
+        <tr><td><b>SI / SIS / SIR</b></td><td><span class="tag t-have">today</span></td>
+          <td><code>Neighbour Census</code> (<code>source:&nbsp;'bonded'</code>) over an <code>infected</code> bool +
+            <code>Get Random</code>. Structurally the shipped <b>Life on Bonds</b>, different rule.</td></tr>
+        <tr><td><b>Voter model</b></td><td><span class="tag t-have">today</span></td>
+          <td><code>Get Bonded Agents → Pick Random Agent → Get Attribute (by ID) → Set Attribute</code></td></tr>
+        <tr><td><b>DeGroot averaging</b></td><td><span class="tag t-have">today</span></td>
+          <td><code>Get Bonded Agents → Get Agents Attribute → Aggregate(average)</code></td></tr>
+        <tr><td><b>Linear threshold / Watts cascade</b></td><td><span class="tag t-have">today</span></td>
+          <td>census count ÷ <code>Get Bond Degree</code> → <code>Compare ≥ θ</code></td></tr>
+        <tr><td><b>Independent cascade</b></td><td><span class="tag t-have">today</span></td>
+          <td>needs per-edge "already tried" state ⇒ <b>a bool bond attribute</b> — the canonical demonstration of
+            why bond attributes exist</td></tr>
+        <tr><td><b>PD / snowdrift, imitate-best</b></td><td><span class="tag t-have">today</span></td>
+          <td><code>Get Agents Attribute → groupOperator.max</code> — its <code>position</code> output is the argmax</td></tr>
+        <tr><td><b>Ising / Potts / Kuramoto</b></td><td><span class="tag t-have">today</span></td>
+          <td><code>For Each Bond → Get Attribute (by ID) → Expression → Local Variable</code> accumulate</td></tr>
+        <tr><td><b>Holme–Newman adaptive rewire</b></td><td><span class="tag t-free">natively</span></td>
+          <td><b><code>Rewire Bond</code> is an atomic primitive</b> — most SNA toolkits make you delete-then-add</td></tr>
+        <tr><td><b>Random geometric graph</b></td><td><span class="tag t-free">for free</span></td>
+          <td>scatter + engine <b>auto-bond by distance</b> <i>is</i> an RGG</td></tr>
+        <tr><td><b>Deffuant (pairwise)</b></td><td><span class="tag t-part">with a constraint</span></td>
+          <td>writes the <i>other</i> agent ⇒ <b>async agent mode only</b>, and the WebGPU agent target rejects a
+            wired cross-agent overwrite (documented gate)</td></tr>
+        <tr><td><b>Hegselmann–Krause</b></td><td><span class="tag t-part">via a loop</span></td>
+          <td><code>Filter Agents</code> compares against a <b>constant</b>, not against self — so a
+            bounded-confidence filter is a <code>For Each Bond</code> loop, not a filter</td></tr>
+        <tr><td><b>Axelrod culture</b></td><td><span class="tag t-part">partial</span></td>
+          <td>F features ⇒ F separate agent attributes (fine for small F); there is no per-agent array attribute</td></tr>
+        <tr><td><b>ER / WS / BA / SBM generation</b></td><td><span class="tag t-part">awkward</span></td>
+          <td>the pieces exist, the ergonomics do not — O(N²) enumeration, request-queue depth 8, and bond verbs
+            are invalid in the Agent Init Event</td></tr>
+        <tr><td><b>Import a real network</b></td><td><span class="tag t-none">nothing</span></td><td>the headline gap</td></tr>
+        <tr><td><b>Centralities / communities / paths</b></td><td><span class="tag t-none">nothing</span></td>
+          <td>six graph indicators ship; none of these is among them</td></tr>
+        <tr><td><b>Temporal edge playback</b></td><td><span class="tag t-none">nothing</span></td>
+          <td>needs a shared "driver series" concept — the same gap flagged for weather data</td></tr>
+      </tbody>
+    </table></div>
+
+    <div class="callout"><b>The SBM is a freebie hiding in plain sight.</b> A stochastic block model's
+      block&#215;block probability matrix <i>is</i> a 2-axis tag&#215;tag <b>lookup table</b> — editable in the
+      shipped matrix-play widget, exactly like Particle Life's interaction matrix.</div>
+  </div>
+</section>
+
+<!-- ─────────────────────────────────────────── CAPACITY ───────────────────────────── -->
+<section id="capacity">
+  <div class="card">
+    <h2><span class="n warn">4</span> The <code>maxBonds</code> ceiling — the one hard constraint</h2>
+    <p class="lede">The bond store is <b>ELLPACK</b>: <code>maxAgents × maxBonds</code> <i>rectangular</i>, ragged
+      only in that <code>bondCount[i] ≤ maxBonds</code>. Social graphs are scale-free. Those two facts collide.</p>
+
+    <figure>
+      <svg viewBox="0 0 1080 330" role="img" aria-label="Diagram showing the rectangular bond store wasted by one hub node">
+        <rect x="0" y="0" width="1080" height="330" fill="#0e1014"/>
+        <text x="30" y="30" fill="#9aa0aa" font-family="ui-monospace,monospace" font-size="12" letter-spacing="1.5">THE BOND STORE — maxAgents ROWS × maxBonds SLOTS, 28 BYTES EACH</text>
+
+        <!-- grid -->
+        <g font-family="ui-monospace,monospace" font-size="11">
+          <!-- row labels -->
+          <text x="30" y="76"  fill="#e0566a">hub</text>
+          <text x="30" y="106" fill="#9aa0aa">n1</text>
+          <text x="30" y="136" fill="#9aa0aa">n2</text>
+          <text x="30" y="166" fill="#9aa0aa">n3</text>
+          <text x="30" y="196" fill="#9aa0aa">n4</text>
+          <text x="30" y="226" fill="#9aa0aa">n5</text>
+          <text x="30" y="256" fill="#6b7280">…</text>
+        </g>
+
+        <!-- hub row: fully used -->
+        <g>
+          <rect x="76" y="62" width="700" height="20" rx="3" fill="rgba(224,86,106,.35)" stroke="#e0566a"/>
+          <text x="786" y="77" fill="#e0566a" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif" font-size="12">degree 341 — this ONE node sizes the whole store</text>
+        </g>
+        <!-- ordinary rows: tiny used + big waste -->
+        <g>
+          <rect x="76" y="92"  width="14" height="20" rx="3" fill="rgba(102,187,106,.45)" stroke="#66bb6a"/>
+          <rect x="90" y="92"  width="686" height="20" rx="3" fill="rgba(255,255,255,.035)" stroke="#2a2e37" stroke-dasharray="4 4"/>
+          <rect x="76" y="122" width="20" height="20" rx="3" fill="rgba(102,187,106,.45)" stroke="#66bb6a"/>
+          <rect x="96" y="122" width="680" height="20" rx="3" fill="rgba(255,255,255,.035)" stroke="#2a2e37" stroke-dasharray="4 4"/>
+          <rect x="76" y="152" width="10" height="20" rx="3" fill="rgba(102,187,106,.45)" stroke="#66bb6a"/>
+          <rect x="86" y="152" width="690" height="20" rx="3" fill="rgba(255,255,255,.035)" stroke="#2a2e37" stroke-dasharray="4 4"/>
+          <rect x="76" y="182" width="26" height="20" rx="3" fill="rgba(102,187,106,.45)" stroke="#66bb6a"/>
+          <rect x="102" y="182" width="674" height="20" rx="3" fill="rgba(255,255,255,.035)" stroke="#2a2e37" stroke-dasharray="4 4"/>
+          <rect x="76" y="212" width="14" height="20" rx="3" fill="rgba(102,187,106,.45)" stroke="#66bb6a"/>
+          <rect x="90" y="212" width="686" height="20" rx="3" fill="rgba(255,255,255,.035)" stroke="#2a2e37" stroke-dasharray="4 4"/>
+        </g>
+        <text x="786" y="137" fill="#66bb6a" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif" font-size="12">mean degree 6</text>
+        <text x="786" y="197" fill="#6b7280" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif" font-size="12">…everything dashed is allocated</text>
+        <text x="786" y="215" fill="#6b7280" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif" font-size="12">and never used</text>
+
+        <line x1="76" y1="252" x2="776" y2="252" stroke="#3a3f4a"/>
+        <text x="76"  y="272" fill="#66bb6a" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif" font-size="12.5">2E = 60k slots actually used</text>
+        <text x="470" y="272" fill="#e0566a" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif" font-size="12.5" text-anchor="middle">3.4M slots allocated</text>
+        <text x="776" y="272" fill="#e0566a" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif" font-size="12.5" text-anchor="end">= 95.5 MB for 1.7 MB of graph</text>
+
+        <text x="30" y="308" fill="#f4c06a" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif" font-size="13" font-weight="600">Barabási–Albert, N = 10 000, m = 3 · measured</text>
+        <text x="400" y="308" fill="#9aa0aa" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif" font-size="13">— the store is sized by the HUB and wasted on everyone else: <tspan fill="#e0566a" font-weight="700">57× overhead</tspan></text>
+      </svg>
+      <figcaption>Per slot the built-ins cost <b>28 bytes</b> — <code>bondPartner</code> + <code>bondPartnerEpoch</code>
+        + <code>bondTypeLabel</code> (3&#215;i32) and <code>bondRestLength</code> + <code>bondStiffness</code>
+        (2&#215;f64) — plus 4&nbsp;B per bool/int/tag bond attribute and 8&nbsp;B per float one. This is the
+        <b>ELLPACK-vs-scale-free hazard</b> that <a href="INVESTIGATION_GRAPH_CA.md">INVESTIGATION_GRAPH_CA.md</a>
+        §2.8 already named from the lattice side, arriving here from the other direction.</figcaption>
+    </figure>
+
+    <div class="tblwrap">
+    <table>
+      <thead><tr><th>Graph</th><th class="num">N</th><th class="num">E</th><th class="num">mean deg</th>
+        <th class="num">max deg</th><th class="num">store @ maxBonds</th><th class="num">ideal (2E)</th>
+        <th class="num">waste</th><th>verdict</th></tr></thead>
+      <tbody>
+        <tr><td>Florentine families</td><td class="num">15</td><td class="num">20</td><td class="num">2.7</td>
+          <td class="num">6</td><td class="num">3 KB</td><td class="num">1 KB</td><td class="num">2.3×</td>
+          <td><span class="tag t-have">trivial</span></td></tr>
+        <tr><td>Zachary karate club</td><td class="num">34</td><td class="num">78</td><td class="num">4.6</td>
+          <td class="num">17</td><td class="num">16 KB</td><td class="num">4 KB</td><td class="num">3.7×</td>
+          <td><span class="tag t-have">trivial</span></td></tr>
+        <tr><td>Les Misérables</td><td class="num">77</td><td class="num">254</td><td class="num">6.6</td>
+          <td class="num">36</td><td class="num">78 KB</td><td class="num">14 KB</td><td class="num">5.5×</td>
+          <td><span class="tag t-have">trivial</span></td></tr>
+        <tr><td>Football (Girvan–Newman)</td><td class="num">115</td><td class="num">613</td><td class="num">10.7</td>
+          <td class="num">12</td><td class="num">39 KB</td><td class="num">34 KB</td><td class="num">1.1×</td>
+          <td><span class="tag t-have">trivial</span></td></tr>
+        <tr><td>ca-GrQc (arXiv collab)</td><td class="num">5 242</td><td class="num">14 496</td><td class="num">5.5</td>
+          <td class="num">81</td><td class="num">11.9 MB</td><td class="num">812 KB</td><td class="num">15×</td>
+          <td><span class="tag t-have">fine</span></td></tr>
+        <tr><td>BA <code>m=3</code> (measured)</td><td class="num">10 000</td><td class="num">29 994</td><td class="num">6.0</td>
+          <td class="num">341</td><td class="num">95.5 MB</td><td class="num">1.7 MB</td><td class="num">57×</td>
+          <td><span class="tag t-part">uncomfortable</span></td></tr>
+        <tr><td>Facebook ego (SNAP)</td><td class="num">4 039</td><td class="num">88 234</td><td class="num">43.7</td>
+          <td class="num">≈1 045</td><td class="num">118 MB</td><td class="num">4.9 MB</td><td class="num">24×</td>
+          <td><span class="tag t-part">95.8 % unused</span></td></tr>
+        <tr><td>BA <code>m=3</code> (measured)</td><td class="num">100 000</td><td class="num">299 994</td><td class="num">6.0</td>
+          <td class="num">1 140</td><td class="num"><b>3.19 GB</b></td><td class="num">16.8 MB</td><td class="num"><b>190×</b></td>
+          <td><span class="tag t-none">out of reach</span></td></tr>
+      </tbody>
+    </table></div>
+    <p class="small">BA rows and the store arithmetic measured this session; the published datasets' N and E are
+      confident, their max-degree column is from memory. The <i>argument</i> does not depend on the exact
+      figures — only on max ≫ mean, which is definitional for scale-free graphs and is confirmed by the
+      measured rows.</p>
+
+    <div class="callout warn"><b>The honest scope statement.</b> GenesisCA can hold graphs bounded by
+      <code>maxAgents × maxDegree</code>, <b>not by edge count</b>. The classic SNA corpus (≤10³ nodes, max degree
+      ≤10²) is comfortable; a mid-size collaboration network costs tens of MB; a hub-heavy ego network or a
+      10⁵-node scale-free graph is out of reach without a CSR bond store — <b>which is its own milestone, and only
+      worth it when someone actually needs it.</b> Until then the importer must compute the max degree
+      <i>before</i> it does anything and either raise <code>maxBonds</code> or <b>refuse with the exact
+      number</b>. Silently truncating a hub is the one outcome that must never happen.</div>
+  </div>
+</section>
+
+<!-- ─────────────────────────────────────────── DIRECTED ───────────────────────────── -->
+<section id="directed">
+  <div class="card">
+    <h2><span class="n">5</span> Directed edges — keep D2, use the attribute idiom</h2>
+    <p class="lede">GRA decision <b>D2</b>: a bond is <b>ONE object stored TWICE</b>. Both slots hold the same
+      values; invariant <b>I2</b> (harness-checked) requires it. So an asymmetric bond attribute is not merely
+      discouraged — it is unrepresentable without breaking a machine-checked contract.</p>
+
+    <figure>
+      <svg viewBox="0 0 1080 332" role="img" aria-label="Diagram of the directed-edge idiom: both bond slots store the same source id and each end decodes its own view">
+        <defs>
+          <marker id="arrB" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+            <path d="M0,0 L10,5 L0,10 z" fill="#f4c06a"/>
+          </marker>
+        </defs>
+        <rect x="0" y="0" width="1080" height="332" fill="#0e1014"/>
+
+        <!-- the arc -->
+        <circle cx="150" cy="80" r="30" fill="rgba(76,201,240,.18)" stroke="#4cc9f0" stroke-width="2"/>
+        <text x="150" y="86" fill="#4cc9f0" font-size="15" font-weight="700" text-anchor="middle" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif">A</text>
+        <text x="150" y="132" fill="#9aa0aa" font-size="12" text-anchor="middle" font-family="ui-monospace,monospace">slot id 7</text>
+
+        <circle cx="440" cy="80" r="30" fill="rgba(176,140,255,.18)" stroke="#b08cff" stroke-width="2"/>
+        <text x="440" y="86" fill="#b08cff" font-size="15" font-weight="700" text-anchor="middle" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif">B</text>
+        <text x="440" y="132" fill="#9aa0aa" font-size="12" text-anchor="middle" font-family="ui-monospace,monospace">slot id 12</text>
+
+        <line x1="182" y1="80" x2="406" y2="80" stroke="#f4c06a" stroke-width="2.5" marker-end="url(#arrB)"/>
+        <text x="294" y="66" fill="#f4c06a" font-size="13" text-anchor="middle" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif" font-weight="600">the arc A → B in the file</text>
+
+        <!-- storage -->
+        <rect x="90" y="168" width="330" height="104" rx="10" fill="#16181d" stroke="#4cc9f0"/>
+        <text x="106" y="192" fill="#4cc9f0" font-family="ui-monospace,monospace" font-size="12.5" font-weight="700">A's bond slot</text>
+        <text x="106" y="216" fill="#cfd4dc" font-family="ui-monospace,monospace" font-size="12.5">bondPartner  = 12</text>
+        <text x="106" y="240" fill="#f4c06a" font-family="ui-monospace,monospace" font-size="12.5">source       = <tspan font-weight="700">7</tspan></text>
+        <text x="106" y="262" fill="#66bb6a" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif" font-size="12">7 == my handle ⇒ <tspan font-weight="700">outgoing</tspan></text>
+
+        <rect x="450" y="168" width="330" height="104" rx="10" fill="#16181d" stroke="#b08cff"/>
+        <text x="466" y="192" fill="#b08cff" font-family="ui-monospace,monospace" font-size="12.5" font-weight="700">B's bond slot</text>
+        <text x="466" y="216" fill="#cfd4dc" font-family="ui-monospace,monospace" font-size="12.5">bondPartner  = 7</text>
+        <text x="466" y="240" fill="#f4c06a" font-family="ui-monospace,monospace" font-size="12.5">source       = <tspan font-weight="700">7</tspan></text>
+        <text x="466" y="262" fill="#e0566a" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif" font-size="12">7 != my handle ⇒ <tspan font-weight="700">incoming</tspan></text>
+
+        <path d="M255 148 L255 166" stroke="#4cc9f0" stroke-width="2"/>
+        <path d="M615 148 L615 166" stroke="#b08cff" stroke-width="2"/>
+
+        <!-- identical marker: BELOW both boxes so it covers no text -->
+        <path d="M255 272 L255 292 L615 292 L615 272" fill="none" stroke="#e8a13a" stroke-width="1.5" stroke-dasharray="4 3" opacity=".8"/>
+        <rect x="342" y="298" width="186" height="24" rx="12" fill="rgba(232,161,58,.13)" stroke="#e8a13a" stroke-dasharray="4 3"/>
+        <text x="435" y="315" fill="#e8a13a" font-size="11.5" text-anchor="middle" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif" font-weight="700">IDENTICAL — I2 holds</text>
+
+        <!-- the rule -->
+        <rect x="820" y="46" width="234" height="226" rx="10" fill="#16181d" stroke="#3a3f4a"/>
+        <text x="836" y="70" fill="#9aa0aa" font-family="ui-monospace,monospace" font-size="11.5" letter-spacing="1">THE RULE READS IT AS</text>
+        <rect x="836" y="86" width="202" height="30" rx="6" fill="#22262f" stroke="#2a2e37"/>
+        <text x="937" y="106" fill="#dfe3ea" font-size="11.5" text-anchor="middle" font-family="ui-monospace,monospace">Get Bond Attribute(source)</text>
+        <rect x="836" y="130" width="202" height="30" rx="6" fill="#22262f" stroke="#2a2e37"/>
+        <text x="937" y="150" fill="#dfe3ea" font-size="11.5" text-anchor="middle" font-family="ui-monospace,monospace">Get Self Handle</text>
+        <path d="M937 118 L937 128" stroke="#4cc9f0" stroke-width="1.6"/>
+        <rect x="836" y="174" width="202" height="30" rx="6" fill="rgba(102,187,106,.12)" stroke="#66bb6a"/>
+        <text x="937" y="194" fill="#66bb6a" font-size="11.5" text-anchor="middle" font-family="ui-monospace,monospace">Compare  ==</text>
+        <path d="M937 162 L937 172" stroke="#4cc9f0" stroke-width="1.6"/>
+        <text x="937" y="228" fill="#f4c06a" font-size="12.5" text-anchor="middle" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif" font-weight="600">one node.</text>
+        <text x="937" y="250" fill="#6b7280" font-size="11.5" text-anchor="middle" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif">That is the entire cost</text>
+        <text x="937" y="266" fill="#6b7280" font-size="11.5" text-anchor="middle" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif">of directed edges.</text>
+      </svg>
+      <figcaption><b>Store the pair, and index it by which end you are.</b> Both slots hold the <i>same</i> value;
+        each agent decodes its own view from <code>Get Self Handle</code>. I2 is preserved by construction, and
+        no engine mirror changes.</figcaption>
+    </figure>
+
+    <h3>Three encodings, increasing power, all I2-clean</h3>
+    <div class="tblwrap">
+    <table>
+      <thead><tr><th>Need</th><th>Encoding</th><th>The rule reads it as</th><th class="num">cost/slot</th></tr></thead>
+      <tbody>
+        <tr><td>a simple arc <span class="small">(the 95 % case)</span></td>
+          <td>ONE <b>integer</b> bond attribute <code>source</code> = the tail agent's id</td>
+          <td><code>outgoing = (source == Get Self Handle)</code> — one Compare</td><td class="num">4 B</td></tr>
+        <tr><td>reciprocal arcs preserved</td>
+          <td>TWO <b>bool</b> attributes <code>arcLoHi</code>/<code>arcHiLo</code>, relative to <code>min(a,b)</code></td>
+          <td><code>(self &lt; partner) ? arcLoHi : arcHiLo</code> — Compare + Value Switch</td><td class="num">8 B</td></tr>
+        <tr><td>asymmetric weights <span class="small">(a trusts b 0.9, b trusts a 0.2)</span></td>
+          <td>TWO <b>float</b> attributes <code>wLoHi</code>/<code>wHiLo</code>, same convention</td>
+          <td>the same Value Switch</td><td class="num">16 B</td></tr>
+      </tbody>
+    </table></div>
+    <p class="small">The <code>min/max</code> convention rather than a packed bitmask is deliberate: the Math node
+      has no bitwise operators, so a two-attribute form costs one Compare where a mask would cost modular
+      arithmetic.</p>
+
+    <div class="grid2">
+      <div class="mini"><h4>Why not break D2?</h4>
+        <p>Asymmetry would thread a second parameter set through <b>every</b> bond mirror: the WASM and WebGPU
+          emitters, <code>moveBondSlot</code>'s compaction field list, <code>serializeAgentStore</code>,
+          <code>setBondFields</code>, <code>drainAgentBondRequests</code>. And the physics reads
+          <code>restLength</code>/<code>stiffness</code> from the <i>local</i> slot — an asymmetric spring is
+          unphysical.</p></div>
+      <div class="mini"><h4>What the importer must do</h4>
+        <p>Read <code>edgedefault</code> / <code>*Edges</code> vs <code>*Arcs</code> / <code>"directed"</code> /
+          <code>Type</code>, then offer a <b>Directedness</b> control. Note that <code>formBond</code> refuses a
+          duplicate pair, so <b>a reciprocal arc pair is one bond</b> — merge and report, or use the arc-pair
+          encoding.</p></div>
+    </div>
+  </div>
+</section>
+
+<!-- ─────────────────────────────────────────── COST ───────────────────────────────── -->
+<section id="cost">
+  <div class="card">
+    <h2><span class="n alt">6</span> What each measurement costs</h2>
+    <p class="lede">Measured this session in Node 22 over the <b>real</b> <code>GraphMetricView</code> data shape
+      (<code>highWater</code>&nbsp;/&nbsp;<code>maxBonds</code>&nbsp;/&nbsp;<code>alive</code>&nbsp;/&nbsp;<code>bondCount</code>&nbsp;/&nbsp;<code>bondPartner</code>,
+      stride <code>maxBonds</code>). Best of 3.</p>
+
+    <div class="tblwrap">
+    <table>
+      <thead><tr><th>Metric</th><th class="num">BA 10k</th><th class="num">BA 100k</th><th class="num">WS 10k</th>
+        <th class="num">WS 100k</th><th>Verdict</th></tr></thead>
+      <tbody>
+        <tr><td>degree pass — E / mean / max / histogram <span class="tag t-have">shipped</span></td>
+          <td class="num">0.04 ms</td><td class="num">0.22 ms</td><td class="num">0.04 ms</td><td class="num">0.21 ms</td>
+          <td><b>free</b> — per-generation</td></tr>
+        <tr><td><code>componentCount</code> (union-find) <span class="tag t-have">shipped</span></td>
+          <td class="num">1.5 ms</td><td class="num">16 ms</td><td class="num">1.3 ms</td><td class="num">8.3 ms</td>
+          <td>cheap — per-generation</td></tr>
+        <tr><td><b>mean local clustering</b> + triangles</td>
+          <td class="num">23 ms</td><td class="num">200 ms</td><td class="num">8.1 ms</td><td class="num">60 ms</td>
+          <td>per-generation to ~10k; batch beyond</td></tr>
+        <tr><td><b>PageRank</b> (20 power iterations)</td>
+          <td class="num">10 ms</td><td class="num">158 ms</td><td class="num">6.1 ms</td><td class="num">72 ms</td>
+          <td>batch tempo</td></tr>
+        <tr><td>one BFS <span class="small">(the unit of every path metric)</span></td>
+          <td class="num">0.58 ms</td><td class="num">14 ms</td><td class="num">0.37 ms</td><td class="num">7.7 ms</td>
+          <td>—</td></tr>
+        <tr><td><b>closeness</b> (all-pairs BFS)</td>
+          <td class="num">≈5.8 s</td><td class="num">≈24 min</td><td class="num">≈3.7 s</td><td class="num">≈13 min</td>
+          <td><span class="tag t-none">on-demand only, ≤10k</span></td></tr>
+        <tr><td><b>betweenness</b> (Brandes, extrapolated from 50 sources)</td>
+          <td class="num">≈21 s</td><td class="num">≈49 min</td><td class="num">≈11 s</td><td class="num">≈30 min</td>
+          <td><span class="tag t-none">on-demand only, ≤10k</span></td></tr>
+      </tbody>
+    </table></div>
+
+    <div class="callout warn"><b>The hub effect is visible, and it is a design rule.</b> At the <i>same</i> N and
+      E, clustering costs <b>3× more</b> on the scale-free graph than on the small-world one (23 vs 8.1 ms at
+      10k; 200 vs 60 ms at 100k) because the per-node inner loop is O(d²) and one hub dominates. <b>Cost any new
+      metric on a scale-free graph, never on a lattice or a ring.</b></div>
+
+    <div class="grid2">
+      <div class="mini"><h4><span class="tag t-new">tier 1</span> Per-generation indicators</h4>
+        <p>density · largest-component fraction · isolated count · assortativity · max core number. All O(N+E),
+          effectively free next to the shipped degree pass. Extend <code>graphMetrics.ts</code> — CPU-side by
+          design, like the six that ship.</p></div>
+      <div class="mini"><h4><span class="tag t-part">tier 2</span> Batch / frame tempo</h4>
+        <p>mean local clustering + triangles · PageRank · eigenvector centrality. These want an explicit cadence,
+          not the per-generation indicator path.</p></div>
+      <div class="mini"><h4><span class="tag t-none">tier 3</span> On-demand actions only</h4>
+        <p>closeness · betweenness · diameter · community detection. <b>Nothing that takes 21 seconds may sit on
+          the generation loop.</b> The Overseer is the closest existing home — and <i>where an "analysis action"
+          lives is a genuine open design question.</i></p></div>
+      <div class="mini"><h4><span class="tag t-new">per-agent</span> Write an attribute, don't add a node</h4>
+        <p>Colouring by PageRank is <i>the</i> canonical SNA picture. A per-agent metric <b>node</b> would need all
+          three agent targets — <b>and would not even work</b>: PageRank, betweenness and community are global
+          <i>iterative</i> quantities, not local computations. A worker-computed pass writing a designated agent
+          attribute needs <b>zero per-target emit and zero new nodes</b>.</p></div>
+    </div>
+  </div>
+</section>
+
+<!-- ─────────────────────────────────────────── PLAN ───────────────────────────────── -->
+<section id="plan">
+  <div class="card">
+    <h2><span class="n">7</span> The recommendation</h2>
+    <p class="lede">Ship <b>N1</b> and <b>N2</b>. Defer the rest until a real model asks.</p>
+
+    <h3>N1 — Network import (agents + bonds) &nbsp;<span class="tag t-new">the whole unlock</span></h3>
+    <p>One new pure module, one dialog, one <i>additive</i> worker field. Formats in priority order:
+      <b>edge list CSV/TSV</b> (with an optional node table), <b>node-link JSON</b>, <b>GraphML</b>.</p>
+    <div class="tblwrap">
+    <table>
+      <thead><tr><th style="width:150px">Subsystem</th><th style="width:300px">Change</th><th>Notes</th></tr></thead>
+      <tbody>
+        <tr><td><b>schema</b></td><td><span class="tag t-have">none required</span></td>
+          <td><code>bondAttributes</code> already exists; directedness is an attribute convention (§5)</td></tr>
+        <tr><td><b>fileOperations</b></td><td><span class="tag t-have">none</span></td>
+          <td><code>serializeAgentStore</code> already round-trips bonds <b>and</b> <code>bondAttrs</code> — the
+            graph rides the <code>.gcaproj</code> via the embedded board</td></tr>
+        <tr><td><b>pure core</b></td><td><span class="tag t-new">new <code>networkImport.ts</code></span></td>
+          <td>sibling of <code>csvImport</code>/<code>geojsonImport</code>/<code>geotiffImport</code>; DOM- and
+            dependency-free; parsers + id→index map + capacity/dedupe analysis + <code>buildNetwork()</code></td></tr>
+        <tr><td><b>worker</b></td><td><code>pasteAgents</code> gains <code>bonds?</code> — indices
+          <b>positional into <code>agents</code></b></td>
+          <td>additive; the handler already holds the allocation map. Bonus: closes the "pasted agents arrive
+            unbonded" gap for the clipboard. Already in <code>AGENT_GPU_DEFER_TYPES</code></td></tr>
+        <tr><td><b>engine</b></td><td><span class="tag t-have">none</span></td>
+          <td><code>formBond(store,a,b,L,λ,typeLabel,attrValues)</code> is already the exact seam</td></tr>
+        <tr><td><b>UI</b></td><td><span class="tag t-new">new <code>NetworkImportDialog.tsx</code></span></td>
+          <td>+ a transport-bar item, a hidden input, a <code>genesis-open-network-file</code> drop event —
+            the pattern four importers already follow</td></tr>
+        <tr><td><b>capabilities</b></td><td>raise <code>bonds</code> to <code>'data'</code>, raise
+          <code>maxBonds</code> to the measured max degree</td>
+          <td>both structural ⇒ full worker reinit. The <code>gisTools</code> auto-enable is the precedent</td></tr>
+        <tr><td><b>indicators</b></td><td><span class="tag t-have">none in N1</span></td><td></td></tr>
+        <tr><td><b>docs</b></td><td>Help recipe · README line · the §5 convention</td>
+          <td><b>no <code>NODES_REFERENCE</code> change — no node is added</b></td></tr>
+        <tr><td><b>harness</b></td><td><span class="tag t-new">new <code>test-network-import.mjs</code></span></td>
+          <td>parser tables by value; then <b>I1–I4 asserted after a real import</b>; a round trip; the
+            dedupe / self-loop / over-capacity refusals</td></tr>
+      </tbody>
+    </table></div>
+
+    <div class="callout good"><b>ALL-TARGET DELIVERY, by construction.</b> An import is a <b>worker mutation of
+      the CPU store</b>, so it is compile-target-agnostic — exactly like <code>pasteAgents</code>,
+      <code>paintManual</code> and <code>importGridValues</code>. No compiler file is opened;
+      <code>check-compile-identity</code> is unchanged by construction. The same argument the GIS importers
+      shipped under. New graph <i>indicators</i> are CPU-side by design; the per-agent metric pass writes an
+      ordinary agent attribute — so <b>nothing in this plan needs a per-target emit.</b></div>
+
+    <h3>N2 — Generators + the measurement tier</h3>
+    <ul class="clean">
+      <li class="c"><b>A Generate tab on the same dialog</b> — ER, WS, BA, SBM, RGG. Seeded, deterministic,
+        producing the identical <code>{agents, bonds}</code> payload. Beats a <code>seedPattern</code> sibling and
+        sidesteps the O(N²) / queue-depth ceilings entirely.</li>
+      <li class="g"><b>Cheap graph indicators</b> — density, largest-component fraction, isolated count,
+        assortativity, max core number. All O(N+E).</li>
+      <li class="p"><b>A worker-computed per-agent metric pass</b> writing a designated agent attribute on a
+        cadence. Not a node.</li>
+      <li class="c"><b>Export</b> — edge list CSV + node table CSV with the computed metrics as columns
+        (§1's practitioner loop). node-link JSON next.</li>
+    </ul>
+
+    <h3>N3+ — deferred, with the reason</h3>
+    <div class="tblwrap">
+    <table>
+      <thead><tr><th style="width:290px">Deferred</th><th>Why</th></tr></thead>
+      <tbody>
+        <tr><td>Betweenness / closeness / diameter</td><td>≈21 s / ≈6 s at 10k <b>[measured]</b>; needs an
+          analysis-action concept the app does not have</td></tr>
+        <tr><td>Community detection (Louvain)</td><td>heavier than PageRank and stateful; the same home</td></tr>
+        <tr><td>Temporal edge playback</td><td>needs the shared "driver series" feature — one design serving
+          weather <i>and</i> temporal networks</td></tr>
+        <tr><td>Multigraph / parallel edges</td><td><code>formBond</code> refuses duplicates by design</td></tr>
+        <tr><td><b>CSR bond store</b> (the real fix for scale-free)</td><td>a cross-target engine change touching
+          every bond mirror — its own milestone, and only worth it at 10⁵ nodes</td></tr>
+        <tr><td>Asymmetric bonds (breaking D2)</td><td>§5 — the attribute idiom is fully expressive at a fraction
+          of the blast radius</td></tr>
+        <tr><td>GEXF / GML / Pajek / DL / DOT import</td><td>cheap once N1's mapping layer exists; on demand</td></tr>
+      </tbody>
+    </table></div>
+
+    <h3>Samples to ship with it</h3>
+    <div class="grid2">
+      <div class="mini"><h4>1 · Contagion on a real network</h4>
+        <p>SIR over an imported edge list; the infected-count indicator <i>is</i> the epidemic curve; seed by the
+          agent brush. The demo of the whole feature.</p>
+        <p class="small">Use whatever canonical edge list the author exports. This investigation deliberately does
+          <b>not</b> transcribe the karate-club edge list from memory — one wrong edge in a shipped fixture is
+          worse than no fixture.</p></div>
+      <div class="mini"><h4>2 · Adaptive voter with rewire-on-disagreement</h4>
+        <p>The model that shows the thing GenesisCA is uniquely good at: <b><code>Rewire Bond</code> as a
+          primitive</b>. Watch the graph fragment into echo chambers and the component count climb —
+          <b>on the shipped <code>componentCount</code> indicator, live.</b></p></div>
+      <div class="mini"><h4>3 · BA growth coloured by PageRank</h4>
+        <p>Generated in-app, growing one node per generation via the shipped unified spawning, with the
+          worker-computed PageRank pass colouring nodes through an Agent Output Mapping. Demonstrates N2 end
+          to end.</p></div>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <p><b>Status:</b> research / brainstorm only — no code, no decisions. Written from domain knowledge, then spot-checked online
+    in a second session: the NetworkX <code>links</code>→<code>edges</code> flip (deprecated 3.4, default changed
+    3.6) and the karate-club / ego-Facebook max degrees are <b>confirmed</b>; ca-GrQc's max degree is contested
+    (81 vs 162); the other format sketches should still be checked against current specs before becoming a
+    parser. Codebase claims were verified firsthand; measured numbers were produced by Node scratch scripts
+    against the real data shapes.</p>
+  <p>Full write-up: <a href="INVESTIGATION_SOCIAL_NETWORKS.md">INVESTIGATION_SOCIAL_NETWORKS.md</a> ·
+    Related: <a href="INVESTIGATION_GRAPH_CA.md">INVESTIGATION_GRAPH_CA.md</a> (the lattice-side graph mode,
+    and the CSR/ELLPACK analysis) ·
+    <a href="INVESTIGATION_GEOSPATIAL_IO.md">INVESTIGATION_GEOSPATIAL_IO.md</a> (the importer precedent this
+    plan copies) ·
+    <a href="IMPACT_MAP_GRAPH_REWRITING_AGENTS.md">IMPACT_MAP_GRAPH_REWRITING_AGENTS.md</a> (invariants I1–I7) ·
+    Sibling brainstorm: <a href="INVESTIGATION_NEURAL_NETWORKS.html">Neural networks &amp; Neural CA in GenesisCA</a>.</p>
+</footer>
+
+</div>
+</body>
+</html>
