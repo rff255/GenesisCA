@@ -16,8 +16,9 @@ const defaultGeoref = { xllcorner: 0, yllcorner: 0, cellSize: 1 } as const;
 /**
  * Properties › Setup — "what is this model?". The order is the order of IMPACT:
  * the layer cards come first because they decide which graphs, which node
- * catalogue and which other tabs exist at all; then the grid's geometry; then
- * the feature extensions. Every card says what it UNLOCKS — that line is the
+ * catalogue and which other tabs exist at all; then the SPACE both layers live
+ * in (dimension / size / boundary — never gated on a layer, see the section);
+ * then the feature extensions. Every card says what it UNLOCKS — that line is the
  * answer to "why can't I find node X".
  */
 export function PropertiesSetupTab({ onOpenAgentsTab }: { onOpenAgentsTab: () => void }) {
@@ -28,6 +29,12 @@ export function PropertiesSetupTab({ onOpenAgentsTab }: { onOpenAgentsTab: () =>
   const gisTools = properties.gisTools === true;
   const onlyGrid = topo.gridCells && !topo.agents;
   const onlyAgents = topo.agents && !topo.gridCells;
+  const agentsOn = topo.agents;
+  const bothLayers = topo.gridCells && topo.agents;
+  // The Space section's vocabulary follows the layers: a grid-only model has a
+  // lattice measured in cells, an agents-only model a world measured in units.
+  const spaceNoun = onlyAgents ? 'world' : bothLayers ? 'grid + agent world' : 'lattice';
+  const unitNoun = onlyAgents ? 'World units' : 'Cells';
   const variegatedOn = !is3d && !!model.variegatedCells?.enabled;
   const overseer = model.overseerConfig;
 
@@ -42,7 +49,7 @@ export function PropertiesSetupTab({ onOpenAgentsTab }: { onOpenAgentsTab: () =>
           onChange={on => updateTopologyMode({ gridCells: on })}
           disabled={onlyGrid}
           disabledReason="At least one layer must stay enabled."
-          line="The classic lattice cellular automaton — a W×H(×D) grid of cells, each running the Generation Step."
+          line="The classic lattice cellular automaton — a cell at every point of the Space below, each running the Generation Step."
           unlocks={<>the <b>Cells</b> graph · the <b>Neighborhoods</b> panel · the lattice node catalogue · the grid engine + Variegated Cells</>}
         />
         <ToggleCard
@@ -51,71 +58,96 @@ export function PropertiesSetupTab({ onOpenAgentsTab }: { onOpenAgentsTab: () =>
           onChange={on => updateTopologyMode({ agents: on })}
           disabled={onlyAgents}
           disabledReason="At least one layer must stay enabled."
-          line="Off-lattice agents in continuous space: forces, bonds, growth and division, sharing the grid as a field."
+          line="Off-lattice agents moving in continuous coordinates over the same Space: forces, bonds, growth and division, sharing the grid as a field."
           unlocks={<>the <b>Agents</b> graph (the pill above the canvas) · the <b>Agents</b> tab of this panel · Agent Attributes, Views and Sprites · the agent node catalogue</>}
         >
           <div className={styles.rowSplit}>
-            <span className={`${styles.rowLabel} ${styles.rowLabelMuted}`}>Capabilities, population, motion and bonding physics</span>
+            <span className={`${styles.rowLabel} ${styles.rowLabelMuted}`}>Capability profile (each capability with its knobs), population and motion</span>
             <LinkButton onClick={onOpenAgentsTab} title="Open the Agents tab of this panel">Open Agents tab ›</LinkButton>
           </div>
         </ToggleCard>
       </Section>
 
-      {topo.gridCells && (
-        <Section id="setup.grid" title="Grid">
-          <div className={styles.fieldGroup}>
-            <Field
-              label="Dimension"
-              title="2D = the classic flat lattice, drawn on the 2D canvas. 3D = a W×H×D voxel volume with an orbit camera + clip plane. Variegated Cells is 2D-only, so switching to 3D turns it off."
-            >
-              <Segmented
-                ariaLabel="Dimension"
-                value={is3d ? '3d' : '2d'}
-                onChange={v => {
-                  if (v === '3d') {
-                    // Variegated Cells is 2D-only — force it off when going 3D.
-                    if (model.variegatedCells?.enabled) updateVariegatedCells({ enabled: false });
-                    updateProperties({ dimension: '3d', gridDepth: properties.gridDepth ?? 1 });
-                  } else {
-                    updateProperties({ dimension: '2d' });
-                  }
-                }}
-                options={[
-                  { value: '2d', label: '2D grid', title: 'A flat W×H lattice, rendered with the 2D canvas.' },
-                  { value: '3d', label: '3D volume', title: 'A W×H×D voxel grid with a layer axis, orbit camera and clip plane. Variegated Cells is unavailable in 3D.' },
-                ]}
-              />
+      {/* SPACE — deliberately NOT gated on the Grid Cells layer. The lattice and
+          the agent world share ONE coordinate frame (the worker seeds
+          `agentStore.worldWidth/Height/Depth` from these very fields and wraps
+          or clamps agents per `boundaryTreatment`), so an agents-only model
+          needs every control here just as much: its world size, whether it is
+          3D at all (`dimension` + `gridDepth > 1`), and its edge rule. */}
+      <Section id="setup.space" title="Space">
+        <div className={styles.fieldGroup}>
+          <Field
+            label="Dimension"
+            title={`2D = a flat W×H frame drawn on the 2D canvas. 3D = a W×H×D volume (a voxel grid${agentsOn ? ', agents in 3D' : ''}) with an orbit camera + clip plane.${bothLayers ? ' Cells and agents share this one frame.' : ''} Variegated Cells is 2D-only, so switching to 3D turns it off.`}
+          >
+            <Segmented
+              ariaLabel="Dimension"
+              value={is3d ? '3d' : '2d'}
+              onChange={v => {
+                if (v === '3d') {
+                  // Variegated Cells is 2D-only — force it off when going 3D.
+                  if (model.variegatedCells?.enabled) updateVariegatedCells({ enabled: false });
+                  updateProperties({ dimension: '3d', gridDepth: properties.gridDepth ?? 1 });
+                } else {
+                  updateProperties({ dimension: '2d' });
+                }
+              }}
+              options={[
+                { value: '2d', label: '2D', title: `A flat W×H ${spaceNoun}, rendered with the 2D canvas.` },
+                { value: '3d', label: '3D volume', title: `A W×H×D ${spaceNoun} with a depth axis, orbit camera and clip plane. Variegated Cells is unavailable in 3D.` },
+              ]}
+            />
+          </Field>
+          <div className={styles.fieldRow}>
+            <Field label="Width" title={`${unitNoun} along X (columns). A change reinitialises the simulator.`}>
+              <NumberField className={styles.numberInput} value={properties.gridWidth} min={1} integer onNumber={n => updateProperties({ gridWidth: n })} />
             </Field>
-            <div className={styles.fieldRow}>
-              <Field label="Width" title="Cells per row (columns). A change reinitialises the simulator.">
-                <NumberField className={styles.numberInput} value={properties.gridWidth} min={1} integer onNumber={n => updateProperties({ gridWidth: n })} />
-              </Field>
-              <Field label="Height" title="Rows. A change reinitialises the simulator.">
-                <NumberField className={styles.numberInput} value={properties.gridHeight} min={1} integer onNumber={n => updateProperties({ gridHeight: n })} />
-              </Field>
-              {is3d && (
-                <Field label="Depth" title="Layers along the Z axis (3D only). A change reinitialises the simulator.">
-                  <NumberField className={styles.numberInput} value={properties.gridDepth ?? 1} min={1} integer onNumber={n => updateProperties({ gridDepth: n })} />
-                </Field>
-              )}
-            </div>
-            <Field
-              label="Boundary"
-              title="What a cell sees past the grid edge. Torus wraps every axis (the edge neighbours the opposite edge); Constant reads a fixed boundary value per attribute (set on each cell attribute)."
-            >
-              <Segmented
-                ariaLabel="Boundary treatment"
-                value={properties.boundaryTreatment}
-                onChange={v => updateProperties({ boundaryTreatment: v as BoundaryTreatment })}
-                options={[
-                  { value: 'torus', label: 'Torus', title: 'Wrap around on every axis — no edges. Required by the simulator’s infinity canvas.' },
-                  { value: 'constant', label: 'Constant', title: 'Cells past the edge hold a fixed boundary value (per attribute, in the Attributes panel).' },
-                ]}
-              />
+            <Field label="Height" title={`${unitNoun} along Y (rows). A change reinitialises the simulator.`}>
+              <NumberField className={styles.numberInput} value={properties.gridHeight} min={1} integer onNumber={n => updateProperties({ gridHeight: n })} />
             </Field>
+            {is3d && (
+              <Field label="Depth" title={`${unitNoun} along Z (layers). 1 = still a flat 2D frame; 2 or more makes the volume. A change reinitialises the simulator.`}>
+                <NumberField className={styles.numberInput} value={properties.gridDepth ?? 1} min={1} integer onNumber={n => updateProperties({ gridDepth: n })} />
+              </Field>
+            )}
           </div>
-        </Section>
-      )}
+          {/* `dimension: '3d'` alone is not a volume — is3dModel needs gridDepth > 1,
+              and flipping the segment keeps whatever depth the model had (1 for a
+              2D model). Say so rather than silently seeding a depth. */}
+          {is3d && (properties.gridDepth ?? 1) <= 1 && (
+            <Hint warn>Depth is 1, so this is still a flat frame — set Depth to 2 or more for a volume.</Hint>
+          )}
+          {agentsOn && (
+            <Hint>{bothLayers ? 'The agent world is this same frame, 1 world unit per cell.' : 'The agent world: agents move in continuous coordinates over this W×H' + (is3d ? '×D' : '') + ' frame.'}</Hint>
+          )}
+          <Field
+            label="Boundary"
+            title={`What happens at the edge of the frame. Torus wraps every axis${bothLayers ? ' — cells see the opposite edge and agents cross it' : topo.gridCells ? ' — the edge neighbours the opposite edge' : ' — agents cross the edge and reappear opposite'}. Constant${topo.gridCells ? ' makes cells past the edge read a fixed per-attribute boundary value (set on each cell attribute)' : ''}${bothLayers ? ' and' : ''}${agentsOn ? ' clamps agents at the edge (a walled box)' : ''}.`}
+          >
+            <Segmented
+              ariaLabel="Boundary treatment"
+              value={properties.boundaryTreatment}
+              onChange={v => updateProperties({ boundaryTreatment: v as BoundaryTreatment })}
+              options={[
+                { value: 'torus', label: 'Torus', title: `Wrap around on every axis — no edges${agentsOn ? '; agents crossing an edge reappear on the opposite side' : ''}. Required by the simulator’s infinity canvas.` },
+                {
+                  value: 'constant',
+                  label: agentsOn && !topo.gridCells ? 'Walls' : 'Constant',
+                  title: [
+                    topo.gridCells ? 'Cells past the edge hold a fixed boundary value (per attribute, in the Attributes panel).' : '',
+                    agentsOn ? 'Agents are clamped at the edge — a walled box.' : '',
+                  ].filter(Boolean).join(' '),
+                },
+              ]}
+            />
+            <Hint>
+              {properties.boundaryTreatment === 'torus'
+                ? (bothLayers ? 'Wraps on every axis — cells see the opposite edge, agents cross it.' : agentsOn ? 'Wraps on every axis — agents crossing an edge reappear opposite.' : 'Wraps on every axis — the edge neighbours the opposite edge.')
+                : (bothLayers ? 'Cells read their per-attribute boundary value past the edge; agents are clamped at the edge.' : agentsOn ? 'Agents are clamped at the edge (walls).' : 'Cells past the edge hold their per-attribute boundary value.')}
+            </Hint>
+          </Field>
+        </div>
+      </Section>
 
       <Section id="setup.extensions" title="Extensions">
         {topo.gridCells && (

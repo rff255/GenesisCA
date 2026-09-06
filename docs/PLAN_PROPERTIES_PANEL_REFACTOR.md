@@ -174,3 +174,44 @@ Debug JS + the stop-check interval (greyed with the reason off WebGPU), WASM re-
   section dominates it. Shortening that section is a separate piece of work.
 - The "before" numbers were taken on the old panel via a temporary `git stash` of the refactor,
   on the same dev server and viewport (1500×950).
+
+## Review round (2026-09-06) — what the first ship got wrong, and the fixes
+
+The refactor was reviewed against the engine with one user-supplied example ("dimensions and
+boundary type are not exclusive of CAGrid — it affects agents as well"). Every finding was
+implemented; the change is presentation-only (`check-compile-identity`: 31 models, all surfaces
+unchanged against a baseline captured before the first edit).
+
+1. **Setup › Grid was gated on the Grid Cells layer.** The worker sets `worldWidth = width`,
+   `worldHeight = height`, `worldDepth = depth` and wraps or clamps agents per
+   `boundaryTreatment` — the agent world IS the grid frame, 1:1 — so 12 shipped agents-only models
+   had no way to size their world. It is now the ungated **Space** section: agent-aware copy
+   (units read "World units" for agents-only, Boundary reads `Torus` / `Walls`), a hint naming the
+   consequence for each layer, and a warn hint when Dimension is 3D but Depth is 1 (a flat frame).
+2. **"Use bonding physics" hid LIVE settings and misdescribed itself.** Since the honest-controls
+   pass the engine reads the capability resolvers; the legacy flag only governs adhesion μ_A. Yet
+   Growing Graphs shipped with the card OFF and springs λ 0.5 running, Life on Bonds with auto-bond
+   running, Boids Hemifield with soft collision running. Now **each capability row owns its knobs**
+   in the Capability profile section — Collision → Repulsion μ + Interaction range (or Positional
+   iterations); Bonds = Physics → stiffness λ, rest length, Auto-bond + form/break distances;
+   Growth → growth rate; Sensing → Neighbour query radius; Charge → its knobs — revealed only while
+   the capability is on. **Adhesion** is a checkbox beside Collision that says it is the one legacy
+   flag no capability governs, greyed unless Motion = Force. The Bonding physics section is gone.
+   The Auto-bond checkbox writes both the profile field and `cfg.autoBond` (the worker gates on
+   the latter — the old profile-only write drifted). Switching Bonds on with a 0 ceiling bumps
+   `maxBonds` to the engine default.
+3. **Inert-but-enabled rows.** `Max bonds / agent` is greyed with the reason while the Bonds
+   capability is Off (`resolveMaxBonds` returns 0 whatever it says; Boids ships 2 / off) and a warn
+   hint fires when Bonds is on but the ceiling is 0. The Motion section greys momentum / Δt / drag
+   under Velocity and everything under Static (Ant Necrophoresis), with the reason; the Δt clamp
+   readout only renders under Force; Layout iterations is greyed off Force.
+4. **Stale text.** The Motion hint ("the engine always integrates velocity") predated the C9
+   integrators; the Help still said "Tick Use bonding physics"; five location strings named the
+   old layout (`macroImportPlan` inert warnings, the `compile.ts` cross-agent-write error, two
+   worker overflow toasts, an Info-panel comment); the `propertiesWidgets` comment claimed collapse
+   state carried over from the old panel (the section ids changed — it does not).
+5. **"Reset restores the saved board"** moved out of Reproducibility into its own **Reset**
+   section (it is about the simulator's Reset action), still shown only with a saved board.
+
+New primitive: `SubBlock` (`.subBlock`) — the indented knob block under the row that owns it.
+`CheckRow.label` widened to `ReactNode` so a row can carry the "(required by …)" accent suffix.

@@ -2964,7 +2964,7 @@ export function compileAgentGraph(
       if (nodeMap.get(src.nodeId)?.data.nodeType === 'createAgent') continue;
       const label = getNodeDef(node.data.nodeType)?.label ?? node.data.nodeType;
       return { behaviourCode: '', initCode: '', periodicCodes: [], divisionCode: '', stopMessages, outputMappingCodes: [], inputMappingCodes: [], dividePartitions,
-        error: `"${label}" writes another agent's state, which races that agent's own update in Synchronous agent mode. Switch to Asynchronous agent mode (Model Properties > Bond-Graph Agents), or target a Create Agent handle (spawn configuration).` };
+        error: `"${label}" writes another agent's state, which races that agent's own update in Synchronous agent mode. Switch to Asynchronous agent mode (Properties › Execution › Agent engine), or target a Create Agent handle (spawn configuration).` };
     }
   }
 

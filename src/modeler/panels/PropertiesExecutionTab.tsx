@@ -131,20 +131,28 @@ export function PropertiesExecutionTab() {
             <Hint>{REPRODUCIBILITY_SUMMARY[contract]}</Hint>
           </Field>
           {violation && <Callout kind="warn">⚠ {violation}</Callout>}
-          {/* What Reset does. Shown ONLY when the model actually carries an embedded
-              BOARD: with none there is nothing to restore, so the control could do
-              nothing and is hidden rather than greyed. Both actions stay on the
-              simulator's ■ button's own menu, so nothing becomes unreachable. */}
-          {hasSavedBoard && (
+        </div>
+      </Section>
+
+      {/* What Reset does. Its OWN section — it is about the simulator's Reset
+          action, not about reproducibility (where it used to sit). Shown ONLY
+          when the model actually carries an embedded BOARD: with none there is
+          nothing to restore, so the control could do nothing and is hidden
+          rather than greyed. Both actions stay on the simulator's ■ button's own
+          menu, so nothing becomes unreachable. */}
+      {hasSavedBoard && (
+        <Section id="exec.reset" title="Reset">
+          <div className={styles.fieldGroup}>
             <CheckRow
               checked={properties.resetRestoresBoard === true}
               onChange={v => updateProperties({ resetRestoresBoard: v })}
               label="Reset restores the saved board"
               title="This model carries a saved board. On: Reset reseeds from the rules and then applies that board on top — for a board that is DATA (imported map layers, a hand-painted start) no Init Event can regenerate. Off: Reset reseeds only. The simulator's ■ button offers both actions on hover / right-click either way."
             />
-          )}
-        </div>
-      </Section>
+            <Hint>{properties.resetRestoresBoard ? 'Reset reseeds, then restores the saved board on top.' : 'Reset reseeds from the rules only; the saved board is left to the ■ button’s menu.'}</Hint>
+          </div>
+        </Section>
+      )}
 
       {topo.gridCells && (
         <Section id="exec.grid" title="Grid engine">

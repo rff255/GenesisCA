@@ -23,7 +23,7 @@ export const PROPERTIES_TAB_LABEL: Record<PropertiesTab, string> = {
 export const PROPERTIES_TAB_TITLE: Record<PropertiesTab, string> = {
   setup: 'What this model is — its layers, grid and extensions. The switches here decide which graphs, panels and nodes exist.',
   execution: 'How it runs — reproducibility, engines, update modes and performance options.',
-  agents: 'How agents behave — capability profile, population, motion and bonding physics.',
+  agents: 'How agents behave — the capability profile (each capability with its own knobs), population and motion.',
   diagnostics: 'What will actually run — read-only readouts computed from the same checks the compilers enforce.',
 };
 
@@ -62,8 +62,10 @@ export function SubTabs({ value, tabs, onChange }: {
 // --- Collapsible section -----------------------------------------------------
 // Collapsed bodies stay MOUNTED (display: none) — a controlled master-detail
 // child (the Indicators list) keeps its selection/effects. The collapsed set
-// persists in localStorage, keyed by stable section ids (the SAME key the
-// pre-refactor panel used, so a user's collapse choices carry over).
+// persists in localStorage under the pre-refactor panel's storage key. NB the
+// section IDS changed with the sub-tab refactor (`setup.space`, `exec.grid`, …),
+// so a collapse choice made in the old panel does NOT carry over — only the key
+// is shared, which leaves the old entries harmlessly inert.
 const COLLAPSE_LS_KEY = 'genesisca_properties_collapsed';
 function readCollapsedSet(): Set<string> {
   try {
@@ -225,6 +227,13 @@ export function FieldRow({ label, title, children, muted }: {
   );
 }
 
+/** An indented block of knobs revealed under the row that owns them (a
+ *  capability's tuning parameters). The doctrine: a knob is shown exactly where
+ *  the control that makes it live sits, never behind a separate toggle. */
+export function SubBlock({ children }: { children: ReactNode }) {
+  return <div className={styles.subBlock}>{children}</div>;
+}
+
 /** The one muted line under a control. */
 export function Hint({ children, warn }: { children: ReactNode; warn?: boolean }) {
   return <div className={`${styles.oneLine} ${warn ? styles.oneLineWarn : ''}`}>{children}</div>;
@@ -237,7 +246,7 @@ export function SubLabel({ children, right }: { children: ReactNode; right?: Rea
 
 /** A checkbox row — label + one tooltip, no paragraph. */
 export function CheckRow({ checked, onChange, label, title, disabled }: {
-  checked: boolean; onChange: (v: boolean) => void; label: string; title?: string; disabled?: boolean;
+  checked: boolean; onChange: (v: boolean) => void; label: ReactNode; title?: string; disabled?: boolean;
 }) {
   return (
     <label className={styles.checkboxRow} title={title} style={disabled ? { opacity: 0.5, cursor: 'not-allowed' } : undefined}>

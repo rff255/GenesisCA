@@ -257,18 +257,18 @@ function inertWarningFor(model: CAModel, space: ElementSpace): string | undefine
     case 'bondAttributes':
       return resolveMaxBonds(model.centerBased) > 0
         ? undefined
-        : 'inert until Properties → Bond-Graph Agents → Bonds is enabled';
+        : 'inert until the Bonds capability is on (Properties › Agents › Capability profile)';
     case 'agentAttributes':
     case 'agentMappings':
     case 'agentVariables':
       return model.topologyMode?.agents
         ? undefined
-        : 'inert until Properties → Bond-Graph Agents is enabled';
+        : 'inert until the Bond-Graph Agents layer is on (Properties › Setup › Layers)';
     case 'facePalettes':
     case 'facePatterns':
       return model.variegatedCells?.enabled
         ? undefined
-        : 'inert until Properties → Variegated Cells is enabled';
+        : 'inert until Variegated Cells is on (Properties › Setup › Extensions)';
     default:
       return undefined;
   }
