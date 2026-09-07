@@ -268,3 +268,18 @@
   min-width: 0;
   min-height: 0;
 }
+
+/* FOCUS RING — which pane owns the keyboard (Phase 4). A 1 px accent inset,
+   drawn by a pseudo-element rather than an `outline` / `border` so it costs no
+   layout (a border would resize both canvases on every focus change) and lands
+   ABOVE the pane's content — the canvas stack and React Flow both paint over
+   the pane's own background. `pointer-events: none` is load-bearing: the ring
+   covers the whole pane, so without it nothing underneath would be clickable. */
+.livePaneFocused::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  box-shadow: inset 0 0 0 1px var(--color-accent);
+  z-index: 60;
+}

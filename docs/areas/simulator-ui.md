@@ -22,6 +22,7 @@
 - Panel resize responsiveness: the canvas re-sizes DURING the drag (2026-08-05)
 - LIVE mode — the simulator inside the split workspace (Phase 2, 2026-09-07)
 - LIVE mode — the edit→rule PIPELINE (Phase 3, 2026-09-07)
+- LIVE mode — INPUT OWNERSHIP and the perf guards (Phase 4, 2026-09-07)
 
 ---
 
@@ -679,5 +680,200 @@ edit collapsed it to **359 ms**, i.e. the release re-arms the short debounce.
 **0 console errors throughout** (`window.onerror` + `unhandledrejection` + a `console.error` hook
 installed before every reproduction). `tsc`, `npm run build`, `check-compile-identity --compare`
 (**31 models, all surfaces unchanged**) and `parity-agent-wasm.mjs` all green.
+
+---
+
+## LIVE mode — INPUT OWNERSHIP and the perf guards (Phase 4, 2026-09-07)
+
+Phase 2 put the two workspaces side by side and Phase 3 made editing while it runs safe. Phase 4 answers
+the remaining question — **which surface does a keystroke act on** — and fixes **two pre-existing defects
+that had nothing to do with Live** but that Live made unmissable. Plus the two perf guards.
+**No compiler / emit diff, no worker diff:** `check-compile-identity` **31 models, all surfaces unchanged**.
+
+### ⚠⚠ THE PRE-EXISTING BUG: the main keyboard handler was NEVER VISIBILITY-GATED
+
+`SimulatorView` is **always mounted** (behind `display: none` on every other tab), so its
+`Space · Enter · Esc · Backspace · Ctrl+C/V/X · 3D digits` handler ran **in the Modeler too**.
+Measured on the pre-fix build, on the Modeler tab with Game of Life loaded:
+
+| Key (in the MODELER) | Before | After |
+|---|---|---|
+| `Enter` | one `step` batch posted, **gen 250 → 251** | **0 posts**, gen unchanged |
+| `Esc` | a `reset` posted, **gen → 0** | **0 posts**, gen unchanged |
+| `Backspace` | same reset arm | 0 posts |
+| `Space` | (safe only because `ModelerView` calls `stopImmediatePropagation`) | 0 posts |
+
+The gate is three questions, in order — `visibleRef` (is this view on screen at all), then the Live focus
+owner, then the one global-in-Live exception:
+
+```ts
+if (isTypingTarget()) return;              // INPUT / TEXTAREA / contentEditable
+if (captureReviewRef.current) return;
+if (overlayOwnsKeyboard()) return;         // any modal or open menu
+if (inLive && Enter && (ctrl||meta)) return;          // that is Live's "apply now"
+const globalLiveKey = inLive && e.key === 'Enter' && !e.altKey;
+if (tag === 'SELECT' && !globalLiveKey) return;
+if (!visibleRef.current && !globalLiveKey) return;
+if (inLive && !globalLiveKey && getLiveFocus() !== 'viewport') return;
+```
+
+⚠ `!visibleRef.current` is deliberately waived for the global key: with the Live viewport COLLAPSED
+`visible` is false but `live` is true, and `Enter` must still stop the run the user is working against.
+Verified — collapsed, the run keeps going (gen 540 → 567) and `Enter` pauses and resumes it while `Space`
+posts nothing.
+
+### The focus owner — `liveFocus`, and why it is not DOM focus
+
+[src/live/liveState.ts](src/live/liveState.ts) carries `liveFocus: 'graph' | 'viewport'` (module global +
+pub/sub, the `activeGraphKind` shape). `App` sets it from **`pointerdown` (capture) OR `pointerenter`** on
+each pane wrapper — **hover is enough to type**, which is what makes "point at the graph, hit Space" work
+without a click that would also deselect or paint something. It is NOT DOM focus: both panes are working
+surfaces whose real focus is usually the `<body>` (clicking a canvas focuses nothing), so DOM focus cannot
+answer the question. Session-transient; defaults to `graph`.
+
+The ring is `App.module.css`'s `.livePaneFocused::after` — a 1 px accent **inset box-shadow on a
+pseudo-element**, not a border or an `outline`: a border would re-size both canvases on every focus change,
+and the pane's own background is painted over by the canvas stack, so the ring has to sit on top
+(`z-index: 60`, `pointer-events: none` — it covers the whole pane, so without that nothing under it would
+be clickable).
+
+### The per-key table (Live)
+
+| Key | Owner | Notes |
+|---|---|---|
+| `Enter` | **GLOBAL** — play / pause from either pane | the one deliberate exception, and the reason Live exists: you must be able to stop the run without leaving the graph. Stands down for INPUT / TEXTAREA / contentEditable, any `[role=dialog]` / `[role=menu]`, and the capture-review modal — **but NOT for `<select>`** (see below) |
+| `Ctrl+Enter` | apply now (Phase 3) | never reaches the `Enter` arm |
+| `Space` | focused surface | graph → quick-add menu; viewport → one step. `ModelerView`'s capture-phase arm stands down (before its `stopImmediatePropagation`) when the viewport has focus |
+| `Esc` / `Backspace` | **never reset in Live** | Esc is the graph's dismiss key and the graph is half the workspace; a stray Esc wiping the run you are editing against is the accident this mode must not have. The staged-line-anchor arm is kept (a viewport action, and safe). Reset stays the ■ button |
+| `Ctrl+C / V / X` | focused surface | the resolved double binding — see below |
+| `Ctrl+Z / Y / D` | the graph, from either pane | the run is not undoable, so there is nothing to arbitrate |
+| digits / numpad `1-9` | viewport only | 3D view angles. **Measured on Life3D: 0 GL draw calls with the graph focused, 4 per key with the viewport focused** |
+| `F` | **both** panel sets | see the shared intent below |
+| `?` | unchanged | App-level |
+
+⚠ **`<select>` is deliberately NOT in `Enter`'s stand-down set.** A `<select>` KEEPS FOCUS after the user
+picks an option, and picking an option in a node is the commonest edit in Live — the same finding Phase 3
+recorded for `Ctrl+Enter`. `Enter` has no native meaning in a closed dropdown (and while its popup is open
+the browser does not dispatch the key to the page at all), so nothing is stolen. Everything else still
+stands down there.
+
+### ⚠ `Ctrl+C/V/X` WAS BOUND TWICE — same phase, same target
+
+[GraphEditor.tsx](src/modeler/vpl/GraphEditor.tsx) and `SimulatorView` both bind them bubble-phase on
+`document`, neither stopping propagation. In Live a `Ctrl+V` meant for the node graph **also pasted a cell
+region into the running grid**. Now each consults `getLiveFocus()` (and the simulator's arm is
+`visibleRef`-gated, which alone removes the Modeler-side misfire — including the invisible 3D
+`showAgentNotice` toast). **Verified:** graph focus → a node pasted, **0** `writeRegion`/`pasteAgents`;
+viewport focus over the board → **1** `readRegion` + **1** `writeRegion`, **0** nodes added.
+
+### `overlayOwnsKeyboard()` — a modal or an open menu owns the keyboard
+
+[src/live/liveKeyboard.ts](src/live/liveKeyboard.ts) is the shared predicate:
+`document.querySelector('[role="dialog"], [role="menu"]') != null`.
+
+- **Detected from the DOM, not from focus**, because the quick-add menu focuses its search input on a
+  50 ms timer (its first frame is `visibility: hidden` for viewport clamping) — and that is exactly the
+  window in which someone who opened it with `Space` presses `Enter`.
+- **Detected from the DOM, not from a registry**, because every one of these surfaces already renders only
+  while open. The nine modal components in `src/components` therefore gained `role="dialog"`
+  (correct ARIA anyway) and `GraphEditor`'s context menu gained `role="menu"`.
+  ⚠ **A new modal MUST carry `role="dialog"`** or its `Enter` will also reach the transport: before this,
+  `Enter` on a `ConfirmDialog` confirmed the dialog **and** toggled play (the dialog's own listener is on
+  `window`, which bubbles after `document`).
+
+### `F` — one press, both workspaces, via a SHARED INTENT
+
+Both views already listened for `genesis-toggle-canvas-fullscreen`, so "dispatch it once" looked free.
+It is not: **independent per-view toggles are permanently out of phase in Live**, because the Live panel
+policy enters with the graph's panels closed and the simulator's bars open — one press would OPEN one
+while CLOSING the other. So in Live the event carries `detail.collapse`, flipped by
+`dispatchCanvasFullscreen()` in `liveState.ts`, and both consumers obey it; outside Live the event is bare
+and each view keeps its historical toggle. The `F` key, the graph's ⛶ and the viewport's ⛶ all go through
+that one dispatcher, so they can never mean different things. The two DIRECT key handlers stand down in
+Live (`SimulatorView`'s returns immediately) or the view would toggle twice per press and look inert.
+
+⚠ **Never overwrite an existing collapse snapshot with an all-closed one.** An explicit `collapse: true`
+can arrive with everything already closed (the other workspace is the one with panels open); snapshotting
+there makes the matching restore a permanent no-op. Both views now snapshot only when something is open,
+or when there is no snapshot yet. **Verified:** with a modeler panel open and the sim bars open,
+press 1 → graph area 444 → 764 px and the transport drops to its bare ear; press 2 → both exactly back.
+
+### Perf guard 1 — FPS 30 as the LIVE DEFAULT (never a clamp)
+
+On Live entry, if the cap is above 30 (`targetFpsRef` folds `unlimitedFps` in as 999999) the previous
+value is snapshotted and 30 applied; leaving Live restores it. The popover stays fully live — an enabled
+control that is internally overridden is what the doctrine forbids — so **if the user moves the FPS control
+while in Live that is their value**: it is not undone on the way out and Live never auto-lowers again this
+session.
+
+⚠ **The "did the user override it" test needs a SETTLE step, and this is silent when missed.** The
+override effect's deps include `live`, so it also runs in the very commit where the entry effect
+*scheduled* the drop to 30 — where the committed state is still the user's previous value. Latching there
+marks every entry as an override and **the default then never applies at all**; the only symptom is the
+FPS chip keeping its old number. So the flag arms only once the applied default has actually been SEEN in
+committed state. **Verified:** 61 → Live shows 30 → back on the Simulator tab 61; raise it to 45 inside
+Live → 45 on exit, and 45 again on re-entry.
+
+### Perf guard 2 — skip the BLIT, never the step, during a node drag
+
+`GraphEditor` publishes React Flow's own `dragging` flag through `liveState.setLiveGraphDragging`;
+`SimulatorView` reads it through a **subscription into a ref** (not `useSyncExternalStore` — this component
+must not re-render twice per gesture) and gates the per-`stepped` `draw()` **and its direct-render rAF
+follow-up**. `sendNextStep()`, the `setGeneration` throttle and the whole recording block are untouched,
+and the **falling edge draws once immediately** so the board is never left stale.
+
+- ⚠ Deliberately NOT routed through the unlimited-gens fast path: that one also skips the colour pass and
+  carries its own voxel-free-mode carve-out.
+- ⚠ The editor is unmounted on every non-Modeler/non-Live tab and React Flow emits no `dragging: false`
+  for a gesture that ends that way, so `GraphEditor` clears the flag from an unmount cleanup.
+- **Measured, playing, 1.5 s windows** — Game of Life (2D, WebGPU): normal **79 blits / 39 steps**;
+  dragging **0 blits / 40 steps, gen +42**; release **5 blits within 60 ms**. Particle Life (2D agents,
+  GPU-resident direct render): **80 / 0 / 5**, and **0 `attachAgentCanvas`** during the drag.
+
+### Overseer ↔ Live — hide one way, grey the other
+
+`handleRunExperiment` early-returns in Live, the **Experiments tab strip is HIDDEN** there and
+`rightPanelTab` is coerced to `'controls'` (a hidden control needs its STATE handled, not just its markup);
+the Controls arm also renders on `live` so the panel is never blank for the one frame before the coercion
+lands. In the other direction the **Live nav button is GREYED with the reason** while an experiment runs —
+`overseerRunning` is published through `liveState` **in the same statement block as the React state**
+(the mirror-invariant discipline) and cleared on unmount. Doctrine: from the Experiments panel the working
+state is reachable (Abort is right there) ⇒ grey; from inside Live it is not ⇒ hide. Rationale and the
+abort-on-any-model-change mechanism: [`overseer.md`](overseer.md).
+
+### A shortcut named in a tooltip has to STAY TRUE
+
+`Esc` no longer resets in Live, and `Space` follows the focus owner, so the transport titles are
+Live-aware: **Reset (Esc)** → *Reset*, **Step (Space)** → *Step (Space — with the viewport focused)*.
+A control that names a key it no longer answers to is worse than one that names none.
+
+### Verified (real app, real worker, real GPU) — Phase 4
+
+**The pre-existing fix, A/B on the same build tree** (the Phase-3 file stashed, reproduced, restored) —
+the table at the top of this section. **Game of Life (2D, WebGPU) in Live:** graph focus → `Space` opens
+quick-add and posts **0** steps, `Esc` closes it with **0** resets and the counter climbing 259 → 306;
+viewport focus → `Space` posts **exactly 1** step, `Esc` and `Backspace` post **0** resets; `Enter` toggles
+play from **both** panes; `Enter` inside the quick-add search input adds the node and **does not** toggle
+play; `Enter` with a node's `<select>` focused **does** toggle play; `Ctrl+Z` undoes a graph edit from
+**either** focus; clipboard routing both ways (above); `F` collapsing and restoring both panel sets
+(measured widths above); the focus ring following **real** hover left/right. **Life3D (3D voxel):** the
+numpad digits (0 vs 4 GL draws by focus) and a real orbit drag in the Live pane (8 GL draws, view changed).
+**Particle Life:** the skip-blit numbers above. **GoL Replicate Statistics:** Run → the Live button
+disabled with the reason; Abort → enabled; in Live no tab strip and no Run Experiment button.
+**Simulator tab unchanged:** `Esc` still resets (1 `reset`, gen → 0), `Space` still steps.
+**0 console errors throughout** (`window.onerror` + `unhandledrejection` + a `console.error` hook installed
+before every reproduction). `tsc -p tsconfig.app.json --noEmit`, `npm run build`,
+`check-compile-identity --compare` (**31 models, all surfaces unchanged**), `parity-agent-wasm.mjs` and
+`verify-agent-render.mjs` all green.
+
+**NB for future verification here:** (1) a React Flow node drag still cannot be driven synthetically, so
+the skip-blit guard is verified through the DEV hook `window.__setLiveGraphDragging` (guarded by
+`import.meta.env.DEV` in `liveState.ts`) which drives the exact flag the real gesture publishes;
+(2) **a module-level flag read across an HMR update can be stale** — the first skip-blit run measured no
+effect until a full reload, because the hot-replaced `liveState` module was not the instance
+`SimulatorView` held; reload before measuring anything that crosses a module global;
+(3) synthetic `pointerover` does NOT reproduce React's `onPointerEnter` synthesis — use the browser's real
+hover for focus-follows-hover; (4) a `keydown` dispatched on `document` never reaches React's own
+root-delegated handlers — dispatch on `document.activeElement` instead.
 
 ---

@@ -20,6 +20,8 @@ import type { NodeExplorerHandle } from './vpl/NodeExplorer';
 import { quickAddApi, subscribeActiveGraphKind, getActiveGraphKind } from './vpl/graphState';
 import type { QuickAddPayload } from './vpl/graphState';
 import { modelerUiState } from './modelerUiState';
+import { getLiveFocus, dispatchCanvasFullscreen } from '../live/liveState';
+import { overlayOwnsKeyboard } from '../live/liveKeyboard';
 import { IndicatorsPanelContent } from './panels/IndicatorsPanelContent';
 import { OPEN_MODELER_PANEL_EVENT, type OpenModelerPanelDetail } from './panels/propertiesWidgets';
 import styles from './ModelerView.module.css';
@@ -260,10 +262,24 @@ export function ModelerView({ live = false }: { live?: boolean } = {}) {
   // navbar fullscreen button (via the `genesis-toggle-canvas-fullscreen` event)
   // so both do the same in-app maximize (not a browser-only F11). Restores the
   // exact previous layout (including null entries) when toggling back out.
-  const toggleCanvasFullscreen = useCallback(() => {
+  //
+  // ⚠ `collapse` (LIVE): in Live the event carries an explicit intent so ONE
+  // press acts the same way on BOTH panel sets. Toggling each view
+  // independently would be permanently out of phase there — the Live policy
+  // enters with the graph's panels already closed and the simulator's bars
+  // open, so an independent toggle would OPEN one while CLOSING the other.
+  // Omitted (undefined) everywhere else, which is the historical toggle.
+  const applyCanvasFullscreen = useCallback((collapse?: boolean) => {
     const anyOpen = activePanel != null || activeRightPanel != null;
-    if (anyOpen) {
-      prePanelStateRef.current = { left: activePanel, right: activeRightPanel };
+    if (collapse ?? anyOpen) {
+      // Snapshot when there is something to remember — and ALSO the first time
+      // an explicit `collapse: true` arrives with nothing open (Live's shared
+      // intent), so the matching restore leaves the panels closed instead of
+      // falling back to `lastLeftPanel`. ⚠ Never overwrite an existing snapshot
+      // with an all-closed one, or the restore becomes a permanent no-op.
+      if (anyOpen || !prePanelStateRef.current) {
+        prePanelStateRef.current = { left: activePanel, right: activeRightPanel };
+      }
       setActivePanel(null);
       setActiveRightPanel(null);
     } else {
@@ -272,12 +288,16 @@ export function ModelerView({ live = false }: { live?: boolean } = {}) {
       setActiveRightPanel(prev ? prev.right : null);
     }
   }, [activePanel, activeRightPanel, lastLeftPanel]);
+  const toggleCanvasFullscreen = useCallback(() => applyCanvasFullscreen(), [applyCanvasFullscreen]);
 
   useEffect(() => {
-    const onEvt = () => toggleCanvasFullscreen();
+    const onEvt = (e: Event) => {
+      const d = (e as CustomEvent<{ collapse?: boolean }>).detail;
+      applyCanvasFullscreen(typeof d?.collapse === 'boolean' ? d.collapse : undefined);
+    };
     window.addEventListener('genesis-toggle-canvas-fullscreen', onEvt);
     return () => window.removeEventListener('genesis-toggle-canvas-fullscreen', onEvt);
-  }, [toggleCanvasFullscreen]);
+  }, [applyCanvasFullscreen]);
 
   // Open a named left panel from anywhere (the palette's hidden-nodes notice,
   // the Setup tab's "Open panel" links). For Properties an optional sub-tab is
@@ -299,12 +319,22 @@ export function ModelerView({ live = false }: { live?: boolean } = {}) {
   // so the Space toggle preempts the always-mounted SimulatorView's
   // space-to-step listener (which is in the bubble phase) when the modeler
   // tab is active.
+  //
+  // LIVE (Phase 4) — this handler owns the GRAPH pane, so two arms change:
+  // `Space` stands down when the VIEWPORT has focus (letting the simulator's
+  // step arm run), and `F` is re-routed through the shared
+  // `genesis-toggle-canvas-fullscreen` event so ONE press collapses BOTH panel
+  // sets exactly once. See `docs/areas/modeler-ui.md` § *LIVE mode*.
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       const ae = document.activeElement as HTMLElement | null;
       const tag = ae?.tagName;
       const isField = tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT'
         || (ae?.isContentEditable ?? false);
+      // A modal or an open menu owns the keyboard while it is up — including
+      // the graph's own quick-add menu, whose search input is focused on a
+      // 50 ms timer (so the field check alone does not cover it).
+      if (overlayOwnsKeyboard()) return;
 
       if ((e.ctrlKey || e.metaKey) && e.key === 'f') {
         if (isField) return;
@@ -316,10 +346,22 @@ export function ModelerView({ live = false }: { live?: boolean } = {}) {
         // F = toggle both side panels (canvas fullscreen).
         if (isField) return;
         e.preventDefault();
-        toggleCanvasFullscreen();
+        // In LIVE both workspaces have panel sets, and the user means BOTH.
+        // Dispatching the shared event (rather than calling the local toggle)
+        // is what makes one press = one toggle per view: this view's own event
+        // listener does the modeler half and `SimulatorView`'s does the
+        // simulator half. Its DIRECT F-key handler stands down in Live for the
+        // same reason — otherwise the simulator would toggle twice (event +
+        // key) and appear not to respond at all.
+        if (live) dispatchCanvasFullscreen(true);
+        else toggleCanvasFullscreen();
       } else if ((e.key === ' ' || e.code === 'Space') && !e.repeat) {
         // Skip when typing or when a button has focus (Space activates buttons).
         if (isField || tag === 'BUTTON') return;
+        // LIVE: Space follows the focused surface — quick-add on the graph,
+        // one step on the viewport. Standing down here (BEFORE the
+        // stopImmediatePropagation below) is what lets the simulator's arm run.
+        if (live && getLiveFocus() !== 'graph') return;
         e.preventDefault();
         // Block the simulator's bubble-phase space-step listener from also
         // running on this keystroke.
@@ -337,7 +379,7 @@ export function ModelerView({ live = false }: { live?: boolean } = {}) {
     };
     document.addEventListener('keydown', handler, true);
     return () => document.removeEventListener('keydown', handler, true);
-  }, [activeRightPanel, toggleCanvasFullscreen]);
+  }, [activeRightPanel, toggleCanvasFullscreen, live]);
 
   const PanelContent = activePanel ? panelComponents[activePanel] : null;
 

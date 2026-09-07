@@ -180,7 +180,7 @@ export function MacroImportDialog({ plan, model, onImport, onCancel }: Props) {
   };
 
   return (
-    <div className={shared.backdrop} onClick={onCancel}>
+    <div className={shared.backdrop} role="dialog" aria-modal="true" onClick={onCancel}>
       <div className={shared.dialog} style={{ width: 720 }} onClick={e => e.stopPropagation()}>
         <div className={shared.header}>
           <div className={shared.title}>Import Macro — “{plan.macroName}”</div>

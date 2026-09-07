@@ -17,7 +17,12 @@ import { compileGraphWebGPU } from '../modeler/vpl/compiler/webgpu/compile';
 import { createSimWorker } from './createSimWorker';
 import { setSimLayoutApi } from './simLayoutState';
 import { LiveViewportBar } from '../live/LiveViewportBar';
-import { setLiveLayoutLocked, type LiveRuleStatus } from '../live/liveState';
+import {
+  setLiveLayoutLocked, getLiveFocus, getLiveGraphDragging, subscribeLiveGraphDragging,
+  setOverseerRunning as publishOverseerRunning, dispatchCanvasFullscreen,
+  type LiveRuleStatus,
+} from '../live/liveState';
+import { overlayOwnsKeyboard } from '../live/liveKeyboard';
 import { getLiveLayout, subscribeLiveLayout } from '../live/liveUiState';
 import { buildModelDocument } from './showCode';
 import { computeDefaultModelAttrs } from '../model/modelAttrDefaults';
@@ -3575,8 +3580,21 @@ export function SimulatorView({ visible = true, activeTab = true, live = false, 
     if (overseerRunningRef.current) overseerRuntimeRef.current?.abort(reason);
   }, []);
 
+  // The cross-tree "an experiment is running" flag is a module global, so an
+  // unmount with a run still in flight would leave the Live nav button greyed
+  // for good.
+  useEffect(() => () => publishOverseerRunning(false), []);
+
   const handleRunExperiment = () => {
     if (overseerRunningRef.current || !overseerCompiled.driverCode || !workerRef.current) return;
+    // ⚠ LIVE and the Overseer are genuinely exclusive: the model effect aborts a
+    // running experiment on ANY model change, and in Live the model changes as
+    // the user types — a sweep under a rule that shifts mid-run measures
+    // nothing. The Experiments tab strip is HIDDEN in Live so this is
+    // unreachable from the UI; the guard is here because "unreachable" and
+    // "cannot happen" are different claims (the Overseer can also be started
+    // from a restored panel state or a future entry point).
+    if (liveRef.current) return;
     setPlaying(false);
     const rt = new OverseerRuntime({
       getWorker: () => workerRef.current,
@@ -3671,12 +3689,17 @@ export function SimulatorView({ visible = true, activeTab = true, live = false, 
       onFinished: () => {
         overseerRunningRef.current = false;
         setOverseerRunning(false);
+        // MIRROR INVARIANT: the cross-tree flag `App` gates the Live nav button
+        // on is assigned in the SAME statement block as the React state, so the
+        // two can never disagree.
+        publishOverseerRunning(false);
         bumpOverseerVersion();
       },
     });
     overseerRuntimeRef.current = rt;
     overseerRunningRef.current = true;
     setOverseerRunning(true);
+    publishOverseerRunning(true);
     bumpOverseerVersion();
     rt.start(overseerCompiled.driverCode);
   };
@@ -7720,7 +7743,17 @@ export function SimulatorView({ visible = true, activeTab = true, live = false, 
           setGeneration(gen);
           lastGenSetTime.current = now;
         }
-        draw();
+        // LIVE perf guard — while a node is being DRAGGED in the graph pane,
+        // skip the BLIT only. The worker keeps stepping at full cadence
+        // (`sendNextStep()` below is untouched), the generation counter keeps
+        // ticking, the recording block below still captures every frame it
+        // owes; the drag just stops competing with the compositor. The falling
+        // edge of the drag draws once immediately (see the subscription), so
+        // the board is fresh the instant the node is released.
+        // ⚠ Deliberately NOT routed through the unlimited-gens fast path above:
+        // that one also skips the colour pass and carries its own voxel
+        // free-mode carve-out.
+        if (!(liveRef.current && liveGraphDraggingRef.current)) draw();
         // Under WebGPU direct render, drawImage(srcCanvas) reads the
         // OffscreenCanvas placeholder's *last-composited* frame. The worker
         // has just dispatched the present pass and posted stepped, but the
@@ -7732,7 +7765,8 @@ export function SimulatorView({ visible = true, activeTab = true, live = false, 
         // Without this, one-shot mutations under direct render leave the
         // canvas showing stale post-Play state until the next user action.
         // Cost is negligible (one extra drawImage at vsync rate).
-        if (directRenderActiveRef.current || agentDirectRenderActiveRef.current) {
+        if ((directRenderActiveRef.current || agentDirectRenderActiveRef.current)
+          && !(liveRef.current && liveGraphDraggingRef.current)) {
           requestAnimationFrame(() => draw());
         }
 
@@ -9540,6 +9574,7 @@ export function SimulatorView({ visible = true, activeTab = true, live = false, 
       const t = e.target as HTMLElement | null;
       if (t?.tagName === 'TEXTAREA' || t?.isContentEditable) return;
       if (captureReviewRef.current) return;
+      if (overlayOwnsKeyboard()) return;   // a modal / open menu owns the keyboard
       const st = ruleStateRef.current.status;
       if (st !== 'pending' && st !== 'rebuild') return;
       e.preventDefault();
@@ -13783,16 +13818,51 @@ export function SimulatorView({ visible = true, activeTab = true, live = false, 
 
   // Simulator keyboard shortcuts (Space=step, Enter=play/pause, Esc=reset,
   // Ctrl+C/V/X=copy/paste/cut cell-attribute region under the brush)
+  //
+  // ⚠⚠ THIS HANDLER WAS NOT VISIBILITY-GATED (fixed in Phase 4). `SimulatorView`
+  // is ALWAYS MOUNTED — it sits behind `display: none` on every other tab — so
+  // every one of these keys fired in the MODELER too: `Esc` RESET the running
+  // simulation, `Enter` advanced it by one batch, and on a 3D model `Ctrl+C`
+  // raised an invisible toast. Live did not create that; it made it
+  // unmissable. The gate is now three questions, in order:
+  //
+  //   1. is this view on screen at all?            → `visibleRef`
+  //   2. in Live, is the VIEWPORT the focused pane? → `getLiveFocus()`
+  //   3. …unless the key is GLOBAL in Live         → `Enter` = play/pause, the
+  //      one deliberate exception, and the reason Live exists: you must be able
+  //      to stop the run without leaving the graph.
+  //
+  // The per-key table lives in `docs/areas/simulator-ui.md` § *LIVE mode —
+  // INPUT OWNERSHIP*.
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
-      const tag = (document.activeElement as HTMLElement)?.tagName;
-      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+      const ae = document.activeElement as HTMLElement | null;
+      const tag = ae?.tagName;
+      // `isContentEditable` was missing here while the modeler's twin had it.
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || (ae?.isContentEditable ?? false)) return;
       // The capture review modal owns the keyboard while it is up: Space/Enter
       // must not step or play behind it, and its own capture-phase Escape must
       // not also reach the Esc = Reset arm below. (The dialog's handler already
       // stops that propagation; this is the belt to its braces, and it also
       // covers Space/Enter/Ctrl+C, which it does not intercept.)
       if (captureReviewRef.current) return;
+      // …and so does any OTHER modal or open menu. Their own handlers sit on
+      // `window`, which bubbles AFTER `document`, so without this an `Enter` on
+      // a ConfirmDialog confirmed the dialog AND toggled play.
+      if (overlayOwnsKeyboard()) return;
+      const inLive = liveRef.current;
+      // Ctrl/Meta+Enter is Live's "apply now" (Phase 3), never play/pause.
+      if (inLive && e.key === 'Enter' && (e.ctrlKey || e.metaKey)) return;
+      // The ONE key that ignores the focus owner in Live.
+      const globalLiveKey = inLive && e.key === 'Enter' && !e.altKey;
+      // A `<select>` KEEPS FOCUS after the user picks an option, and picking an
+      // option in a node is the commonest edit in Live — so the global
+      // play/pause still runs there (Enter has no native meaning in a closed
+      // dropdown; while its popup is open the browser does not dispatch the key
+      // to the page at all). Everything else keeps standing down, as before.
+      if (tag === 'SELECT' && !globalLiveKey) return;
+      if (!visibleRef.current && !globalLiveKey) return;
+      if (inLive && !globalLiveKey && getLiveFocus() !== 'viewport') return;
       if ((e.ctrlKey || e.metaKey) && (e.key === 'c' || e.key === 'v' || e.key === 'x')) {
         // 3D: the region clipboard is ANCHORED ON THE BRUSH PLANE cursor (the
         // 2D `cursorGrid` is an inert fit-mapping in 3D and would corrupt cells
@@ -14017,7 +14087,17 @@ export function SimulatorView({ visible = true, activeTab = true, live = false, 
         line3dAnchorRef.current = null;
         draw();
       }
-      else if (e.key === 'Escape' || e.key === 'Backspace') { e.preventDefault(); handleReset(); }
+      // ⚠ In LIVE neither key resets. Esc is the graph's dismiss key (menus,
+      // popovers, an armed pick) and the graph is half the workspace, so a
+      // stray Esc wiping a run the user is editing against is exactly the
+      // accident this mode must not have. Backspace shares the arm and is easy
+      // to miss — it must be included or Esc gets fixed and Backspace keeps
+      // resetting the board. Reset stays the ■ button, which is on screen.
+      else if (e.key === 'Escape' || e.key === 'Backspace') {
+        if (inLive) return;
+        e.preventDefault();
+        handleReset();
+      }
     };
     document.addEventListener('keydown', handler);
     return () => document.removeEventListener('keydown', handler);
@@ -15274,7 +15354,11 @@ export function SimulatorView({ visible = true, activeTab = true, live = false, 
   const [rightPanelTab, setRightPanelTab] = useState<'controls' | 'experiments'>('controls');
   // If the Overseer feature is turned off, fall back to the controls tab so a
   // stale 'experiments' selection can't strand the panel on a hidden view.
-  useEffect(() => { if (!overseerEnabled) setRightPanelTab('controls'); }, [overseerEnabled]);
+  // ⚠ Same in LIVE, where the tab strip is HIDDEN (an experiment structurally
+  // cannot run there — see `handleRunExperiment`), so a selection made on the
+  // Simulator tab would otherwise strand the Live panel on an empty view. A
+  // hidden control needs its STATE handled, not just its markup.
+  useEffect(() => { if (!overseerEnabled || live) setRightPanelTab('controls'); }, [overseerEnabled, live]);
   const [topBarOpen, setTopBarOpen] = useState(true);
   const [bottomBarOpen, setBottomBarOpen] = useState(true);
 
@@ -15310,6 +15394,71 @@ export function SimulatorView({ visible = true, activeTab = true, live = false, 
       setBottomBarOpen(p.bottom);
     }
   }, [live]);
+
+  // --- LIVE perf guard: 30 fps as the DEFAULT (never a clamp) --------------
+  // In Live a React Flow canvas re-renders beside the simulation, and a 60 /
+  // unlimited cap spends every spare millisecond on frames nobody is watching
+  // while the user is editing. So Live LOWERS THE DEFAULT on entry and restores
+  // the previous value on exit.
+  //
+  // ⚠ It is a default, not a clamp: the FPS popover stays fully live in Live —
+  // an enabled control that is internally overridden is exactly what the UI
+  // doctrine forbids. Two consequences fall out of that:
+  //   • if the user moves the FPS control while in Live, that is THEIR value:
+  //     it is not undone on the way out, and Live never auto-lowers again this
+  //     session (fighting the user once is a default; fighting them every entry
+  //     is a clamp with extra steps);
+  //   • a cap already at or below 30 is left alone entirely.
+  const LIVE_DEFAULT_FPS = 30;
+  const targetFpsStateRef = useRef(targetFps); targetFpsStateRef.current = targetFps;
+  const preLiveFpsRef = useRef<{ fps: number; unlimited: boolean } | null>(null);
+  const liveFpsUserOverrideRef = useRef(false);
+  /** The applied default has been OBSERVED in committed state — see below. */
+  const liveFpsSettledRef = useRef(false);
+  useEffect(() => {
+    if (live) {
+      if (preLiveFpsRef.current || liveFpsUserOverrideRef.current) return;
+      // `targetFpsRef` already folds `unlimitedFps` in as 999999.
+      if (targetFpsRef.current <= LIVE_DEFAULT_FPS) return;
+      preLiveFpsRef.current = { fps: targetFpsStateRef.current, unlimited: unlimitedFpsRef.current };
+      liveFpsSettledRef.current = false;
+      setUnlimitedFps(false);
+      setTargetFps(LIVE_DEFAULT_FPS);
+    } else if (preLiveFpsRef.current) {
+      const p = preLiveFpsRef.current;
+      preLiveFpsRef.current = null;
+      liveFpsSettledRef.current = false;
+      if (!liveFpsUserOverrideRef.current) { setUnlimitedFps(p.unlimited); setTargetFps(p.fps); }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [live]);
+  // The user touched the FPS control while Live held the default → from here on
+  // it is their setting, in Live and on the way out.
+  //
+  // ⚠ THE SETTLE STEP IS NOT OPTIONAL. This effect's deps include `live`, so it
+  // ALSO runs in the very commit where the effect above scheduled the drop to
+  // 30 — and in that commit the committed state is still the user's PREVIOUS
+  // value. Latching there would mark every Live entry as a user override and
+  // the default would never apply at all (observed, and it is silent: the FPS
+  // chip simply keeps the old number). So the flag arms only once the applied
+  // default has actually been SEEN in committed state.
+  useEffect(() => {
+    if (!live || !preLiveFpsRef.current) return;
+    const isOurs = !unlimitedFps && targetFps === LIVE_DEFAULT_FPS;
+    if (!liveFpsSettledRef.current) { if (isOurs) liveFpsSettledRef.current = true; return; }
+    if (!isOurs) liveFpsUserOverrideRef.current = true;
+  }, [live, targetFps, unlimitedFps]);
+
+  // --- LIVE perf guard: skip the BLIT (never the step) during a node drag ----
+  // `GraphEditor` publishes the drag; the step loop reads this ref instead of
+  // re-rendering this 18 kloc component twice per gesture. The falling edge
+  // draws ONCE immediately, so releasing a node never leaves a stale board.
+  const liveGraphDraggingRef = useRef(false);
+  useEffect(() => subscribeLiveGraphDragging(() => {
+    const dragging = getLiveGraphDragging();
+    liveGraphDraggingRef.current = dragging;
+    if (!dragging && liveRef.current && visibleRef.current) drawRef.current();
+  }), []);
 
   // Publish the capture lock for the Live layout controls (splitter + menu).
   // A 'view'-scope recording pins its output frame size on the first captured
@@ -15406,10 +15555,25 @@ export function SimulatorView({ visible = true, activeTab = true, live = false, 
   // on visibility (SimulatorView is always-mounted) and no-active-text-field.
   const visibleRef = useRef(visible);
   useEffect(() => { visibleRef.current = visible; }, [visible]);
-  const toggleCanvasFullscreen = useCallback(() => {
+  //
+  // ⚠ `collapse` (LIVE): in Live the `F` key must act the SAME WAY on both
+  // workspaces, and an independent per-view toggle cannot do that — the Live
+  // panel policy enters with this view's side panels closed but its bars open
+  // and the graph's panels closed, so the two would be permanently out of
+  // phase. So in Live the event carries the shared intent and this obeys it;
+  // everywhere else the argument is omitted and the behaviour is the historical
+  // toggle.
+  const applyCanvasFullscreen = useCallback((collapse?: boolean) => {
     const anyOpen = leftPanelOpen || rightPanelOpen || topBarOpen || bottomBarOpen;
-    if (anyOpen) {
-      prePanelStateRef.current = { left: leftPanelOpen, right: rightPanelOpen, top: topBarOpen, bottom: bottomBarOpen };
+    if (collapse ?? anyOpen) {
+      // ⚠ Snapshot only when there is something to remember. An explicit
+      // `collapse: true` can arrive with everything ALREADY closed (Live's
+      // shared intent, when the other workspace is the one with panels open) —
+      // overwriting the snapshot with all-false there would make the matching
+      // restore a no-op forever.
+      if (anyOpen || !prePanelStateRef.current) {
+        prePanelStateRef.current = { left: leftPanelOpen, right: rightPanelOpen, top: topBarOpen, bottom: bottomBarOpen };
+      }
       setLeftPanelOpen(false);
       setRightPanelOpen(false);
       setTopBarOpen(false);
@@ -15422,12 +15586,20 @@ export function SimulatorView({ visible = true, activeTab = true, live = false, 
       setBottomBarOpen(prev ? prev.bottom : true);
     }
   }, [leftPanelOpen, rightPanelOpen, topBarOpen, bottomBarOpen]);
+  const toggleCanvasFullscreen = useCallback(() => applyCanvasFullscreen(), [applyCanvasFullscreen]);
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if (!visibleRef.current) return;
+      // ⚠ LIVE: `F` collapses BOTH panel sets, and `ModelerView`'s capture-phase
+      // handler owns that — it dispatches `genesis-toggle-canvas-fullscreen`,
+      // which the event listener just below already answers. Acting here too
+      // would toggle this view TWICE per press (event + key) and it would look
+      // like the key did nothing at all.
+      if (liveRef.current) return;
       if (e.key !== 'f' && e.key !== 'F') return;
       if (e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return;
       if (captureReviewRef.current) return;   // the review modal owns the keyboard
+      if (overlayOwnsKeyboard()) return;
       const ae = document.activeElement as HTMLElement | null;
       const tag = ae?.tagName;
       if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || (ae?.isContentEditable ?? false)) return;
@@ -15438,10 +15610,14 @@ export function SimulatorView({ visible = true, activeTab = true, live = false, 
     return () => window.removeEventListener('keydown', handler);
   }, [toggleCanvasFullscreen]);
   useEffect(() => {
-    const onEvt = () => { if (visibleRef.current) toggleCanvasFullscreen(); };
+    const onEvt = (e: Event) => {
+      if (!visibleRef.current) return;
+      const d = (e as CustomEvent<{ collapse?: boolean }>).detail;
+      applyCanvasFullscreen(typeof d?.collapse === 'boolean' ? d.collapse : undefined);
+    };
     window.addEventListener('genesis-toggle-canvas-fullscreen', onEvt);
     return () => window.removeEventListener('genesis-toggle-canvas-fullscreen', onEvt);
-  }, [toggleCanvasFullscreen]);
+  }, [applyCanvasFullscreen]);
 
   const modelAttrs = model.attributes.filter(a => a.isModelAttribute);
   const attrToColorMappings = model.mappings.filter(m => m.isAttributeToColor);
@@ -16669,7 +16845,12 @@ export function SimulatorView({ visible = true, activeTab = true, live = false, 
             title={playPauseLabel}
             aria-label={playPauseLabel}
           >{playing ? '▮▮' : '▶'}</button>
-          <button className={styles.transportBtn} onClick={handleStep} title="Step (Space)">&#9654;|</button>
+          {/* ⚠ The shortcut in a title has to stay TRUE. In LIVE `Space` goes
+              to the FOCUSED pane (it opens the graph's quick-add when the graph
+              has focus), and `Esc` never resets at all — a control that names a
+              key it no longer answers to is worse than one that names none. */}
+          <button className={styles.transportBtn} onClick={handleStep}
+            title={live ? 'Step (Space — with the viewport focused)' : 'Step (Space)'}>&#9654;|</button>
           {/* Reset — a plain click performs the MODEL's default (Properties →
               Execution → "Reset restores saved board"); hover / right-click
               offers both actions explicitly. The menu renders ONLY when the
@@ -16690,9 +16871,8 @@ export function SimulatorView({ visible = true, activeTab = true, live = false, 
               <button
                 className={styles.transportBtn}
                 onClick={() => { setOverlayPopup(null); handleReset(); }}
-                title={resetDefaultMode === 'restore'
-                  ? 'Reset (Esc) — restores the saved board. Hover or right-click for both actions.'
-                  : 'Reset (Esc) — reseeds from the rules. Hover or right-click for both actions.'}
+                title={`${live ? 'Reset' : 'Reset (Esc)'} — ${resetDefaultMode === 'restore'
+                  ? 'restores the saved board.' : 'reseeds from the rules.'} Hover or right-click for both actions.`}
               >&#9632;</button>
               {overlayPopup === 'reset' && (
                 <div className={`${styles.shotMenu} ${styles.shotMenuRight}`} data-sim-overlay>
@@ -16710,7 +16890,8 @@ export function SimulatorView({ visible = true, activeTab = true, live = false, 
               )}
             </div>
           ) : (
-            <button className={styles.transportBtn} onClick={() => handleReset()} title="Reset (Esc)">&#9632;</button>
+            <button className={styles.transportBtn} onClick={() => handleReset()}
+              title={live ? 'Reset' : 'Reset (Esc)'}>&#9632;</button>
           )}
         </div>
 
@@ -16792,8 +16973,12 @@ export function SimulatorView({ visible = true, activeTab = true, live = false, 
           )}
           <button
             className={styles.zoomBtn}
-            onClick={toggleCanvasFullscreen}
-            title="Fullscreen canvas (F)"
+            // In LIVE this goes through the shared dispatcher so the button and
+            // the F key mean the same thing — both workspaces at once.
+            onClick={live ? () => dispatchCanvasFullscreen(true) : toggleCanvasFullscreen}
+            title={live
+              ? 'Fullscreen canvas — collapses both workspaces’ panels (F)'
+              : 'Fullscreen canvas (F)'}
             aria-label="Toggle canvas fullscreen"
           >&#x26F6;</button>
         </div>
@@ -17091,8 +17276,14 @@ export function SimulatorView({ visible = true, activeTab = true, live = false, 
               (brush + layers + indicators) and the Overseer Experiments view.
               Only shown when the Overseer feature is enabled; with it off the
               panel is just the controls (as before). Mirrors the modeler's
-              per-panel tabs. */}
-          {overseerEnabled && (
+              per-panel tabs.
+              ⚠ HIDDEN IN LIVE (not greyed): an experiment cannot run while the
+              graph is being edited beside it (any model change aborts it), and
+              from this panel the user cannot reach the working state without
+              leaving Live — which is the doctrine's hide case. The mirror
+              direction IS a grey: the Live nav button greys with the reason
+              while an experiment runs, because Abort is right here. */}
+          {overseerEnabled && !live && (
             <div className={styles.rightPanelTabs} data-sim-overlay>
               {([['controls', 'Controls'], ['experiments', 'Overseer Experiments']] as const).map(([id, label]) => (
                 <button
@@ -17108,7 +17299,10 @@ export function SimulatorView({ visible = true, activeTab = true, live = false, 
           )}
 
           {/* === Controls tab === */}
-          {(!overseerEnabled || rightPanelTab === 'controls') && (<>
+          {/* `|| live` so the panel is never blank for the one frame between
+              entering Live with 'experiments' selected and the coercion effect
+              putting it back on 'controls'. */}
+          {(!overseerEnabled || live || rightPanelTab === 'controls') && (<>
           {/* Common controls (agent models) — at the TOP of the panel, ABOVE the
               "Brush affects" switch, because they apply to BOTH targets. The Layers
               matrix governs rendering + simulation of the CA grid AND the agents;
@@ -17866,7 +18060,9 @@ export function SimulatorView({ visible = true, activeTab = true, live = false, 
           </>)}
 
           {/* === Overseer Experiments tab === */}
-          {overseerEnabled && rightPanelTab === 'experiments' && (
+          {/* `!live` is belt-and-braces beside the coercion effect above: the
+              tab strip is gone in Live, so this view is unreachable there. */}
+          {overseerEnabled && !live && rightPanelTab === 'experiments' && (
             <ExperimentsPanel
               runtime={overseerRuntimeRef.current}
               running={overseerRunning}

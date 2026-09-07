@@ -16,6 +16,7 @@
 **Contents**
 
 - Overseer (Experiment Orchestration) — the THIRD graph (branch `sim_agent_fixes`)
+- Overseer ⇄ LIVE mode — the mutual exclusion (Phase 4, 2026-09-07)
 
 ---
 
@@ -57,3 +58,31 @@ Promoted from DEV-only. **The bug the E2E caught**: the WASM step/init read the 
 
 ---
 
+## Overseer ⇄ LIVE mode — the mutual exclusion (Phase 4, 2026-09-07)
+
+**An experiment and Live cannot share a session, and the reason is mechanical, not cosmetic.**
+`SimulatorView`'s model effect opens with `if (prev && overseerRunningRef.current) abortExperiment('model
+changed')` — and in **Live** the model changes as the user types. A sweep whose rule shifts mid-run
+measures nothing, and the abort would read to the user as a crash.
+
+Both directions, and they get **different dispositions** — the UI doctrine's hide-vs-grey test is
+*can the user reach the working state from this panel?*
+
+| Direction | Disposition | Why |
+|---|---|---|
+| **Overseer running → Live** | the **Live nav button is DISABLED IN PLACE**, with the reason in its `title` (`LIVE_OVERSEER_BUSY_REASON` in [src/live/liveState.ts](src/live/liveState.ts)) | **Grey.** The **Abort** button is visible in the Experiments panel, so the working state is one click away — the documented "one setting away" case, and the direct sibling of the doctrine's own *"the Overseer's Run button mid-experiment"* example |
+| **In Live → Overseer** | the **Experiments tab strip is HIDDEN**, `rightPanelTab` is coerced to `'controls'`, and `handleRunExperiment` early-returns | **Hide.** From inside Live the working state is structurally unreachable without leaving Live, so a greyed tab would be clutter that only raises "why is this here?" |
+
+- ⚠ **A hidden control needs its STATE handled, not just its markup.** A model whose right panel was left
+  on `'experiments'` would otherwise strand the Live panel on a view that no longer renders — the same
+  coercion the `overseerEnabled` fallback effect already performs. The Controls arm additionally renders on
+  `live`, so the panel is never blank for the one frame before the coercion commits.
+- ⚠ **MIRROR INVARIANT.** `App` lives in another React tree, so the predicate is published as a module
+  global through `liveState.setOverseerRunning` — **assigned in the same statement block as the
+  `setOverseerRunning` React state**, and cleared on `SimulatorView` unmount (a module global left `true`
+  would grey the nav button for good).
+- A model with `overseerConfig.enabled !== true` sees none of this: `overseerRunning` is never set.
+- **Verified** on `GoL Replicate Statistics`: Run → the Live button disabled with the reason; Abort → it
+  re-enables; entering Live → no tab strip, no Run Experiment button, the Controls panel showing the brush.
+
+---

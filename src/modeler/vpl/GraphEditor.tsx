@@ -31,7 +31,7 @@ import { applyImportPlan, planImport, planNeedsDialog } from '../../model/macroI
 import type { ImportPlan, ImportRow } from '../../model/macroImportPlan';
 import { MacroExportDialog } from '../../components/MacroExportDialog';
 import { MacroImportDialog } from '../../components/MacroImportDialog';
-import { getLiveShown } from '../../live/liveState';
+import { getLiveShown, getLiveFocus, setLiveGraphDragging, dispatchCanvasFullscreen } from '../../live/liveState';
 import { getNodeDef, getAllNodeDefs } from './nodes/registry';
 
 /** Graph → model write-back debounce. The long value is the LIVE stretch: see
@@ -1158,6 +1158,11 @@ export function GraphEditorInner() {
     };
   }, [scheduleSync]);
 
+  // The editor is UNMOUNTED on every non-Modeler/non-Live tab, and React Flow
+  // emits no `dragging: false` for a gesture interrupted by that unmount — so
+  // clear the skip-blit flag here or the viewport could be left never blitting.
+  useEffect(() => () => setLiveGraphDragging(false), []);
+
   // Bond-Graph Agents: flush any pending debounced write-back SYNCHRONOUSLY,
   // routed to the CURRENT active graph. Called before swapping the Cells/Agents
   // sub-tab so the edits in flight land in the graph they were made in (without
@@ -1873,6 +1878,23 @@ export function GraphEditorInner() {
 
   const handleNodesChange = useCallback(
     (changes: Parameters<typeof onNodesChange>[0]) => {
+      // LIVE (Phase 4) — publish the node-DRAG gesture for the skip-blit guard.
+      // React Flow's own `dragging` flag on the position changes is the signal
+      // (true on every move tick, false exactly once on release), so there is
+      // nothing to detect and nothing that can latch on: a drag that ends
+      // outside the canvas still emits its `dragging: false`. While it is true
+      // `SimulatorView` stops COMPOSITING the board (the worker keeps stepping
+      // at full cadence) and draws once on the falling edge, so the drag stays
+      // smooth beside a running simulation and the board is never left stale.
+      // Published unconditionally — the consumer gates it on `live`, and a
+      // module flag nobody reads costs nothing.
+      {
+        const posChanges = changes.filter(c => c.type === 'position') as Array<{ dragging?: boolean }>;
+        if (posChanges.length > 0) {
+          if (posChanges.some(c => c.dragging === true)) setLiveGraphDragging(true);
+          else if (posChanges.some(c => c.dragging === false)) setLiveGraphDragging(false);
+        }
+      }
       // Block deletion of MacroInput/MacroOutput boundary nodes inside macro scope
       if (currentScopeRef.current.length > 1) {
         changes = changes.filter(c => {
@@ -3923,16 +3945,31 @@ export function GraphEditorInner() {
   }, [handleCopy, nodes, deleteElements, scheduleSync]);
 
   // Keyboard shortcuts for copy/paste
+  //
+  // ⚠ LIVE (Phase 4) — `Ctrl+C/V/X` USED TO BE BOUND TWICE: here and in
+  // `SimulatorView`'s main handler, both bubble-phase on `document`, neither
+  // stopping propagation. On the Modeler tab the simulator's arm mostly no-ops
+  // (the grid cursor is null once the pointer leaves its canvas) but on a 3D
+  // model it fires an invisible toast + a state update; in LIVE, where both
+  // surfaces are on screen, a `Ctrl+V` meant for the node graph ALSO pasted a
+  // cell region into the running grid. The resolution: in Live each side
+  // consults the focus owner, so exactly one acts. (The simulator's arm is
+  // additionally `visibleRef`-gated now, which alone removes the Modeler-side
+  // misfire.) UNDO / REDO / DUPLICATE are NOT focus-gated — the run is not
+  // undoable, so the graph owns `Ctrl+Z/Y/D` from either pane.
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       // Skip if user is typing in an input
-      const tag = (document.activeElement as HTMLElement)?.tagName;
-      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+      const ae = document.activeElement as HTMLElement | null;
+      const tag = ae?.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || (ae?.isContentEditable ?? false)) return;
 
       const mod = e.ctrlKey || e.metaKey;
       if (mod && e.key === 'z' && !e.shiftKey) { handleUndo(); e.preventDefault(); return; }
       if (mod && e.key === 'z' && e.shiftKey) { handleRedo(); e.preventDefault(); return; }
       if (mod && e.key === 'y') { handleRedo(); e.preventDefault(); return; }
+      const clipboardKey = mod && (e.key === 'c' || e.key === 'v' || e.key === 'x');
+      if (clipboardKey && getLiveShown() && getLiveFocus() !== 'graph') return;
       if (mod && e.key === 'c') { handleCopy(); e.preventDefault(); }
       if (mod && e.key === 'v') { handlePaste(); e.preventDefault(); }
       if (mod && e.key === 'x') { handleCut(); e.preventDefault(); }
@@ -5524,8 +5561,14 @@ export function GraphEditorInner() {
           </button>
           <button
             className={styles.toggleButton}
-            onClick={() => window.dispatchEvent(new CustomEvent('genesis-toggle-canvas-fullscreen'))}
-            title="Fullscreen canvas (F)"
+            // In LIVE this carries the SHARED collapse intent (both
+            // workspaces act the same way on one press) — see
+            // `dispatchCanvasFullscreen`. Outside Live it is the bare event
+            // each view toggles on, exactly as before.
+            onClick={() => dispatchCanvasFullscreen(getLiveShown())}
+            title={getLiveShown()
+              ? 'Fullscreen canvas — collapses both workspaces’ panels (F)'
+              : 'Fullscreen canvas (F)'}
             aria-label="Toggle canvas fullscreen"
           >
             &#x26F6;
@@ -5562,6 +5605,12 @@ export function GraphEditorInner() {
         <div
           ref={contextMenuRef}
           className={styles.contextMenu}
+          // ⚠ `role="menu"` is load-bearing beyond a11y: it is how every global
+          // key handler knows a menu owns the keyboard right now
+          // (`overlayOwnsKeyboard`). Without it the quick-add menu's `Enter`
+          // would ALSO toggle play in Live — and it cannot be answered from
+          // focus, because the search input is focused on a 50 ms timer.
+          role="menu"
           style={{
             left: (menuPos ?? contextMenu).x,
             top: (menuPos ?? contextMenu).y,
