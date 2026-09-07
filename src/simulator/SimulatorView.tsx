@@ -17,7 +17,8 @@ import { compileGraphWebGPU } from '../modeler/vpl/compiler/webgpu/compile';
 import { createSimWorker } from './createSimWorker';
 import { setSimLayoutApi } from './simLayoutState';
 import { LiveViewportBar } from '../live/LiveViewportBar';
-import { setLiveLayoutLocked } from '../live/liveState';
+import { setLiveLayoutLocked, type LiveRuleStatus } from '../live/liveState';
+import { getLiveLayout, subscribeLiveLayout } from '../live/liveUiState';
 import { buildModelDocument } from './showCode';
 import { computeDefaultModelAttrs } from '../model/modelAttrDefaults';
 import type { AgentCodeBundle } from './showCode';
@@ -2320,6 +2321,38 @@ export function SimulatorView({ visible = true, activeTab = true, live = false, 
   const [gensPerFrame, setGensPerFrame] = useState((saved.current.gensPerFrame as number) ?? 1);
   const [unlimitedGens, setUnlimitedGens] = useState((saved.current.unlimitedGens as boolean) ?? false);
   const [compileError, setCompileError] = useState('');
+  // ── LIVE (Phase 3) — the RULE-COMPILE state channel ───────────────────────
+  //
+  // ⚠ `compileError` is NOT a compile-error channel: it is the simulator's
+  // GENERAL error surface (CSV / GeoTIFF / GeoJSON / preset import failures, a
+  // CSV export failure, dimension-apply failures and the worker's own pushed
+  // `error` message all land there). Only a handful of its call sites are graph
+  // compiles. So Live cannot simply suppress the red banner — that would
+  // silently swallow a failed GIS import. Instead the GRAPH-COMPILE result gets
+  // its own channel, which the Live transport chip renders and the banner
+  // ignores; every other error keeps the banner in every mode.
+  //
+  //   ok      — the worker is running exactly this model's rule
+  //   stale   — the graph does not compile, so the previous rule is STILL
+  //             RUNNING (the `recompile` post was withheld — see the model
+  //             effect); the offending nodes carry their amber `!` badge
+  //   pending — apply policy is "On demand" and edits are waiting for Ctrl+Enter
+  //   rebuild — a STRUCTURAL edit is deferred; applying it re-seeds the board
+  //
+  // Outside Live this stays `ok` and the banner behaves exactly as it always has.
+  const [ruleState, setRuleState] = useState<{ status: LiveRuleStatus; message: string }>(
+    { status: 'ok', message: '' });
+  const ruleStateRef = useRef(ruleState); ruleStateRef.current = ruleState;
+  const liveRef = useRef(live); liveRef.current = live;
+  const liveLayoutState = useSyncExternalStore(subscribeLiveLayout, getLiveLayout);
+  const applyPolicy = liveLayoutState.applyPolicy;
+  const applyPolicyRef = useRef(applyPolicy); applyPolicyRef.current = applyPolicy;
+  /** Bumped by "Apply" / `Ctrl+Enter` / leaving Live: re-runs the model effect
+   *  with the SAME model, which is what makes a deferred change land. */
+  const [applyNonce, setApplyNonce] = useState(0);
+  /** Consumed (and cleared) by the next model-effect run: apply this one
+   *  unconditionally, whatever the policy or the rebuild prompt say. */
+  const liveApplyForceRef = useRef(false);
   const [activeViewer, setActiveViewer] = useState((saved.current.activeViewer as string) ?? '');
   // Agent Output Mappings: the active AGENT viewer (an agent mapping id),
   // independent of the cell `activeViewer`. Empty when the model has no agent
@@ -4807,6 +4840,42 @@ export function SimulatorView({ visible = true, activeTab = true, live = false, 
 
   /** Rebuild the Show Code document. Kept as ONE call site so the live
    *  model-attribute values / active viewer / agent bundle are always threaded. */
+  /** THE ONE SINK FOR A GRAPH-COMPILE RESULT (cell graph + agent graph).
+   *
+   *  Outside Live it is the red banner, exactly as it always was. In Live it
+   *  drives the transport chip instead and leaves `compileError` — the general
+   *  error channel — alone, so a failed CSV / GeoTIFF / GeoJSON / preset import
+   *  still raises the banner while the user is in Live.
+   *
+   *  ⚠ It only reports; WITHHOLDING the `recompile` post (the actual
+   *  last-good-rule mechanism) is the model effect's job. */
+  const reportRuleCompile = useCallback((message: string) => {
+    if (liveRef.current) {
+      setCompileError('');
+      // ⚠ Never clobber a DEFERRAL with "Synced": a compile can be triggered
+      // from outside the model effect (Apply dimensions, an image import →
+      // `initWorkerWithDimensions` → `compileModel`) while an on-demand queue or
+      // a structural rebuild is still outstanding, and reporting "synced" there
+      // would say the worker has a model it does not have. The model effect
+      // clears the status itself the moment it commits to applying.
+      setRuleState(s => (s.status === 'pending' || s.status === 'rebuild'
+        ? s
+        : { status: message ? 'stale' : 'ok', message }));
+    } else {
+      setCompileError(message);
+      setRuleState({ status: 'ok', message: '' });
+    }
+  }, []);
+  /** The agent half appends to whatever the cell half just reported (the two
+   *  compiles are one result). Same routing as `reportRuleCompile`. */
+  const appendRuleCompile = useCallback((message: string) => {
+    if (liveRef.current) {
+      setRuleState(s => ({ status: 'stale', message: s.message ? `${s.message}\n${message}` : message }));
+    } else {
+      setCompileError(p => (p ? `${p}\n${message}` : message));
+    }
+  }, []);
+
   const refreshShowCode = useCallback((m: CAModel, result: CompileResult, agent?: AgentCodeBundle) => {
     setCompiledCode(referenceSourceFor(m, result, {
       modelAttrs: runtimeModelAttrsLatest.current,
@@ -4831,19 +4900,21 @@ export function SimulatorView({ visible = true, activeTab = true, live = false, 
     // via the worker `error` message.
     const gridOn = model.topologyMode?.gridCells !== false;
     refreshShowCode(model, result);
+    // LIVE (Phase 3): routed through the ONE graph-compile sink — the red banner
+    // outside Live, the transport chip inside it. Same message, same moment.
     if (m.properties.useWebGPU) {
       try {
         const wgpu = compileGraphWebGPU(m.graphNodes, m.graphEdges, m);
-        setCompileError(gridOn ? (wgpu.error || result.error || '') : '');
+        reportRuleCompile(gridOn ? (wgpu.error || result.error || '') : '');
       } catch (e) {
-        setCompileError(gridOn ? String((e as Error)?.message || e) : '');
+        reportRuleCompile(gridOn ? String((e as Error)?.message || e) : '');
       }
     } else {
-      setCompileError(gridOn ? (result.error ?? '') : '');
+      reportRuleCompile(gridOn ? (result.error ?? '') : '');
     }
     return result;
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [model, refreshShowCode]);
+  }, [model, refreshShowCode, reportRuleCompile]);
 
   // Bond-Graph Agents: compile the agent rule graph (the second graph). JS-only
   // (Decision D-TARGET). PR-A2 returns a placeholder (agents seed + render but
@@ -8323,7 +8394,7 @@ export function SimulatorView({ visible = true, activeTab = true, live = false, 
     // models or models that only define output mappings.
     setBrushMapping(firstInput?.id ?? MANUAL_BRUSH_MAPPING_ID);
     // Suppress the cell "No nodes / No Step" error for an agents-only model (no grid).
-    if (result.error && model.topologyMode?.gridCells !== false) setCompileError(result.error);
+    if (result.error && model.topologyMode?.gridCells !== false) reportRuleCompile(result.error);
 
     // Only reset pan/zoom when the grid dimensions actually change. This
     // function ALSO fires on structural reinit at the same dims (e.g. the
@@ -8419,7 +8490,7 @@ export function SimulatorView({ visible = true, activeTab = true, live = false, 
     // "agents never move and nothing says why" was the observable symptom, e.g.
     // "No Behaviour Step node in the agent graph.").
     if (agentResult.error) {
-      setCompileError(prev => (prev ? `${prev}\n[agents] ${agentResult.error}` : `[agents] ${agentResult.error}`));
+      appendRuleCompile(`[agents] ${agentResult.error}`);
     }
     // Wave 2: compile WASM only when the user has selected the WASM target.
     // Mirrors the WebGPU gating below — saves a compile pass per model change
@@ -8957,57 +9028,86 @@ export function SimulatorView({ visible = true, activeTab = true, live = false, 
   // Full reinit for structural changes (grid size, attributes, neighborhoods, mappings, update mode).
   // Soft recompile for graph or indicator watch changes (preserves grid state).
   const prevModelRef = useRef<typeof model | null>(null);
+  /** LIVE (Phase 3) — the model the WORKER actually has.
+   *
+   *  ⚠ `prevModelRef` is advanced unconditionally at the top of this effect, so
+   *  it answers "what did the previous RENDER hold", not "what is running". In
+   *  Live an apply can be DEFERRED (the on-demand policy, or the structural
+   *  rebuild prompt), and computing `needsFullInit` against `prev` would then
+   *  compare the new model against the already-changed baseline: the second edit
+   *  reports `needsFullInit === false` and the deferred rebuild is silently lost
+   *  — the worker keeps running a layout the model no longer describes, which is
+   *  exactly the baked-offset desync class the comparisons below exist to
+   *  prevent. So the comparison baseline is the LAST MODEL ACTUALLY PUSHED, and
+   *  it advances only inside the two branches that really push.
+   *
+   *  "N structural edits cost ONE reset" falls out for free: every deferred edit
+   *  keeps comparing against the same applied baseline. */
+  const appliedModelRef = useRef<typeof model | null>(null);
+  /** The `modelVersion` the applied baseline belongs to. A LOAD_MODEL /
+   *  NEW_MODEL must never be held behind a prompt or a policy — it is a whole
+   *  new model, and a stale deferral would otherwise fire a rebuild against a
+   *  model the user has since replaced. */
+  const appliedModelVersionRef = useRef(modelVersion);
   useEffect(() => {
     const prev = prevModelRef.current;
     prevModelRef.current = model;
+    const applied = appliedModelRef.current;
 
     // Overseer: any model change while an experiment runs invalidates the
     // program (the driver was compiled from the old model; a reinit/recompile
     // changes the worker under its feet) — abort cleanly with a journal note.
     if (prev && overseerRunningRef.current) abortExperiment('model changed');
 
-    const needsFullInit = !prev || !workerRef.current
-      || prev.properties.gridWidth !== model.properties.gridWidth
-      || prev.properties.gridHeight !== model.properties.gridHeight
+    // LIVE: a fresh LOAD_MODEL / NEW_MODEL, or an explicit Apply / Ctrl+Enter /
+    // Live exit, applies unconditionally.
+    const versionChanged = appliedModelVersionRef.current !== modelVersion;
+    appliedModelVersionRef.current = modelVersion;
+    const forceApply = liveApplyForceRef.current || versionChanged;
+    liveApplyForceRef.current = false;
+
+    const needsFullInit = !applied || !workerRef.current
+      || applied.properties.gridWidth !== model.properties.gridWidth
+      || applied.properties.gridHeight !== model.properties.gridHeight
       // 3D Grid CA (B2): depth/dimension change the lattice size (total = W*H*D)
       // and the baked WASM/WebGPU `total` literal — a soft recompile would keep
       // the stale W*H buffers, so force a full reinit.
-      || (prev.properties.gridDepth ?? 1) !== (model.properties.gridDepth ?? 1)
-      || (prev.properties.dimension ?? '2d') !== (model.properties.dimension ?? '2d')
-      || prev.properties.boundaryTreatment !== model.properties.boundaryTreatment
-      || prev.properties.updateMode !== model.properties.updateMode
-      || prev.properties.asyncScheme !== model.properties.asyncScheme
+      || (applied.properties.gridDepth ?? 1) !== (model.properties.gridDepth ?? 1)
+      || (applied.properties.dimension ?? '2d') !== (model.properties.dimension ?? '2d')
+      || applied.properties.boundaryTreatment !== model.properties.boundaryTreatment
+      || applied.properties.updateMode !== model.properties.updateMode
+      || applied.properties.asyncScheme !== model.properties.asyncScheme
       // C4 — compare the RESOLVED grid engine, not the raw mirror flags: under
       // `engine: 'auto'` a graph edit can change which engine runs without
       // touching a flag, and that MUST reinitialise (a soft recompile would keep
       // the worker on the previous engine's buffers). For an explicit engine
       // this is exactly the old flag comparison.
-      || resolveEngines(prev).grid.requested !== resolveEngines(model).grid.requested
-      || !attrsStructurallyEqual(prev.attributes, model.attributes)
-      || variegatedLayoutKey(prev) !== variegatedLayoutKey(model)
-      || prev.neighborhoods !== model.neighborhoods
-      || prev.mappings !== model.mappings
+      || resolveEngines(applied).grid.requested !== resolveEngines(model).grid.requested
+      || !attrsStructurallyEqual(applied.attributes, model.attributes)
+      || variegatedLayoutKey(applied) !== variegatedLayoutKey(model)
+      || applied.neighborhoods !== model.neighborhoods
+      || applied.mappings !== model.mappings
       // Glyph regions are allocated at init time; changing whether the model
       // uses setCellGlyph requires re-laying out wasmMemory.
-      || hasGlyphsInModel(prev) !== hasGlyphsInModel(model)
+      || hasGlyphsInModel(applied) !== hasGlyphsInModel(model)
       // Bond-Graph Agents: toggling the Agents topology allocates / frees the
       // agent engine; changing the SoA ceilings (maxAgents / maxBonds) resizes
       // its arrays — both need a full reinit (a soft recompile keeps the stale
       // store). Live force/bond params (handled via recompile / updateModelAttrs)
       // do NOT force a reinit.
-      || !!prev.topologyMode?.agents !== !!model.topologyMode?.agents
+      || !!applied.topologyMode?.agents !== !!model.topologyMode?.agents
       // Toggling the CA-grid topology changes whether the worker builds the
       // neighbour tables + runs the cell step — a structural reinit.
-      || (prev.topologyMode?.gridCells !== false) !== (model.topologyMode?.gridCells !== false)
+      || (applied.topologyMode?.gridCells !== false) !== (model.topologyMode?.gridCells !== false)
       // C9 / STEP 4 - the optional-field gates decide the agent SoA LAYOUT (which
       // fields exist and therefore every offset after them), so a change is
       // structural: a soft recompile would leave the store laid out one way and
       // the freshly compiled module baking the other.
-      || JSON.stringify(resolveAgentFieldGates(prev)) !== JSON.stringify(resolveAgentFieldGates(model))
+      || JSON.stringify(resolveAgentFieldGates(applied)) !== JSON.stringify(resolveAgentFieldGates(model))
       // C9 / STEP 6 - the motion mode is baked into the WASM force pass + the
       // resident posCommit shader, so it is structural too.
-      || motionModeCode(prev.centerBased) !== motionModeCode(model.centerBased)
-      || (prev.centerBased?.maxAgents ?? 0) !== (model.centerBased?.maxAgents ?? 0)
+      || motionModeCode(applied.centerBased) !== motionModeCode(model.centerBased)
+      || (applied.centerBased?.maxAgents ?? 0) !== (model.centerBased?.maxAgents ?? 0)
       // Compare the PROFILE-AWARE effective bond stride (STEP 3): the Bonds
       // capability drops maxBonds to 0 WITHOUT changing `centerBased.maxBonds`, so
       // toggling Bonds off must still force a full reinit — otherwise a soft
@@ -9015,29 +9115,29 @@ export function SimulatorView({ visible = true, activeTab = true, live = false, 
       // the wasmBacked store keeps its old baked offsets → memory desync. Comparing
       // `resolveMaxBonds` subsumes the old raw-maxBonds check (it captures both the
       // config ceiling change AND the capability toggle).
-      || resolveMaxBonds(prev.centerBased) !== resolveMaxBonds(model.centerBased)
+      || resolveMaxBonds(applied.centerBased) !== resolveMaxBonds(model.centerBased)
       // P4: the STRUCTURAL REQUEST QUEUE stride IS the shape of the request arrays
       // (and of the baked WASM / WGSL offsets), so a depth change — or ADDING the
       // first Form / Break / Rewire Bond node to the graph, which flips the stride
       // from the byte-identical 1 to D+1 — needs a full reinit, not a soft
       // recompile (which would leave the store allocated against the old stride).
       // `bondReqSlotsForModel` subsumes both (it is the one number every side bakes).
-      || bondReqSlotsForModel(prev) !== bondReqSlotsForModel(model)
+      || bondReqSlotsForModel(applied) !== bondReqSlotsForModel(model)
       // PR5: the Agent Compile Target is independent of the grid target. Changing
       // it switches the agent driver's memory residency (Phase F: JS↔WASM↔WebGPU),
       // so it needs a full reinit, not a soft recompile (mirrors useWasm/useWebGPU).
       // C4 — compare the RESOLVED target for the same reason as the grid above:
       // `agentTarget: 'auto'` re-picks as the agent graph is edited. Identical to
       // the old comparison for an explicit target.
-      || (resolveEngines(prev).agents?.requested ?? 'js') !== (resolveEngines(model).agents?.requested ?? 'js')
+      || (resolveEngines(applied).agents?.requested ?? 'js') !== (resolveEngines(model).agents?.requested ?? 'js')
       // The Agent Update Mode (sync/async — independent of the grid's updateMode)
       // changes the attribute-buffer allocation (double- vs single-buffered) in
       // createAgentStore, so it needs a full reinit too.
-      || (prev.centerBased?.agentUpdateMode ?? 'async') !== (model.centerBased?.agentUpdateMode ?? 'async')
+      || (applied.centerBased?.agentUpdateMode ?? 'async') !== (model.centerBased?.agentUpdateMode ?? 'async')
       // Generic Agent Platform: the AGENT attribute set drives the agent SoA +
       // the baked agent-WASM memory offsets — adding/removing/retyping one resizes
       // the store, so it needs a full reinit (a soft recompile keeps the stale SoA).
-      || !attrsStructurallyEqual(prev.agentAttributes ?? [], model.agentAttributes ?? [])
+      || !attrsStructurallyEqual(applied.agentAttributes ?? [], model.agentAttributes ?? [])
       // Graph-Rewriting Automata (P2): the BOND attribute set drives the RAGGED
       // bond regions in the agent memory layout AND the `_bondAttr_<id>` ABI block.
       // Adding / removing / RETYPING / REORDERING one changes both, so it needs a
@@ -9045,7 +9145,7 @@ export function SimulatorView({ visible = true, activeTab = true, live = false, 
       // the live memory doesn't have (the baked-offset corruption class). Order
       // matters (the regions are appended in list order), and `attrsStructurallyEqual`
       // is index-wise, so a reorder is caught.
-      || !attrsStructurallyEqual(prev.bondAttributes ?? [], model.bondAttributes ?? [])
+      || !attrsStructurallyEqual(applied.bondAttributes ?? [], model.bondAttributes ?? [])
       // Indicators are reserved exactly 8 bytes each in the baked wasmMemory
       // layout (no headroom), with rngState / order / scratch immediately after.
       // A soft recompile re-bakes the WASM module against the NEW indicator count
@@ -9053,13 +9153,37 @@ export function SimulatorView({ visible = true, activeTab = true, live = false, 
       // overrun into rngState/order and the new module's baked offsets desync. So
       // a change in the indicator COUNT forces a full reinit (rebuilds the layout
       // + memory); same-count edits still ride the soft recompile + updateIndicators.
-      || (prev.indicators?.length ?? 0) !== (model.indicators?.length ?? 0)
+      || (applied.indicators?.length ?? 0) !== (model.indicators?.length ?? 0)
       // "Skip Isolated Empty Cells": the config drives the baked wasmMemory
       // layout (the active-list region + the compact nbr tables) AND the step
       // fn's signature — ANY change forces a full reinit so the module, memory,
       // and worker active-set can never desync (a soft recompile would re-bake
       // the module against a layout the live memory doesn't have).
-      || JSON.stringify(prev.properties.skipIsolatedEmpty ?? null) !== JSON.stringify(model.properties.skipIsolatedEmpty ?? null);
+      || JSON.stringify(applied.properties.skipIsolatedEmpty ?? null) !== JSON.stringify(model.properties.skipIsolatedEmpty ?? null);
+
+    // ── LIVE (Phase 3) — the two DEFERRAL gates ─────────────────────────────
+    // Both return WITHOUT touching `appliedModelRef`, so the very next run
+    // compares against the same baseline and nothing is lost. They are skipped
+    // entirely outside Live, on a model load, and on an explicit Apply.
+    if (liveRef.current && applied && !forceApply) {
+      // 1. "On demand": hold the model→worker step. `scheduleSync` is
+      //    deliberately NOT touched — it also feeds undo/redo, the macro
+      //    write-back and the dirty flag, all of which must stay live.
+      if (applyPolicyRef.current === 'ondemand') {
+        setRuleState({ status: 'pending', message: 'Edits are waiting to be applied (Ctrl+Enter).' });
+        return;
+      }
+      // 2. A STRUCTURAL edit would terminate the worker and re-seed the board.
+      //    In Live that must be asked, never done silently mid-run.
+      if (needsFullInit) {
+        setRuleState({ status: 'rebuild', message: 'A structural change needs the world rebuilt.' });
+        return;
+      }
+    }
+    // Past the gates ⇒ this run APPLIES, so anything that was queued is being
+    // consumed now. Clearing it here (rather than in the compile reporter) is
+    // what lets `reportRuleCompile` refuse to overwrite a live deferral.
+    if (liveRef.current) setRuleState(s => (s.status === 'ok' ? s : { status: 'ok', message: '' }));
 
     if (needsFullInit) {
       workerRef.current?.terminate();
@@ -9080,14 +9204,21 @@ export function SimulatorView({ visible = true, activeTab = true, live = false, 
       // a "fresh" snapshot (vs a stale one left over from a properties-only
       // edit) by comparing object identity to the previous model — load sets
       // a new simulationState reference; properties-edit leaves it alone.
-      const snapJustChanged = !prev
-        || (model.simulationState && model.simulationState !== prev.simulationState);
+      // (Compared against the APPLIED baseline for the same reason needsFullInit
+      // is: in Live a change can have been deferred, and "did the snapshot change
+      // since the worker last saw one" is the question that matters.)
+      const snapJustChanged = !applied
+        || (model.simulationState && model.simulationState !== applied.simulationState);
       const snapW = snapJustChanged
         ? (model.simulationState?.gridWidth ?? model.simulationState?.width ?? model.properties.gridWidth)
         : model.properties.gridWidth;
       const snapH = snapJustChanged
         ? (model.simulationState?.gridHeight ?? model.simulationState?.height ?? model.properties.gridHeight)
         : model.properties.gridHeight;
+      // The worker now HAS this model: advance the applied baseline (and clear
+      // any Live prompt — this is the rebuild the prompt was asking for).
+      appliedModelRef.current = model;
+      if (liveRef.current) setRuleState({ status: 'ok', message: '' });
       initWorkerWithDimensions(snapW, snapH);
     } else {
       // Graph or indicator watch change only → soft recompile (preserves grid)
@@ -9127,21 +9258,50 @@ export function SimulatorView({ visible = true, activeTab = true, live = false, 
       // C4 — Show Code is ALWAYS the JS reference source (same as compileModel()).
       // Agents-only model → suppress the expected cell "No nodes / No Step" error.
       const gridOn = dimsModel.topologyMode?.gridCells !== false;
+      // Show Code reflects what the user is typing even when it does not
+      // compile — deliberately BEFORE the last-good-rule bail below.
       refreshShowCode(dimsModel, result, agentResult);
+      // The graph-compile message, assembled exactly as it always was (cell
+      // first, the agent half appended) but into one local, so the
+      // last-good-rule gate below can test it before anything is reported.
+      let ruleError = '';
       if (dimsModel.properties.useWebGPU) {
         try {
           const wgpu = compileGraphWebGPU(dimsModel.graphNodes, dimsModel.graphEdges, dimsModel);
-          setCompileError(gridOn ? (wgpu.error || result.error || '') : '');
+          ruleError = gridOn ? (wgpu.error || result.error || '') : '';
         } catch (e) {
-          setCompileError(gridOn ? String((e as Error)?.message || e) : '');
+          ruleError = gridOn ? String((e as Error)?.message || e) : '';
         }
       } else {
-        setCompileError(gridOn ? (result.error ?? '') : '');
+        ruleError = gridOn ? (result.error ?? '') : '';
       }
+      reportRuleCompile(ruleError);
       // Surface the AGENT graph's compile error too (mirrors the init path).
       if (agentResult.error) {
-        setCompileError(prev => (prev ? `${prev}\n[agents] ${agentResult.error}` : `[agents] ${agentResult.error}`));
+        appendRuleCompile(`[agents] ${agentResult.error}`);
+        ruleError = ruleError ? `${ruleError}\n[agents] ${agentResult.error}` : `[agents] ${agentResult.error}`;
       }
+      // ── LIVE (Phase 3) — LAST GOOD RULE ────────────────────────────────────
+      // ⚠ The worker does `stepFn = stepCode ? eval(stepCode) : null` (and the
+      // same for `agentBehaviourFn`), and `safeCompileGraph` returns an EMPTY
+      // step on a throw — so a failed compile does not merely SHOW an error, it
+      // replaces the running rule with nothing. That is right for the Simulator
+      // tab (the user asked to recompile) and fatal in Live, where a graph is
+      // half-wired dozens of times a minute.
+      //
+      // The fix is on the MAIN THREAD, deliberately: a message the worker never
+      // receives cannot change its `stepFn`, `wasmStepFn`, WebGPU pipeline or
+      // `agentBehaviourFn`, so the last good rule is preserved BY CONSTRUCTION
+      // and `sim.worker.ts` needs no diff and no new message. Covers BOTH halves
+      // (cell and agent): withholding only one leaves a half-frozen model, which
+      // reads as a bug rather than as "stale".
+      //
+      // Everything below this point is the APPLY — the recompile post, the
+      // engine-enable posts, the direct-render gate refresh and the indicator
+      // sync. None of it may run against a broken compile, and `appliedModelRef`
+      // must not advance.
+      if (liveRef.current && ruleError) return;
+      appliedModelRef.current = model;
       // Build viewerIds unconditionally — see init path above for rationale.
       const viewerIds = buildViewerIds(dimsModel);
       const wasmResult = (() => {
@@ -9303,8 +9463,12 @@ export function SimulatorView({ visible = true, activeTab = true, live = false, 
         type: 'setUseWebGPU',
         enabled: !!dimsModel.properties.useWebGPU && !webgpuResult.error,
       });
-      // Sync indicator definitions when they change (not included in recompile message)
-      if (prev && prev.indicators !== model.indicators) {
+      // Sync indicator definitions when they change (not included in recompile
+      // message). Compared against the APPLIED baseline, not the previous
+      // render's model: in Live a run can have been withheld, and comparing
+      // against `prev` would then see "unchanged" and drop the indicator edit
+      // the worker never received.
+      if (applied && applied.indicators !== model.indicators) {
         workerRef.current?.postMessage({
           type: 'updateIndicators',
           indicators: (model.indicators || []).map(i => ({
@@ -9328,8 +9492,63 @@ export function SimulatorView({ visible = true, activeTab = true, live = false, 
         });
       }
     }
+    // `applyNonce` is how a DEFERRED Live change lands: Apply / Ctrl+Enter /
+    // leaving Live bump it, which re-runs this effect with the same `model` —
+    // and because the baseline is `appliedModelRef`, the deferred structural
+    // comparison is still there to be found.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [model, compileModel]);
+  }, [model, compileModel, applyNonce]);
+
+  /** Apply everything Live is holding back (the on-demand queue and/or the
+   *  deferred structural rebuild). One nonce bump = ONE apply, so N deferred
+   *  structural edits still cost exactly one worker reinit. */
+  const applyLiveChanges = useCallback(() => {
+    liveApplyForceRef.current = true;
+    setApplyNonce(n => n + 1);
+  }, []);
+
+  // Leaving Live with an unapplied change must not leave the Simulator tab
+  // running a rule the model no longer describes — there is no chip out there to
+  // say so, and the red banner is that tab's surface. So flush on the way out:
+  // the effect re-runs with `live` already false, which applies normally and
+  // routes any compile error back to the banner.
+  useEffect(() => {
+    if (live) return;
+    setRuleState({ status: 'ok', message: '' });
+    if (appliedModelRef.current && appliedModelRef.current !== model) applyLiveChanges();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [live]);
+
+  // Ctrl+Enter = apply now. CAPTURE phase on `document` (the ModelerView
+  // pattern) so it works with focus anywhere in the graph pane, registered ONLY
+  // while Live is showing — outside Live there is nothing to apply, and a
+  // globally-bound shortcut that silently does nothing is the inert control the
+  // UI doctrine forbids.
+  //
+  // ⚠ The stand-down set is NARROWER than the usual field check, deliberately:
+  // only TEXTAREA and contentEditable (where Ctrl+Enter conventionally inserts a
+  // line / is claimed by a rich editor). A `<select>` KEEPS FOCUS after the user
+  // picks an option, and picking an option in a node is the single most common
+  // way to make the edit you then want to apply — standing down there would make
+  // the shortcut do nothing exactly when it is most wanted. Ctrl+Enter has no
+  // native meaning in a `<select>` or a single-line `<input>`, so nothing is
+  // stolen. The capture-review modal still wins: it owns the keyboard while up.
+  useEffect(() => {
+    if (!live) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Enter' || !(e.ctrlKey || e.metaKey)) return;
+      const t = e.target as HTMLElement | null;
+      if (t?.tagName === 'TEXTAREA' || t?.isContentEditable) return;
+      if (captureReviewRef.current) return;
+      const st = ruleStateRef.current.status;
+      if (st !== 'pending' && st !== 'rebuild') return;
+      e.preventDefault();
+      e.stopPropagation();
+      applyLiveChanges();
+    };
+    document.addEventListener('keydown', onKey, true);
+    return () => document.removeEventListener('keydown', onKey, true);
+  }, [live, applyLiveChanges]);
 
   // Resize handler
   useEffect(() => {
@@ -13218,6 +13437,13 @@ export function SimulatorView({ visible = true, activeTab = true, live = false, 
   const handleRecompile = () => {
     abortExperiment('manual recompile');
     setPlaying(false);
+    // A manual Recompile rebuilds the world from the CURRENT model, so it IS an
+    // apply: adopt it as the baseline and drop any Live deferral, or the next
+    // edit would compare against a stale baseline and prompt for a rebuild that
+    // has already happened.
+    appliedModelRef.current = model;
+    setRuleState({ status: 'ok', message: '' });
+    liveApplyForceRef.current = false;
     workerRef.current?.terminate();
     workerRef.current = null;
     initWorkerWithDimensions(model.properties.gridWidth, model.properties.gridHeight, undefined, 'Recompiling…');
@@ -15651,6 +15877,15 @@ export function SimulatorView({ visible = true, activeTab = true, live = false, 
             onToggleSettings={() => setLeftPanelOpen(v => !v)}
             onToggleControls={() => setRightPanelOpen(v => !v)}
             locked={recording}
+            ruleStatus={ruleState.status}
+            ruleMessage={ruleState.message}
+            onApply={applyLiveChanges}
+            // `resetDefaultMode` is the ONE resolver for what a rebuild puts
+            // back — the prompt must name it, because "re-seed" and "restore the
+            // saved board" are completely different outcomes for the user.
+            rebuildOutcome={resetDefaultMode === 'restore'
+              ? 'the saved board'
+              : 'a fresh seed from the Init Events'}
           />
         )}
         <canvas ref={canvasRef} className={styles.canvas} style={is3D ? { display: 'none' } : undefined} />

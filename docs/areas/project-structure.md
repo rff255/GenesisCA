@@ -108,9 +108,9 @@ genesis-ca/
 │   │           └── overseer/compile.ts  # Overseer: compiles the experiment graph to an ASYNC main-thread JS driver (NOT a compile target — reuses per-node JS compile() for the universal value subset; own flow emitter with awaited O.* actions)
 │   ├── live/                         # LIVE mode — the split workspace (graph + running simulation)
 │   │   ├── liveUiState.ts            # The PERSISTED pane layout (dock / swapped / split fraction / viewportCollapsed / applyPolicy): module global + pub/sub + localStorage write-through under `genesisca_live_layout`
-│   │   ├── liveState.ts              # Transient cross-tree flags (Phase 2: `liveLayoutLocked` = a recording is pinning the frame size). Phase 4 adds liveFocus / liveGraphDragging
+│   │   ├── liveState.ts              # Transient cross-tree flags: `liveLayoutLocked` (a recording is pinning the frame size), `liveShown` (published by App; GraphEditor reads it for the write-back debounce stretch) + the `LiveRuleStatus` type (ok/stale/pending/rebuild). Phase 4 adds liveFocus / liveGraphDragging
 │   │   ├── LiveSplitter.tsx          # The draggable divider (mutates the panes' inline flex, commits on release, drives simLayoutApi) + the restore ear it renders while the viewport is collapsed
-│   │   ├── LiveViewportBar.tsx       # The compact bar over the viewport pane (Settings / Controls panel toggles + the layout menu). Rendered by SimulatorView INSIDE .canvasArea so it carries `data-sim-overlay`
+│   │   ├── LiveViewportBar.tsx       # The compact bar over the viewport pane (transport chip + Apply/Later, the Auto/On-demand apply-policy switch, Settings / Controls panel toggles, the layout menu). Rendered by SimulatorView INSIDE .canvasArea so it carries `data-sim-overlay`
 │   │   ├── Live.module.css           # Splitter + restore-ear styles
 │   │   └── LiveViewportBar.module.css
 │   ├── simulator/

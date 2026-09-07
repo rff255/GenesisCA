@@ -19,6 +19,7 @@ import { beginBusy } from './components/busyState';
 import { setPendingMacroImport } from './modeler/vpl/graphState';
 import { LiveSplitter } from './live/LiveSplitter';
 import { getLiveLayout, subscribeLiveLayout } from './live/liveUiState';
+import { setLiveShown } from './live/liveState';
 import { simLayoutApi } from './simulator/simLayoutState';
 import type { CAModel } from './model/types';
 import styles from './App.module.css';
@@ -81,6 +82,10 @@ function AppInner() {
   useLayoutEffect(() => {
     simLayoutApi?.drawNow();
   }, [mode, liveLayout.dock, liveLayout.swapped, liveLayout.split, liveLayout.viewportCollapsed]);
+  // Publish the mode to the cross-tree flag store. `SimulatorView` reads Live
+  // from its own `live` prop; the GRAPH side (GraphEditor's write-back debounce)
+  // is in another tree and reads it from here. `App` is the one place that knows.
+  useEffect(() => { setLiveShown(isLive); }, [isLive]);
   // Live dirty-state ref for the once-registered file-handler consumer (below),
   // which would otherwise capture a stale isDirty from mount.
   const isDirtyRef = useRef(isDirty);

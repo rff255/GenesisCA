@@ -21,6 +21,7 @@
 - Medium-features batch (branch `improvements`, 2026-07-28 — five features, one commit each)
 - Panel resize responsiveness: the canvas re-sizes DURING the drag (2026-08-05)
 - LIVE mode — the simulator inside the split workspace (Phase 2, 2026-09-07)
+- LIVE mode — the edit→rule PIPELINE (Phase 3, 2026-09-07)
 
 ---
 
@@ -524,5 +525,159 @@ synthetic pointer events (`setPointerCapture` throws for a pointerId the browser
 aborts the handler) — drive the pure state instead, or verify by measurement. The Live splitter *can* be
 driven synthetically because its capture is wrapped in `tryCapture` and its move/up listeners are on
 `document`.
+
+---
+
+## LIVE mode — the edit→rule PIPELINE (Phase 3, 2026-09-07)
+
+Phase 2 put the graph beside the running simulation; the pipeline between them was still the Simulator
+tab's. Phase 3 makes editing while it runs safe: a graph that does not compile keeps the **last good
+rule** running, a **structural** edit asks before re-seeding the board, and the user can hold every edit
+back until an explicit apply. All of it lives in `SimulatorView`'s model effect —
+**`sim.worker.ts` has no diff, and no new worker message exists**.
+
+### ⚠ TWO ERROR CHANNELS — `compileError` is NOT the compile channel
+
+`compileError` is the simulator's **general** error surface: CSV / GeoTIFF / GeoJSON / preset import
+failures, a CSV export failure, dimension-apply failures and the worker's own pushed `error` message all
+land there, and only a handful of its call sites are graph compiles. **So "no red banner in Live" can
+never be a blanket suppression** — it would silently swallow a failed GIS import (the user drops a
+GeoTIFF, nothing happens, nothing is said).
+
+The graph-compile result therefore has its own channel, `ruleState: { status, message }` with
+`status: 'ok' | 'stale' | 'pending' | 'rebuild'` (`LiveRuleStatus`, declared in
+[src/live/liveState.ts](src/live/liveState.ts)), rendered by the Live viewport bar's **transport chip**.
+Two helpers are the ONLY writers, and every graph-compile arm goes through them:
+
+- **`reportRuleCompile(message)`** — outside Live: `setCompileError(message)` exactly as before. In Live:
+  clears `compileError` and sets the chip. ⚠ It **refuses to overwrite `pending` / `rebuild`** with
+  "Synced": a compile can be triggered from outside the model effect (Apply dimensions, an image import
+  → `initWorkerWithDimensions` → `compileModel`) while a deferral is still outstanding, and saying
+  "synced" there would claim the worker has a model it does not have. The model effect clears the status
+  itself the moment it commits to applying.
+- **`appendRuleCompile(message)`** — the agent half, appended to the cell half (`[agents] …`).
+
+The two render sites (`.errorBanner` over the canvas and the left settings panel's red block) are
+**unchanged** — they still read `compileError`, which in Live simply never carries a graph-compile
+message. **Switching to the Simulator tab with a broken graph therefore shows the red banner there**,
+because leaving Live flushes the deferral and the same helpers route to the banner again.
+
+### ⚠ LAST GOOD RULE = THE `recompile` POST IS WITHHELD, NOT RECOVERED FROM
+
+`sim.worker.ts` does `stepFn = stepCode ? eval(stepCode) : null` (and the same for `agentBehaviourFn`),
+and `safeCompileGraph` returns an EMPTY step on a throw. So a failed compile does not merely *show* an
+error — **it replaces the running rule with nothing**. Right for the Simulator tab (the user asked to
+recompile); fatal in Live, where a graph is half-wired dozens of times a minute.
+
+The seam is on the **main thread**: when Live is shown and either half produced a compile error, the
+soft-recompile arm **returns before posting anything** —
+
+```ts
+if (liveRef.current && ruleError) return;   // …and appliedModelRef does NOT advance
+```
+
+A message the worker never receives cannot change its `stepFn`, `wasmStepFn`, WebGPU pipeline or
+`agentBehaviourFn`, so the last good rule survives *by construction*. That early return also skips the
+`setUseWasm` / `setUseWebGPU` posts (they would flip the running engine off a broken compile), the
+direct-render gate refresh and the indicator sync — everything past it is "the apply".
+
+- **Both halves, one gate.** The cell error and the agent `[agents] …` error are accumulated into ONE
+  `ruleError` local, so an agent-graph edit cannot null `agentBehaviourFn` while the cell rule keeps
+  running (a half-frozen model reads as a bug, not as "stale").
+- **`refreshShowCode` runs BEFORE the gate** — Show Code must reflect what the user is typing.
+- The offending nodes' amber `!` badges are the existing `nodeValidation` mechanism; the chip's tooltip
+  carries the compiler message.
+- Recovery is automatic: the first error-free compile posts `recompile` normally and the chip returns to
+  `● Synced`.
+
+### ⚠ `appliedModelRef` — THE BASELINE `needsFullInit` IS COMPUTED AGAINST
+
+`prevModelRef` is advanced unconditionally at the top of the model effect, so it answers *"what did the
+previous render hold"*, not *"what is running"*. With a deferral in play that is the wrong question: the
+next edit would compare the new model against the **already-changed** baseline, `needsFullInit` would
+come back `false`, and the deferred rebuild would be silently lost — the worker running a layout the
+model no longer describes, the exact baked-offset desync class the 25 comparisons exist to prevent.
+
+So **`needsFullInit` is computed against `appliedModelRef.current` — the last model actually pushed to
+the worker — and that ref advances ONLY inside the two branches that really push** (the full reinit and
+the soft recompile, the latter *after* the last-good-rule gate). Consequences worth knowing:
+
+- **N deferred structural edits cost ONE reset**, for free: every deferred edit keeps comparing against
+  the same applied baseline.
+- The `snapJustChanged` test and the `updateIndicators` "did the indicators change" test in the same
+  effect were moved onto `applied` for the same reason — comparing against `prev` there would drop an
+  indicator edit the worker never received.
+- `handleRecompile` adopts the current model as the baseline and clears the chip (it IS an apply).
+- A **model load / new model** must never sit behind a prompt: the effect compares `modelVersion` against
+  `appliedModelVersionRef` and force-applies when it changed.
+- **Leaving Live flushes**: if `appliedModelRef.current !== model` on the way out, the apply is re-run
+  with `live` already false — so the Simulator tab is never silently running a stale rule, and its red
+  banner appears if the graph is broken.
+
+### Apply policy — Auto vs On demand, and `Ctrl+Enter`
+
+`liveUiState.applyPolicy` (persisted in `genesisca_live_layout`) is edited by a two-button segment on the
+Live viewport bar. **Auto** is today's behaviour. **On demand** holds the *model→worker* step: the model
+effect returns early with `status: 'pending'` and `Ctrl+Enter` (or the chip's **Apply**) re-runs it.
+
+⚠ **`scheduleSync` is deliberately NOT what is held.** It also feeds undo/redo, the macro write-back and
+the dirty flag; holding the graph→model step would break all three. Holding the model→worker step keeps
+the Modeler fully live and only the *simulation* behind.
+
+The apply mechanism is an `applyNonce` in the model effect's dep list plus a one-shot
+`liveApplyForceRef`: one bump = one apply, whatever was queued.
+
+⚠ **The `Ctrl+Enter` stand-down set is narrower than the usual field check** — only `TEXTAREA` and
+`contentEditable`. A `<select>` KEEPS FOCUS after the user picks an option, and picking an option in a
+node is the commonest way to make the edit you then want to apply; standing down there would make the
+shortcut do nothing exactly when it is most wanted. `Ctrl+Enter` has no native meaning in a `<select>` or
+a single-line `<input>`, so nothing is stolen. The capture-review modal still wins.
+
+### The structural-rebuild prompt
+
+`needsFullInit` in Live sets `status: 'rebuild'` instead of terminating the worker. The chip reads
+`⟳ Rebuild needed` and offers **Apply** / **Later**; **Later** collapses the prompt to the bare chip
+(clicking the chip brings the buttons back) and changes **nothing** about the deferral, which lives in
+`appliedModelRef`. The Apply tooltip names what comes back — resolved from `resetDefaultMode`
+(`resetRestoresBoard` + `savedBoard`), the one resolver, as *"the saved board"* or *"a fresh seed from
+the Init Events"*.
+
+### UI-doctrine disposition (Phase 3 controls)
+
+| Control | Disposition |
+|---|---|
+| Transport chip | **only exists in Live** — the Simulator tab's surface for a compile error is the red banner, so a chip there would be meaningless rather than unavailable (hide, not grey) |
+| Chip **Apply** | rendered only in `pending` / `rebuild` |
+| Chip **Later** | rendered only in `rebuild` (a `pending` queue is already "later" by definition) |
+| Apply-policy switch | always enabled, Live only |
+| Red compile banner | unchanged code; in Live it simply never receives a graph-compile message — import / export / worker errors still raise it |
+
+### Verified (real app, real worker, real GPU) — Phase 3
+
+**Game of Life (2D, WebGPU)** — unset the `Get Cell Attribute` attribute mid-run: generation kept
+climbing **4400 → 5354**, chip `● Stale`, the amber `!` badge on the node (`Select an attribute`),
+**0 `recompile` posts**, no red banner; re-selecting it posted **exactly 1** `recompile`, chip back to
+`● Synced`, **same worker object**. The new rule really takes over: deleting the `Generation Step → If`
+edge (which compiles cleanly to an empty step) posted one `recompile` and the board **froze — identical
+FNV pixel hash across 1.5 s — while the counter kept climbing**; restoring it resumed evolution.
+**On demand:** three edits → `● Pending`, **0** posts; `Ctrl+Enter` (with a `<select>` focused) → **1**
+`recompile`, `● Synced`. **Rebuild:** adding a cell attribute → `⟳ Rebuild needed`, **0 terminates**,
+gen 3422 → 3509 still climbing; a second attribute → still one prompt; **Later** then a further
+non-structural edit → still `rebuild`, still nothing posted (the Trap-C regression check); **Apply** →
+**exactly one `terminate`**, gen 0. **Banner not over-suppressed:** dropping a malformed `.gcapreset`
+while in Live raised *"Preset import failed: …"* on the red banner with the chip still `● Synced`.
+**Simulator tab:** switching there with a broken graph flushed the deferral (1 `recompile`) and showed
+the red banner; the chip is absent.
+**Particle Life (2D agents, GPU-resident)** — deleting the **Behaviour Step** node gave
+`[agents] No Behaviour Step node in the agent graph.`, chip `● Stale`, **0 posts**, and the **agents kept
+moving** on the last good behaviour; `Ctrl+Z` restored it and the chip returned to `● Synced`.
+**Life3D (3D voxel)** — the same last-good-rule result (chip stale, gen 554 → 606, 0 posts) and the same
+rebuild prompt, applied with `Ctrl+Enter` → one `terminate`, gen 0, voxels rendering correctly.
+**Debounce stretch, measured:** the identical edit took **270 ms** with the pointer released and
+**568 ms** with a pointer held in the editor (Δ ≈ the 100 → 400 ms stretch); releasing 50 ms after the
+edit collapsed it to **359 ms**, i.e. the release re-arms the short debounce.
+**0 console errors throughout** (`window.onerror` + `unhandledrejection` + a `console.error` hook
+installed before every reproduction). `tsc`, `npm run build`, `check-compile-identity --compare`
+(**31 models, all surfaces unchanged**) and `parity-agent-wasm.mjs` all green.
 
 ---
