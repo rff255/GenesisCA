@@ -1058,7 +1058,7 @@ export interface SimulationState {
   // Simulator controls (runtime model-attribute values + UI)
   modelAttrs?: Record<string, number>;
   activeViewer?: string;
-  /** The active AGENT viewer (the two-layer viewer bar's Agents row). */
+  /** The active AGENT viewer (the Agents group of the transport bar's viewer popup). */
   activeAgentViewer?: string;
   brushColor?: string;
   brushW?: number;

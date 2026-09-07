@@ -2616,7 +2616,7 @@ export function SimulatorView({ visible = true, activeTab = true, live = false, 
   // wrapper ref, assigned to whichever is currently open). Session-only UI
   // state (the VALUES keep their existing persistence). Dismissed by a
   // capture-phase outside pointerdown (the context-menu pattern) or Escape.
-  const [overlayPopup, setOverlayPopup] = useState<'fps' | 'gpf' | 'capture' | 'shot' | 'diagnostics' | 'saveState' | 'loadState' | 'reset' | null>(null);
+  const [overlayPopup, setOverlayPopup] = useState<'fps' | 'gpf' | 'viewer' | 'capture' | 'shot' | 'diagnostics' | 'saveState' | 'loadState' | 'reset' | null>(null);
   const overlayPopupWrapRef = useRef<HTMLDivElement | null>(null);
   // C3 (P4) — the fast-path diagnostics reply (worker `getDiagnostics`). Held in
   // React state because the popover renders from it; requested ON DEMAND only
@@ -12651,7 +12651,7 @@ export function SimulatorView({ visible = true, activeTab = true, live = false, 
     };
 
     const handleMouseDown = (e: MouseEvent) => {
-      // Ignore events from overlay controls (transport bar, viewer bar, etc.)
+      // Ignore events from overlay controls (transport bar, zoom controls, etc.)
       const target = e.target as HTMLElement;
       if (target.closest('[data-sim-overlay]')) { canvasBrushActive = false; canvasAgentBrushActive.current = false; rmbDown = null; return; }
 
@@ -15373,7 +15373,11 @@ export function SimulatorView({ visible = true, activeTab = true, live = false, 
   // Simulator tab would otherwise strand the Live panel on an empty view. A
   // hidden control needs its STATE handled, not just its markup.
   useEffect(() => { if (!overseerEnabled || live) setRightPanelTab('controls'); }, [overseerEnabled, live]);
-  const [topBarOpen, setTopBarOpen] = useState(true);
+  // ⚠ There is no `topBarOpen` any more: the top viewer bar it collapsed was
+  // retired (2026-09-07) and the transport bar is the only canvas bar left, so
+  // the panel snapshots below and the F-fullscreen toggle carry three flags, not
+  // four. A snapshot field for a bar that no longer exists would silently
+  // restore nothing.
   const [bottomBarOpen, setBottomBarOpen] = useState(true);
 
   // --- LIVE panel policy: collapse the simulator's side panels, and PUT THEM
@@ -15388,23 +15392,22 @@ export function SimulatorView({ visible = true, activeTab = true, live = false, 
   // The snapshot is restored on exit INCLUDING false entries — the exact
   // discipline `prePanelStateRef` uses for the F-fullscreen toggle — or a user
   // who had already closed the right panel gets it re-opened on the way out.
-  const panelStateRef = useRef({ left: true, right: true, top: true, bottom: true });
-  panelStateRef.current = { left: leftPanelOpen, right: rightPanelOpen, top: topBarOpen, bottom: bottomBarOpen };
-  const preLivePanelStateRef = useRef<{ left: boolean; right: boolean; top: boolean; bottom: boolean } | null>(null);
+  const panelStateRef = useRef({ left: true, right: true, bottom: true });
+  panelStateRef.current = { left: leftPanelOpen, right: rightPanelOpen, bottom: bottomBarOpen };
+  const preLivePanelStateRef = useRef<{ left: boolean; right: boolean; bottom: boolean } | null>(null);
   useEffect(() => {
     if (live) {
       if (preLivePanelStateRef.current) return;   // already inside Live
       preLivePanelStateRef.current = { ...panelStateRef.current };
       setLeftPanelOpen(false);
       setRightPanelOpen(false);
-      // The bars stay: the transport bar IS the transport, and the viewer bar
-      // is how you pick which Output Mapping you are watching.
+      // The transport bar stays: it IS the transport — and, since the viewer bar
+      // was retired, it is also how you pick which Output Mapping you watch.
     } else if (preLivePanelStateRef.current) {
       const p = preLivePanelStateRef.current;
       preLivePanelStateRef.current = null;
       setLeftPanelOpen(p.left);
       setRightPanelOpen(p.right);
-      setTopBarOpen(p.top);
       setBottomBarOpen(p.bottom);
     }
   }, [live]);
@@ -15499,7 +15502,7 @@ export function SimulatorView({ visible = true, activeTab = true, live = false, 
     // snap-close lands here and must not wait out the settle window).
     layoutResizeUntilRef.current = 0;
     drawRef.current();
-  }, [visible, leftPanelOpen, rightPanelOpen, topBarOpen, bottomBarOpen, rightPanelTab]);
+  }, [visible, leftPanelOpen, rightPanelOpen, bottomBarOpen, rightPanelTab]);
 
   // --- Bottom-band collision: lift the capture stack over the transport bar ---
   // The bar and the bottom-right stack share one baseline (they read as one row
@@ -15577,17 +15580,23 @@ export function SimulatorView({ visible = true, activeTab = true, live = false, 
   // directly, which is exactly what a `ResizeObserver` sees), and the right
   // panel's own collapse tab STICKS OUT 18 px past its edge — measuring the
   // union means nothing has to know that number.
+  //
+  // ⚠ The top strip used to have a THIRD occupant — the centred viewer (Output
+  // Mapping) row — which needed a `--live-viewer-row-shift` to drop below the
+  // Live bar when the two would touch on a narrow pane. That row is gone (the
+  // viewer choice moved onto the transport bar), so the shift went with it: the
+  // strip now holds the instructions pill on the left and the Live bar on the
+  // right, which cannot collide. The two INSETS stay — the ear and the bar both
+  // depend on them.
   const simLayoutRootRef = useRef<HTMLDivElement>(null);
   const rightPanelEarRef = useRef<HTMLButtonElement>(null);
   const rightPanelCollapseRef = useRef<HTMLButtonElement>(null);
-  const viewerBarRowRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const root = simLayoutRootRef.current;
     if (!root) return;
     if (!live) {
       root.style.removeProperty('--live-left-inset');
       root.style.removeProperty('--live-right-inset');
-      root.style.removeProperty('--live-viewer-row-shift');
       return;
     }
     // The left ear is the left rail's own occupant, so it never insets itself:
@@ -15603,37 +15612,16 @@ export function SimulatorView({ visible = true, activeTab = true, live = false, 
       for (const el of rightRail) if (el) right = Math.max(right, box.right - el.getBoundingClientRect().left);
       root.style.setProperty('--live-left-inset', `${Math.max(0, Math.round(left))}px`);
       root.style.setProperty('--live-right-inset', `${Math.max(0, Math.round(right))}px`);
-      // …and the top strip has THREE occupants in Live: the viewer (Output
-      // Mapping) row, centred on the visible canvas, and the Live bar, inset
-      // from the right. On a halved pane with an overlay panel open they can
-      // reach each other, and the bar (z-index 7) would then cover the viewer's
-      // tabs — a control the user can see but not press, which is worse than
-      // either being moved. So when they would touch, the viewer row takes the
-      // SECOND row. Measured after the insets are written (reading a rect
-      // flushes the pending layout), and the predicate is HORIZONTAL only, so
-      // the shift cannot feed back into its own condition.
-      const barBox = root.querySelector('[data-live-bar]')?.getBoundingClientRect();
-      const rowBox = viewerBarRowRef.current?.getBoundingClientRect();
-      // The drop is the BAR'S OWN HEIGHT plus a gap, not a constant: on a
-      // minimum-width pane the bar wraps to two rows, and a fixed 32 px would
-      // put the viewer row straight back through it.
-      const tight = !!(barBox && rowBox && rowBox.width > 0 && barBox.left < rowBox.right + 8);
-      root.style.setProperty('--live-viewer-row-shift',
-        tight && barBox ? `${Math.round(barBox.height + 6)}px` : '0px');
     };
     sync();
     const ro = new ResizeObserver(sync);
-    for (const el of [...leftRail, ...rightRail, root, viewerBarRowRef.current]) if (el) ro.observe(el);
-    // The Live bar grows and shrinks with the chip (an Apply / Later prompt is
-    // ~150 px wider), which changes whether the strip is tight.
-    const bar = root.querySelector('[data-live-bar]');
-    if (bar) ro.observe(bar);
+    for (const el of [...leftRail, ...rightRail, root]) if (el) ro.observe(el);
     return () => ro.disconnect();
-  }, [live, leftPanelOpen, rightPanelOpen, ruleState.status]);
+  }, [live, leftPanelOpen, rightPanelOpen]);
 
   // Remembers panel + bar state before entering F-fullscreen so the toggle
   // restores the user's previous layout (instead of always opening everything).
-  const prePanelStateRef = useRef<{ left: boolean; right: boolean; top: boolean; bottom: boolean } | null>(null);
+  const prePanelStateRef = useRef<{ left: boolean; right: boolean; bottom: boolean } | null>(null);
 
   // Canvas fullscreen = toggle all four bars at once. Shared by the F key and
   // the navbar fullscreen button (via the `genesis-toggle-canvas-fullscreen`
@@ -15650,7 +15638,7 @@ export function SimulatorView({ visible = true, activeTab = true, live = false, 
   // everywhere else the argument is omitted and the behaviour is the historical
   // toggle.
   const applyCanvasFullscreen = useCallback((collapse?: boolean) => {
-    const anyOpen = leftPanelOpen || rightPanelOpen || topBarOpen || bottomBarOpen;
+    const anyOpen = leftPanelOpen || rightPanelOpen || bottomBarOpen;
     if (collapse ?? anyOpen) {
       // ⚠ Snapshot only when there is something to remember. An explicit
       // `collapse: true` can arrive with everything ALREADY closed (Live's
@@ -15658,20 +15646,18 @@ export function SimulatorView({ visible = true, activeTab = true, live = false, 
       // overwriting the snapshot with all-false there would make the matching
       // restore a no-op forever.
       if (anyOpen || !prePanelStateRef.current) {
-        prePanelStateRef.current = { left: leftPanelOpen, right: rightPanelOpen, top: topBarOpen, bottom: bottomBarOpen };
+        prePanelStateRef.current = { left: leftPanelOpen, right: rightPanelOpen, bottom: bottomBarOpen };
       }
       setLeftPanelOpen(false);
       setRightPanelOpen(false);
-      setTopBarOpen(false);
       setBottomBarOpen(false);
     } else {
       const prev = prePanelStateRef.current;
       setLeftPanelOpen(prev ? prev.left : true);
       setRightPanelOpen(prev ? prev.right : true);
-      setTopBarOpen(prev ? prev.top : true);
       setBottomBarOpen(prev ? prev.bottom : true);
     }
-  }, [leftPanelOpen, rightPanelOpen, topBarOpen, bottomBarOpen]);
+  }, [leftPanelOpen, rightPanelOpen, bottomBarOpen]);
   const toggleCanvasFullscreen = useCallback(() => applyCanvasFullscreen(), [applyCanvasFullscreen]);
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -15717,6 +15703,37 @@ export function SimulatorView({ visible = true, activeTab = true, live = false, 
   activeInputLegacyRef.current = activeInputParams.legacy;
   /** …and of the active AGENT Paint mapping. */
   const activeAgentInputParams = inputParamsOf(agentInputMappings.find(m => m.id === agentPaintMapping));
+
+  // --- The VIEWER CONTROL (transport bar) -----------------------------------
+  // The Output-Mapping choice used to live in its own centred bar across the top
+  // of the canvas. That bar is GONE (2026-09-07): it cost a whole strip of
+  // canvas for a control that is pressed rarely, and in Live it fought the Live
+  // viewport bar for the same lane. The choice now rides the transport bar as
+  // ONE compact readout between `G/F` and play/pause, opening a vertical popup
+  // on hover/click — the FPS / G-F pattern exactly.
+  //
+  // ⚠ DOCTRINE (an enabled control must DO something): a popup is only offered
+  // when the user can actually reach a DIFFERENT viewer from it, i.e. when one
+  // of the two layers has more than one A→C mapping. One cell mapping + one
+  // agent mapping is TWO entries and still nothing to switch to, so the
+  // predicate is per-layer, not the total. When it is not switchable the name is
+  // still shown — as a plain `.transportStat` READOUT (no button, no hover, no
+  // pointer cursor): "which mapping am I looking at" stays answered, and nothing
+  // that cannot be pressed looks pressable.
+  const activeCellViewerName = attrToColorMappings.find(m => m.id === activeViewer)?.name ?? '';
+  const activeAgentViewerName = agentColorMappings.find(m => m.id === activeAgentViewer)?.name ?? '';
+  const hasAnyViewer = attrToColorMappings.length > 0 || agentColorMappings.length > 0;
+  const viewerSwitchable = attrToColorMappings.length > 1 || agentColorMappings.length > 1;
+  /** The ONE name on the bar: the cell viewer when the model has a cell layer,
+   *  otherwise the agent viewer. (`—` only for a dangling id, e.g. a `.gcastate`
+   *  restored against a model whose mapping was since removed.) */
+  const viewerLabel = (attrToColorMappings.length > 0 ? activeCellViewerName : activeAgentViewerName) || '—';
+  /** The full text lives in the tooltip, since the label truncates — and it names
+   *  BOTH layers when both exist, which the single label cannot. */
+  const viewerTitle = [
+    attrToColorMappings.length > 0 ? `Cells: ${activeCellViewerName || '—'}` : '',
+    agentColorMappings.length > 0 ? `Agents: ${activeAgentViewerName || '—'}` : '',
+  ].filter(Boolean).join(' · ');
 
   return (
     // In LIVE the two side panels FLOAT over the viewport instead of squeezing
@@ -16666,51 +16683,10 @@ export function SimulatorView({ visible = true, activeTab = true, live = false, 
           </div>
         )}
 
-        {/* Top overlay: small attached ear (its own pill) + viewer bar pill,
-            wrapped together so the ear reads as a separate widget adjacent to
-            the bar, not as one of the bar's tabs. Chevrons are inline SVGs so
-            the up/down pair is pixel-identical. */}
-        {(attrToColorMappings.length > 0 || agentColorMappings.length > 0) && (
-          <div ref={viewerBarRowRef} className={styles.viewerBarRow} data-sim-overlay>
-            <button
-              className={styles.barAttachedEar}
-              onClick={() => setTopBarOpen(v => !v)}
-              title={topBarOpen ? 'Hide viewer bar' : 'Show viewer bar'}
-            >{topBarOpen ? <ChevronUpIcon /> : <ChevronDownIcon />}</button>
-            {topBarOpen && (
-              <div className={styles.viewerBar} style={{ flexWrap: 'wrap' }}>
-                {attrToColorMappings.length > 0 && (<>
-                  {/* When both layers have views, label this row "Cells" \u2014 the
-                      two-layer viewer selection. */}
-                  <span className={styles.viewerBarLabel}>{agentColorMappings.length > 0 ? `Cells (A${'\u2192'}C):` : `Output Mapping (A${'\u2192'}C):`}</span>
-                  {attrToColorMappings.map(m => (
-                    <button
-                      key={m.id}
-                      className={`${styles.viewerTab} ${activeViewer === m.id ? styles.viewerTabActive : ''}`}
-                      onClick={() => setActiveViewer(m.id)}
-                      title={m.description || undefined}
-                    >
-                      {m.name}
-                    </button>
-                  ))}
-                </>)}
-                {agentColorMappings.length > 0 && (<>
-                  <span className={styles.viewerBarLabel} style={{ marginLeft: attrToColorMappings.length > 0 ? 12 : 0 }}>Agents (A{'\u2192'}C):</span>
-                  {agentColorMappings.map(m => (
-                    <button
-                      key={m.id}
-                      className={`${styles.viewerTab} ${activeAgentViewer === m.id ? styles.viewerTabActive : ''}`}
-                      onClick={() => setActiveAgentViewer(m.id)}
-                      title={m.description || undefined}
-                    >
-                      {m.name}
-                    </button>
-                  ))}
-                </>)}
-              </div>
-            )}
-          </div>
-        )}
+        {/* (The centred top viewer / Output-Mapping bar used to live here. It was
+            retired on 2026-09-07 \u2014 the choice is now the viewer control on the
+            transport bar, between G/F and play. See the "VIEWER CONTROL" block
+            above the JSX for the doctrine call.) */}
 
         {/* End-condition pause notice (informational, not an error) */}
         {endConditionNotice && (
@@ -16873,7 +16849,7 @@ export function SimulatorView({ visible = true, activeTab = true, live = false, 
             <button
               className={`${styles.transportBtn} ${overlayPopup === 'fps' ? styles.zoomBtnActive : ''}`}
               onClick={() => setOverlayPopup(p => (p === 'fps' ? null : 'fps'))}
-              title="Display frame rate (frames per second) \u2014 hover or click to adjust"
+              title="Display frame rate (frames per second) — hover or click to adjust"
             >FPS {unlimitedFps ? '\u221E' : targetFps}</button>
             {overlayPopup === 'fps' && (
               <div className={styles.speedPopup} data-sim-overlay>
@@ -16902,7 +16878,7 @@ export function SimulatorView({ visible = true, activeTab = true, live = false, 
             <button
               className={`${styles.transportBtn} ${overlayPopup === 'gpf' ? styles.zoomBtnActive : ''}`}
               onClick={() => setOverlayPopup(p => (p === 'gpf' ? null : 'gpf'))}
-              title="Generations simulated per displayed frame \u2014 hover or click to adjust"
+              title="Generations simulated per displayed frame — hover or click to adjust"
             >G/F {unlimitedGens ? '\u221E' : gensPerFrame}</button>
             {overlayPopup === 'gpf' && (
               <div className={styles.speedPopup} data-sim-overlay>
@@ -16918,6 +16894,72 @@ export function SimulatorView({ visible = true, activeTab = true, live = false, 
             )}
           </div>
           <div className={styles.transportDivider} />
+
+          {/* VIEWER (Output Mapping) — the retired top bar's whole job, in one
+              compact readout. Switchable ⇒ the FPS / G-F hover-or-click popover
+              (same `overlayPopup` state, same wrapper ref, same outside-pointer /
+              Escape dismissal); not switchable ⇒ a plain readout.
+              ⚠ NO `role="menu"` here, deliberately: the popup opens on HOVER and
+              `overlayOwnsKeyboard()` would then stand the global Enter (play /
+              pause) down merely for mousing past — the exact trap that made the
+              Live bar's apply-policy popover click-only. */}
+          {hasAnyViewer && (viewerSwitchable ? (<>
+            <div
+              className={styles.transportSpeed}
+              ref={overlayPopup === 'viewer' ? overlayPopupWrapRef : undefined}
+              data-sim-overlay
+              onPointerEnter={() => setOverlayPopup('viewer')}
+              onPointerLeave={() => setOverlayPopup(p => (p === 'viewer' ? null : p))}
+            >
+              <button
+                className={`${styles.transportBtn} ${overlayPopup === 'viewer' ? styles.zoomBtnActive : ''}`}
+                onClick={() => setOverlayPopup(p => (p === 'viewer' ? null : 'viewer'))}
+                title={`Viewer — ${viewerTitle} — hover or click to switch`}
+              ><span className={styles.viewerPickName}>{viewerLabel}</span></button>
+              {overlayPopup === 'viewer' && (
+                <div className={`${styles.speedPopup} ${styles.viewerPopup}`} data-sim-overlay>
+                  {attrToColorMappings.length > 0 && (<>
+                    <span className={styles.viewerPopupGroup}>
+                      {agentColorMappings.length > 0 ? `Cells (A${'→'}C)` : `Output Mapping (A${'→'}C)`}
+                    </span>
+                    {attrToColorMappings.map(m => (
+                      <button
+                        key={m.id}
+                        className={`${styles.viewerPopupItem} ${activeViewer === m.id ? styles.viewerPopupItemOn : ''}`}
+                        onClick={() => { setActiveViewer(m.id); setOverlayPopup(null); }}
+                        title={m.description || undefined}
+                        aria-pressed={activeViewer === m.id}
+                      >
+                        <span className={styles.viewerPopupCheck}>{activeViewer === m.id ? '✓' : ''}</span>
+                        <span className={styles.viewerPopupItemName}>{m.name}</span>
+                      </button>
+                    ))}
+                  </>)}
+                  {agentColorMappings.length > 0 && (<>
+                    <span className={styles.viewerPopupGroup}>Agents (A{'→'}C)</span>
+                    {agentColorMappings.map(m => (
+                      <button
+                        key={m.id}
+                        className={`${styles.viewerPopupItem} ${activeAgentViewer === m.id ? styles.viewerPopupItemOn : ''}`}
+                        onClick={() => { setActiveAgentViewer(m.id); setOverlayPopup(null); }}
+                        title={m.description || undefined}
+                        aria-pressed={activeAgentViewer === m.id}
+                      >
+                        <span className={styles.viewerPopupCheck}>{activeAgentViewer === m.id ? '✓' : ''}</span>
+                        <span className={styles.viewerPopupItemName}>{m.name}</span>
+                      </button>
+                    ))}
+                  </>)}
+                </div>
+              )}
+            </div>
+            <div className={styles.transportDivider} />
+          </>) : (<>
+            <span className={styles.transportStat} data-sim-overlay title={`Viewer — ${viewerTitle}`}>
+              <span className={styles.viewerPickName}>{viewerLabel}</span>
+            </span>
+            <div className={styles.transportDivider} />
+          </>))}
 
           {/* Playback controls (center). Play/pause is ONE button alternating its
               glyph — never two, one of which is always dead. The click is the
@@ -17630,7 +17672,7 @@ export function SimulatorView({ visible = true, activeTab = true, live = false, 
                 key={MANUAL_BRUSH_MAPPING_ID}
                 className={`${styles.mappingTab} ${styles.mappingTabManual} ${brushMapping === MANUAL_BRUSH_MAPPING_ID ? styles.mappingTabActive : ''}`}
                 onClick={() => setBrushMapping(MANUAL_BRUSH_MAPPING_ID)}
-                title="Manual Brush \u2014 directly set chosen cell attributes on painted cells (always available)"
+                title="Manual Brush — directly set chosen cell attributes on painted cells (always available)"
               >
                 Manual
               </button>

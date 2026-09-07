@@ -3382,9 +3382,11 @@ export function HelpView() {
           <p className={styles.p}>
             Agents have their <strong>own Attribute&rarr;Color views</strong>, separate from the
             grid&rsquo;s &mdash; each a different <em>view</em> of the population (colour-by-maturity,
-            colour-by-state, &hellip;), switchable at run time. In the Simulator the viewer bar shows a
-            <strong> Cells (A&rarr;C)</strong> row and an <strong>Agents (A&rarr;C)</strong> row when both
-            layers have mappings &mdash; pick one tab from each. Each Agent Output Mapping has a
+            colour-by-state, &hellip;), switchable at run time. In the Simulator the{' '}
+            <strong>viewer control on the transport bar</strong> (between <code>G/F</code> and
+            play/pause) names the view you are watching; hover or click it and the popup lists a{' '}
+            <strong>Cells (A&rarr;C)</strong> group and an <strong>Agents (A&rarr;C)</strong> group when
+            both layers have mappings &mdash; pick one from each. Each Agent Output Mapping has a
             <strong> Color pass</strong> setting (Mappings panel), exactly like the grid mappings:
           </p>
           <ul className={styles.list}>
@@ -3404,8 +3406,8 @@ export function HelpView() {
             lists above it: click a view to open its editor in the second panel, use
             <strong> + Add Agent View</strong> / <strong>Duplicate</strong> / <strong>Delete</strong>,
             and drag the <code>&#8942;&#8942;</code> handle to reorder &mdash; the order is the order of
-            the tabs in the Simulator&rsquo;s <em>Agents</em> viewer row. A view&rsquo;s
-            <strong> Description</strong> becomes that tab&rsquo;s tooltip. You can also
+            the entries in the viewer popup&rsquo;s <em>Agents</em> group. A view&rsquo;s
+            <strong> Description</strong> becomes that entry&rsquo;s tooltip. You can also
             <strong> drag a view row onto the Agents canvas</strong> to add an <strong>Agent Output
             Mapping (A&rarr;C)</strong> root or a <strong>Set Agent Looks</strong> node already pointed
             at it (drop it near a matching port and it wires itself up). Agent views only mean
@@ -4221,11 +4223,12 @@ export function HelpView() {
             Capture (screenshot / recording) is <em>output</em>, so it lives in its own
             cluster at the <strong>bottom-right of the canvas, under the stats
             readout</strong> &mdash; see &ldquo;Where the capture controls live&rdquo; below.
-            There is also a <strong>top viewer bar</strong> for switching between visualization
-            mappings, a collapsible <strong>left panel</strong> for settings (actions,
+            Switching between visualization mappings lives on the transport bar itself
+            (the <strong>viewer control</strong>, between <code>G/F</code> and play/pause).
+            There is also a collapsible <strong>left panel</strong> for settings (actions,
             grid dimensions, model attributes), and a collapsible <strong>right
             panel</strong> holding the brush settings (Input Mapping) above the
-            Indicators. Hover over any mapping tab in either bar
+            Indicators. Hover over any entry in the viewer popup, or any brush mapping tab,
             to see the mapping&apos;s description as a tooltip (matches the existing
             attribute / preset tooltips). When the model has indicators, a draggable
             divider sits between the brush area and the Indicators &mdash; drag it to give
@@ -4895,8 +4898,12 @@ export function HelpView() {
 
           <h3 className={styles.h3}>Viewer</h3>
           <p className={styles.p}>
-            The top bar shows available Attribute-to-Color mappings as clickable tabs.
-            Click a tab to switch the visualization mode.
+            The <strong>viewer control</strong> on the transport bar &mdash; between{' '}
+            <code>G/F</code> and play/pause &mdash; names the Attribute-to-Color mapping you are
+            currently watching. Hover or click it and a popup lists the model&apos;s other
+            mappings; pick one to switch the visualization (the change lands immediately, even
+            while paused or mid-run). A model with only one mapping shows the name as a plain
+            readout, with no popup &mdash; there is nothing to switch to.
           </p>
 
           <h3 className={styles.h3}>Settings (Left Panel)</h3>

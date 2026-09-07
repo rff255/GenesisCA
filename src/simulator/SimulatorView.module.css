@@ -626,77 +626,14 @@
   height: 100%;
 }
 
-/* --- Top overlay: Viewer tabs --- */
-
-/* Wrapper that owns positioning (top-centre); contains the attached ear pill
- * + the actual viewer bar pill as two distinct flex items. */
-.viewerBarRow {
-  position: absolute;
-  top: var(--space-4);
-  left: 50%;
-  transform: translateX(-50%);
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  z-index: 5;
-}
-
-/* In LIVE the floating panels cover the ends of the top strip, and the Live
-   viewport bar steps in from the right by `--live-right-inset` to stay clear of
-   them — so the viewer row centres on the VISIBLE canvas rather than on the full
-   (partly covered) box, or the two run into each other. ⚠ With BOTH overlay
-   panels open on an already-halved pane the strip is ~520 px for two ~220 px
-   pills, so they can still touch; that is the crowding the planned
-   Output-Mapping bar relocation resolves properly. */
-.liveOverlayPanels .viewerBarRow {
-  left: calc(50% + (var(--live-left-inset) - var(--live-right-inset)) / 2);
-  top: calc(var(--space-4) + var(--live-viewer-row-shift, 0px));
-}
-
-.viewerBar {
-  display: flex;
-  align-items: center;
-  gap: var(--space-1);
-  background: var(--color-bg-panel);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-lg);
-  padding: var(--space-1);
-}
-
-/* Inline label inside .viewerBar ("Output Mapping (A→C):") — kept compact
- * so it sits as a caption next to the tabs, but explicitly centred so it
- * doesn't drift above the tab baseline. */
-.viewerBarLabel {
-  font-size: var(--font-2xs);
-  color: var(--color-text-muted);
-  white-space: nowrap;
-  padding: 0 var(--space-2);
-  line-height: 1;
-}
-
-.viewerTab {
-  padding: var(--space-2) var(--space-6);
-  background: transparent;
-  border: 1px solid transparent;
-  border-radius: var(--radius-md);
-  color: var(--color-text-tertiary);
-  font-size: var(--font-2xs);
-  font-weight: 500;
-  cursor: pointer;
-  transition: all var(--duration-base);
-  white-space: nowrap;
-}
-
-.viewerTab:hover {
-  color: var(--color-text-primary);
-  background: var(--color-overlay-hover-weak);
-}
-
-.viewerTabActive {
-  color: var(--color-text-primary);
-  background: var(--color-tab-active-bg);
-  border-color: var(--color-tab-active-border);
-}
+/* --- Top overlay --- */
+/* The centred viewer / Output-Mapping bar that used to live here (`.viewerBarRow`
+   + its Live override, `.viewerBar`, `.viewerBarLabel`, `.viewerTab(Active)`) was
+   RETIRED on 2026-09-07: it spent a whole strip of canvas on a rarely-pressed
+   control, and in Live it fought the Live viewport bar for the same lane. The
+   choice is now the `.viewerPopup` control on the transport bar. The Live
+   `--live-viewer-row-shift` custom property went with it; `--live-left/right-inset`
+   stay (the panel ears and the Live bar depend on them). */
 
 /* --- Bottom overlay: Transport bar --- */
 
@@ -836,6 +773,90 @@
   transform: translate(-50%, -50%) rotate(-90deg);
   accent-color: var(--color-accent);
   cursor: pointer;
+}
+
+/* --- Viewer (Output Mapping) control on the transport bar -------------------
+   The retired top bar's job, as one readout + a vertical popup. It reuses
+   `.transportSpeed` (the popover anchor) and `.speedPopup` (the flush-above,
+   no-gap box the hover interaction requires) and only adds the list. */
+
+/* The name on the bar / on the readout: TRUNCATES rather than stretching the
+   centred transport bar — a long mapping name would otherwise nudge every
+   neighbouring control (the play button's fixed-width rule, same reason). The
+   full text is always in the `title`. */
+.viewerPickName {
+  display: inline-block;
+  max-width: 108px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: bottom;
+}
+
+/* Wider than the slider popover and LEFT-aligned: these are names, not numbers. */
+.viewerPopup {
+  min-width: 150px;
+  max-width: 260px;
+  align-items: stretch;
+  gap: 2px;
+  padding: var(--space-2);
+}
+
+/* "Cells (A→C)" / "Agents (A→C)" — the retired bar's own captions, kept so the
+   two-layer selection still reads as two groups. */
+.viewerPopupGroup {
+  font-size: var(--font-3xs);
+  color: var(--color-text-muted);
+  padding: var(--space-1) var(--space-2);
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.viewerPopupGroup + .viewerPopupGroup,
+.viewerPopupItem + .viewerPopupGroup {
+  margin-top: var(--space-2);
+}
+
+.viewerPopupItem {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-2);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  color: var(--color-text-tertiary);
+  font-size: var(--font-2xs);
+  font-weight: 500;
+  text-align: left;
+  cursor: pointer;
+  transition: all var(--duration-base);
+}
+
+.viewerPopupItem:hover {
+  color: var(--color-text-primary);
+  background: var(--color-overlay-hover-weak);
+}
+
+.viewerPopupItemOn {
+  color: var(--color-text-primary);
+  background: var(--color-tab-active-bg);
+  border-color: var(--color-tab-active-border);
+}
+
+/* Fixed-width tick column so the names line up whether or not a row is current
+   (a tick that pushes the label sideways makes the list jump as you switch). */
+.viewerPopupCheck {
+  flex: 0 0 10px;
+  color: var(--color-accent);
+  font-size: var(--font-3xs);
+  line-height: 1;
+}
+
+.viewerPopupItemName {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .transportCheck {

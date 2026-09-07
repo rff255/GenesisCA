@@ -824,6 +824,108 @@ the bar.
 
 ---
 
+# Output-Mapping bar RELOCATION — AS BUILT (2026-09-07)
+
+The relocation the post-ship round above flagged as "the next session's". **The centred top viewer bar is
+retired in EVERY mode** (Simulator and Live) and its whole job — cell views, agent views, per-mapping
+tooltips — is one compact control on the **transport bar, between `G/F` and play/pause**. Reference doc:
+[`docs/areas/simulator-ui.md` § *The VIEWER CONTROL*](areas/simulator-ui.md); illustrated before/after in
+the companion `PLAN_LIVE_SPLIT.html` (last section). **Presentation only** — zero compiler, worker, node,
+schema or file-format change; `check-compile-identity --compare` **31 models, all surfaces unchanged**.
+
+## The retired row's full inventory, and where each item went
+
+| The old row held | Where it is now |
+|---|---|
+| the attached **ear** toggling `topBarOpen` (*Show / Hide viewer bar*) | **deleted** — it collapsed a bar that no longer exists. `topBarOpen` and the `top` field of all three panel snapshots (`panelStateRef`, `preLivePanelStateRef`, `prePanelStateRef`) and of `applyCanvasFullscreen`'s `anyOpen` test went with it: the transport bar is the only canvas bar left, and a snapshot field for a bar that does not exist restores nothing, silently. |
+| the caption `Output Mapping (A→C):` / `Cells (A→C):` | the popup's group header — the same two words, chosen by the same "does the model also have agent views?" test. |
+| one `.viewerTab` per **cell** A→C mapping → `setActiveViewer(id)`, `title = description` | one popup entry under `Cells (A→C)` / `Output Mapping (A→C)`, same handler, same `title`. |
+| the caption `Agents (A→C):` | the popup's second group header. |
+| one `.viewerTab` per **agent** A→C mapping → `setActiveAgentViewer(id)`, `title = description` | one popup entry under `Agents (A→C)`, same handler, same `title`. |
+
+**That is the complete inventory** — the row carried no non-viewer control, so nothing needed rehoming.
+
+## Decisions
+
+| | |
+|---|---|
+| **One label, not two** | the button shows the CELL viewer's name (the AGENT viewer's when the model has no cell A→C mapping). Naming both would blow the width budget of a centred bar; the `title` carries both (`Viewer — Cells: X · Agents: Y`). |
+| **Truncation** | `max-width: 108px` + `text-overflow: ellipsis`, full text in the `title`. The bar is centred, so a long name would nudge every neighbouring control — the `.transportBtnPlay` fixed-width rule again. |
+| **Hover OR click** | exactly the FPS / G-F wrapper: `onPointerEnter` / `onPointerLeave` on `.transportSpeed`, a click toggling the same single `overlayPopup` state, the same outside-`pointerdown`-capture + `Escape` dismissal. |
+| **NO `role="menu"`** | `overlayOwnsKeyboard()` is a `[role="dialog"], [role="menu"]` query and in Live it stands the global `Enter` (play/pause) down while an overlay owns the keyboard — a hover-opened menu role would kill play/pause merely for mousing past. This is the identical trap that made the Live bar's apply-policy popover click-only in the round above. |
+| **Nothing to switch to ⇒ a READOUT, not a dead popup** | `viewerSwitchable = cellOMs > 1 \|\| agentOMs > 1` — **per layer, not the total**: one cell view plus one agent view is two entries and still no reachable different state. Not switchable ⇒ the name renders as a plain `.transportStat` `<span>` (no button, no hover, no pointer cursor), so *which mapping am I looking at* stays answered and nothing unpressable looks pressable. No A→C mapping at all ⇒ nothing renders, as before. |
+| **Live shift machinery removed, insets kept** | `--live-viewer-row-shift`, the tight-strip measurement inside the inset effect (and its now-pointless `ruleState.status` dep) and the `.liveOverlayPanels .viewerBarRow` override are gone — exactly as the handoff predicted. `--live-left-inset` / `--live-right-inset` stay; the panel ears and the Live bar read them. The Live top strip is back to two occupants (instructions pill · Live bar) that cannot collide. |
+
+**Unchanged on purpose:** the switch is the old tab click byte-for-byte (`setActiveViewer` /
+`setActiveAgentViewer` → the existing `colorPass` effect); both coercion paths (the cell viewer's
+full-reinit default, the agent viewer's repair effect) live outside the row and did not move; no keyboard
+or wheel cycle ever stepped the tabs, so there was none to re-point; and no DOM overlay was ever recorded
+into a capture (`'view'` blits the display canvas, `'simulation'` re-renders from the colours buffer), so
+the control needs no capture treatment beyond the `data-sim-overlay` it inherits from `.transportBarRow`.
+
+## Deviations from the brief
+
+1. **The doctrine predicate is per-LAYER, not "only one viewer choice".** The brief framed the
+   single-choice case as "with only ONE viewer choice in the model". A model with one cell view and one
+   agent view has two, and still nothing to switch to — so the test is `cellOMs > 1 || agentOMs > 1`.
+2. **The single-choice disposition is *keep the label, drop the popup*, rendered as a stat, not a button.**
+   The doctrine's HIDE arm is for *controls*; a readout is not one (the bar already carries `FPS` and the
+   corner stats). Hiding the name entirely would lose information the old bar gave for free.
+3. **Five neighbouring tooltips fixed in passing** (out of brief, recorded here): a `\u`-escape inside a
+   JSX *attribute* string is not a JS escape, so the FPS, G/F and Manual-Brush buttons and the two
+   `IndicatorDisplay` clear-chart buttons rendered a literal `—` in their tooltip instead of an em
+   dash. Found while dumping every `title` in the transport bar to verify the new one; two of the five are
+   the controls immediately beside it. Real em dashes now.
+
+## Verified in the real app
+
+Dev server + driven browser, `window.onerror` + `unhandledrejection` + a `console.error` hook installed
+before each reproduction, **0 console errors throughout**.
+
+- **Urban Growth — Recife (2D, 4 cell OMs)** — no top row anywhere in the DOM
+  (`[class*="viewerBarRow"]` → none); the transport bar reads `Export · Import │ FPS 61 · G/F 1 │ City on
+  the map │ ▶ ▶| ↻`; **real** hover opens the popup (`Output Mapping (A→C)` + four entries, `✓` on the
+  current one); picking an entry switches the render **by pixels** — a 64×64 FNV hash of the display
+  canvas goes `3534714782` (City on the map) → `2654148450` (Land use) → `2680355928` (Distance to road),
+  all distinct, with the label and `title` following. Truncation measured on the live element:
+  `max-width` computes to `108px`, `text-overflow: ellipsis`, and a 37-character name gives
+  `scrollWidth 262 > clientWidth 108`.
+- **Game of Life (1 cell OM)** — the doctrine case: a `<span>` readout `Default`, `title = "Viewer —
+  Cells: Default"`, no button, no popup.
+- **Accretor (3D voxel, 2 cell OMs)** — control present, popup opens, `State (A / B)` →
+  `Distance Gradient` re-colours the voxel.
+- **Growing Graphs (agents only, 2 agent OMs)** — the popup's header reads `Agents (A→C)`;
+  `Birth generation` → `State` switches the agent viewer.
+- **Chemotaxis — Aggregation + two added agent views (BOTH layers)** — the case no shipped model covers,
+  built through the real Mappings panel: label `Chemical`,
+  `title = "Viewer — Cells: Chemical · Agents: Agent View"`, popup =
+  `Cells (A→C) / ✓ Chemical / Agents (A→C) / ✓ Agent View / Agent View`.
+- **Live** — the top strip holds only the instructions pill and the Live bar; the layout root publishes
+  `--live-left-inset: 0px; --live-right-inset: 14px` and **no** `--live-viewer-row-shift`; switching the
+  viewer MID-RUN works (`City on the map` → `Slope` while playing, gen 13 → 17, the render changing to the
+  elevation map, still playing); the splitter driven to the minimum pane and back, both overlay panels
+  opened and closed, insets tracking (`--live-left-inset: 200px` with the Settings panel open) and removed
+  on exit.
+- **Panel snapshots after losing the `top` flag** — `F` on the Simulator tab collapses (side panels 1 → 0,
+  transport bar 1 → 0) and the second press restores both; Live entry/exit restores the pre-Live panel
+  state.
+- **Capture** — a WebM recording taken during the pass shows the simulation-scope frame with no DOM chrome
+  in it, which is the standing invariant: the old row was never recorded and neither is the new control.
+
+**Gates:** `npx tsc -p tsconfig.app.json --noEmit` clean · `npm run build` green ·
+`check-compile-identity --compare` **31 models, all surfaces unchanged**.
+
+## Known limitation (pre-existing, reached sooner)
+
+The transport bar is content-sized and centred inside an `overflow: hidden` canvas area, so a very narrow
+pane clips it at both ends. It now measures **~424 px** (was ~296 px), so the clipping threshold moves out
+by about the control's width. It only bites at the Live splitter's extreme — a 231 px minimum pane, where
+the bar was already clipped — and the default Live split on a laptop leaves an ~820 px pane. Wrapping the
+bar was deliberately NOT attempted: the play button's pinned width exists precisely so the centred bar's
+geometry never reflows.
+
+---
+
 # Phase 6 — FUTURE PHASE: pop the Live viewport out to an OS window (Document PiP)
 
 **Feasibility-gated. This phase may end in a written deferral, and that is an acceptable outcome.**
