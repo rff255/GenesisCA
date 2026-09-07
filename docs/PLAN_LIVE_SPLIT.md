@@ -377,6 +377,46 @@ are green; `git diff --stat` touches **no file** under `src/modeler/vpl/compiler
 - `Esc` and `Backspace` still reach `handleReset` from anywhere (the pre-existing defect Phase 4 fixes) —
   it had to be avoided during verification.
 
+### ⚠ POST-SHIP DEFECT — "Live syncs by going back to a previous state" (user report, 2026-09-07)
+
+Phase 3's premise — *a soft recompile preserves the board, because the main thread sends no board* — held
+on the main thread and **was false in the worker for every WebGPU-target model**. Reported as: *"when I
+change something in the node canvas and the live simulation syncs (regardless of Auto or Apply), instead
+of continuing from the state it is at with the changes, it goes back to a previous state, like last time
+I interacted with it. That defeats the purpose of the whole Live feature."*
+
+- **Root cause — `sim.worker.ts`, `startWebGPUInit`.** Under the WebGPU grid target the attribute buffers
+  live on the GPU (`gpuOwnsAttrs`, set by every `runStepWebGPU`); the CPU `readAttrs` mirror is refreshed
+  only by an explicit readback (`getState`, a cell-reading paint, the engine-toggle drains). A `recompile`
+  whose WGSL differs from the running shader misses the pipeline cache, **destroys the runtime and
+  re-seeds the fresh buffers with `uploadAttrs(rt, readAttrs)`** — the board is overwritten with the
+  last-synced generation while the generation counter keeps its value. "Last time I interacted with it"
+  is literally what the mirror holds.
+- **It is NOT a Live bug and NOT in Phase 3's diff.** The identical rewind happens from the Simulator tab
+  (edit in the Modeler, switch back) and predates the whole feature — measured on both. Live is what
+  turned a rare annoyance into "the feature is pointless", because it recompiles constantly.
+- **Fix (worker only, zero emit diff):** the message dispatcher gains the **grid sibling of the agent
+  one-shot readback** that was already there for `agentStoreStale` (audit M3) — defer the `recompile`,
+  `await ensureCpuAttrsFresh()`, replay it — gated on `recompileDropsWebGPUGridState(msg)` so a
+  cache-hit recompile still costs nothing. `webgpuShaderMatchesRuntime()` is now the ONE definition read
+  by both the pipeline cache and that gate. Full invariant:
+  [`docs/areas/simulation-engine.md`](areas/simulation-engine.md) → *A `recompile` that rebuilds a GPU
+  runtime must read the GPU down first*.
+- **Evidence, same protocol either side of a `git stash`** (Game of Life / WebGPU, board sampled with
+  `requestColorsSnapshot`, which reads the GPU and does **not** refresh the attr mirror — a `getState`
+  probe would have masked the bug): mirror synced at gen 20, board stepped to gen 59, one constant edited
+  in the macro through the real UI → **before: board = the gen-20 board, hash `2330622239` / 322 lit
+  (was `2342589582` / 393 lit an instant earlier); after: board unchanged, `2342589582` / 393 lit.**
+  Same result for the Simulator-tab route. Post-fix re-verified on: GoL with a brush stroke mid-run
+  (board and stroke both survive), **On demand** + `Ctrl+Enter` (0 posts while Pending, 1 recompile on
+  apply, board preserved), **Life3D** (voxel WebGPU, `Aggregate sum → average`, board preserved),
+  **Particle Life** (2000 agents GPU-resident, agent x-positions keep advancing — no regression on the
+  agent one-shot), and the structural path unchanged (adding a cell attribute → `⟳ Rebuild needed` →
+  Apply → exactly one worker swap, gen 0). 0 console errors throughout.
+- Gates: `tsc -b`, `npm run build`, `check-compile-identity --compare` (**31 models, all surfaces
+  unchanged**), `parity-agent-wasm`, `verify-agent-render`, `verify-sparse-stepping --wasm`,
+  `check-claude-md-budget` — all green.
+
 **What Phase 4 inherits.** `liveState.ts` now carries `liveShown` (already published by `App`) and the
 `LiveRuleStatus` type; `liveFocus` / `liveGraphDragging` are still to come. The chip and the
 apply-policy switch sit on the LEFT of the Live viewport bar, before the Settings / Controls / Layout

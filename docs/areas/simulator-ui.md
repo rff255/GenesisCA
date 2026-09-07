@@ -591,6 +591,26 @@ direct-render gate refresh and the indicator sync — everything past it is "the
 - Recovery is automatic: the first error-free compile posts `recompile` normally and the chip returns to
   `● Synced`.
 
+### ⚠ "A SOFT RECOMPILE PRESERVES THE BOARD" IS A WORKER-SIDE CLAIM, AND IT WAS FALSE ON WEBGPU
+
+The whole apply path above says *soft recompile ⇒ grid state preserved*. That is true of the **main
+thread** — it posts a `recompile` and sends no board — but the claim is only as good as what the worker
+does with the message, and there it was **wrong for every WebGPU-target model**: a rule-changing edit
+rebuilt the grid runtime and re-seeded the fresh GPU buffers from the stale CPU attr mirror, so the
+board **rewound to the last generation anything had read it back** (a save, a brush stroke, a `getState`
+— "the last time I interacted with it") while the generation counter kept climbing. It is the
+user-reported *"Live syncs by going back to a previous state — that defeats the purpose of the whole
+Live feature"* (2026-09-07), it **pre-dated Live** (the same edit made in the Modeler rewinds the
+Simulator tab the moment you switch back), and it is fixed in the worker with a one-shot GPU→CPU
+readback — the **grid sibling of the agent rule that was already there**. The invariant, the two tiers,
+the shared predicate and the measurements live in
+[`simulation-engine.md`](simulation-engine.md) → *A `recompile` that rebuilds a GPU runtime must read
+the GPU down first*; read it before you add anything to this apply path.
+
+**What it means for this file's material:** nothing here changed, and nothing here can fix it. If a
+future Live feature ever needs "apply without disturbing the board", the guarantee is not the absence of
+a board payload in the message — it is that invariant on the other side of the boundary.
+
 ### ⚠ `appliedModelRef` — THE BASELINE `needsFullInit` IS COMPUTED AGAINST
 
 `prevModelRef` is advanced unconditionally at the top of the model effect, so it answers *"what did the
