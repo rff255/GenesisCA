@@ -160,7 +160,7 @@ Indicators turn a running model into numbers: counts, totals, distributions, spa
 
 ### Interact while it runs
 
-Paint with a shaped brush, inspect any cell or agent, copy and paste regions, drop an image, a CSV file or real GIS data (Esri ASCII grids, GeoTIFF layers, GeoJSON vectors — with a georeferenced backdrop map) onto the grid — or export the board or the agent population back out as CSV or `.asc` — and retune global parameters live without recompiling. Named presets snapshot parameter sets (and optionally the board itself), so one model can carry many behaviours.
+Paint with a shaped brush, inspect any cell or agent, copy and paste regions, drop an image, a CSV file or real GIS data (Esri ASCII grids, GeoTIFF layers, GeoJSON vectors — with a georeferenced backdrop map) onto the grid — or export the board or the agent population back out as CSV or `.asc` — and retune global parameters live without recompiling. Named presets snapshot parameter sets (and optionally the board itself), so one model can carry many behaviours. **Live mode** goes one step further and puts the rule graph itself beside the running simulation, so you can rewire the model while it plays: a half-wired graph keeps the last rule that compiled running instead of stopping the world, and a change that would need a fresh board asks first.
 
 ### Capture and share
 

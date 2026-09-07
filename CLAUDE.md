@@ -24,9 +24,10 @@ Language (VPL) — a node-based graph editor — so users can design arbitrarily
 writing code. The goals are **accessibility** (no programming required) and **performance** (grids up to
 5000×5000+).
 
-Two coexisting modes in one app: the **Modeler** (design a model — properties, attributes,
-neighborhoods, mappings, the update-rules graph) and the **Simulator** (run and visualise it — Canvas/WebGL
-rendering, the simulation loop in a Web Worker). The user switches freely between them.
+Three coexisting modes in one app: the **Modeler** (design a model — properties, attributes,
+neighborhoods, mappings, the update-rules graph), the **Simulator** (run and visualise it — Canvas/WebGL
+rendering, the simulation loop in a Web Worker), and **Live** (both at once in a split workspace — edit the
+model while it plays). The user switches freely between them; a mode switch never restarts the run.
 
 Beyond the cell lattice the app carries two further tiers, each with its own rule graph:
 **bond-graph agents** (off-lattice, force-driven, bondable, dividing) and the **Overseer** (experiment
@@ -176,6 +177,7 @@ Browsable index with sizes: [`docs/areas/README.md`](docs/areas/README.md).
 | `src/simulator/engine/agentEngine.ts` — forces, bonds, division, the field bridge | `docs/areas/agent-engine.md` |
 | `src/simulator/engine/agentWebgpuRuntime.ts` render paths, `drawAgentsOverlay` | `docs/areas/agent-render.md` |
 | `src/simulator/SimulatorView.tsx` — canvas, transport, capture, panels | `docs/areas/simulator-ui.md` |
+| `src/live/**`, `src/simulator/simLayoutState.ts` — **Live** mode (the split workspace) | `docs/areas/simulator-ui.md` § *LIVE mode*, then `modeler-ui.md` § *LIVE mode* |
 | the agent brush inside `SimulatorView.tsx` | `docs/areas/agent-brush-ui.md` |
 | `src/simulator/render/gl3d.ts`, the voxel renderer, the 3D viewport | `docs/areas/grid-3d.md` |
 | `src/model/fileOperations.ts`, `.gcaproj` / `.gcastate` / presets / CSV / export | `docs/areas/io-and-formats.md` |

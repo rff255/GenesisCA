@@ -1,5 +1,13 @@
 # Brainstorm — see-through node canvas (edit the model while it plays)
 
+> **Status update (2026-09-07): BUILT, as the split workspace (Option B) — this document is the
+> point-in-time brainstorm and is kept as the origin record, not as a description of what shipped.**
+> Design authority: [IMPACT_MAP_LIVE_SPLIT.md](IMPACT_MAP_LIVE_SPLIT.md) + [PLAN_LIVE_SPLIT.md](PLAN_LIVE_SPLIT.md);
+> reference: [`areas/simulator-ui.md`](areas/simulator-ui.md) § *LIVE mode*. Two claims below are now
+> false: the two views are **no longer mutually exclusive** (Live mounts both, and the run does not
+> auto-pause), and several of the assumptions here were disproved during the impact map — see its
+> § 16 *Where the brainstorm's assumptions turned out WRONG*.
+
 **Status: brainstorm, no code.** Illustrated companion: [BRAINSTORM_SEE_THROUGH_CANVAS.html](BRAINSTORM_SEE_THROUGH_CANVAS.html) (live mockups — the board behind each mockup is a real Game of Life running in the page; Option A has a working dim slider + reach-through toggle).
 
 ## The idea

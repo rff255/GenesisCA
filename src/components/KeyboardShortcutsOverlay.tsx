@@ -43,7 +43,7 @@ const GROUPS: { title: string; rows: Row[]; wide?: boolean }[] = [
     rows: [
       ['Space', 'Step one generation'],
       ['Enter', 'Play / pause'],
-      ['Esc', 'Reset'],
+      ['Esc', 'Reset (Simulator tab only — in Live, Reset is the ■ button)'],
       ['F', 'Fullscreen canvas (toggle panels)'],
       ['Ctrl + C / V / X', 'Copy / paste / cut cells or agents (3D: anchored on the brush plane)'],
       ['Ctrl + wheel', 'Cycle input mappings'],
@@ -51,6 +51,25 @@ const GROUPS: { title: string; rows: Row[]; wide?: boolean }[] = [
       ['Shift + click', 'Inspect cell'],
       ['Right-click drag', 'Pan the grid'],
       ['Double right-click', 'Fit view (3D: reset the camera)'],
+    ],
+  },
+  {
+    // Live puts the graph and the running simulation side by side, so every key
+    // needs an owner. The rule: the pane under the POINTER owns it (hover is
+    // enough), except Enter (global play/pause) and the graph-only history keys.
+    title: 'Live — edit while it runs',
+    wide: true,
+    rows: [
+      ['Enter', 'Play / pause — global, from either pane'],
+      ['Ctrl + Enter', 'Apply now (send queued edits to the running simulation)'],
+      ['Space', 'Focused pane: quick-add on the graph, step on the simulation'],
+      ['Esc', 'Never resets in Live — it closes menus; Reset is the ■ button'],
+      ['Ctrl + C / V / X', 'Focused pane: nodes, or cells / agents'],
+      ['Ctrl + Z / Y / D', 'Undo / redo / duplicate — always the graph, from either pane'],
+      ['F', 'Collapses BOTH panel sets at once'],
+      ['1 … 9 (or numpad)', '3D view angles — only with the simulation pane focused'],
+      ['Point at a pane', 'Gives it the keyboard (accent ring); no click needed'],
+      ['Double-click the splitter', 'Snap the split back to 50/50'],
     ],
   },
   {
