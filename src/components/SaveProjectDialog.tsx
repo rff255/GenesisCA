@@ -100,7 +100,7 @@ function SaveProjectDialogInner({ initial, initialMeta, presetCount = 0, onConfi
   };
 
   return (
-    <div className={styles.backdrop} onClick={onCancel}>
+    <div className={styles.backdrop} role="dialog" aria-modal="true" onClick={onCancel}>
       <div className={styles.dialog} onClick={e => e.stopPropagation()}>
         <div className={styles.title}>Save Project</div>
         <div className={styles.body}>

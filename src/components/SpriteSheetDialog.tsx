@@ -382,7 +382,7 @@ export function SpriteSheetDialog({ dataUrl, initial, title = 'Sprite sheet', co
   const applyDisabled = !img || sel.length === 0;
 
   return (
-    <div style={overlay} onClick={onCancel} data-sprite-sheet-dialog>
+    <div style={overlay} role="dialog" aria-modal="true" onClick={onCancel} data-sprite-sheet-dialog>
       <div style={card} onClick={e => e.stopPropagation()}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
           <h3 style={{ margin: 0, fontSize: 15 }}>{title}</h3>

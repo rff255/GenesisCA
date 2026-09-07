@@ -23,6 +23,7 @@
 - Reroute Links (wire reroute points)
 - Cross-tab graph clipboard (copy/paste BETWEEN models — branch `updates`)
 - LIVE mode — the graph pane beside the running simulation (Phase 2, 2026-09-07)
+- LIVE mode — the graph pane’s INPUT OWNERSHIP (Phase 4, 2026-09-07)
 
 ---
 
@@ -486,8 +487,48 @@ is documented in [`simulator-ui.md`](simulator-ui.md) § *LIVE mode*. What the M
   - ⚠ **Do not undo the 092a8c7 graph-equality guard** while touching this: a `dimensions`-only
     write-back that is deep-equal returns the same state ref, which is what stops React Flow's mount-time
     measurement from triggering a soft recompile. Live depends on it.
-- **Keyboard ownership is NOT yet resolved (Phase 4).** Today `SimulatorView`'s main keyboard handler is
-  not visibility-gated and `GraphEditor`'s `Ctrl+C/V/X` is double-bound against it in the same phase on
-  the same target, so in Live both surfaces receive those keys. Both are **pre-existing** defects (`Esc`
-  in the Modeler resets the running simulation today); Live only makes them unmissable. Phase 4 adds the
-  `liveFocus` owner to [src/live/liveState.ts](src/live/liveState.ts).
+- **Keyboard ownership: RESOLVED in Phase 4** — see the section below. `SimulatorView`'s main handler is
+  now visibility-gated (until Phase 4, `Esc` in the Modeler RESET the running simulation and `Enter`
+  advanced it), and the `Ctrl+C/V/X` double binding routes by the `liveFocus` owner in
+  [src/live/liveState.ts](src/live/liveState.ts).
+
+## LIVE mode — the graph pane's INPUT OWNERSHIP (Phase 4, 2026-09-07)
+
+Phase 4 decides which of the two panes a keystroke acts on. The simulator half — the per-key table, the
+focus ring, the two pre-existing fixes and the perf guards — is in
+[`simulator-ui.md`](simulator-ui.md) § *LIVE mode — INPUT OWNERSHIP*. What the MODELER side owns:
+
+- **`Space` stands down when the VIEWPORT has focus.** `ModelerView`'s capture-phase handler claims
+  `Space` with `stopImmediatePropagation()` — that is what stops the always-mounted `SimulatorView` from
+  also stepping — so in Live it has to bail **before** that call when `getLiveFocus() !== 'graph'`, or the
+  viewport could never receive the key. Graph focus → quick-add at the cursor; viewport focus → one step.
+- **`Ctrl+C/V/X` was DOUBLE-BOUND against `SimulatorView`** — both bubble-phase on `document`, neither
+  stopping propagation — so in Live a `Ctrl+V` meant for the graph *also* pasted a cell region into the
+  running grid. `GraphEditor`'s arm now stands down when the viewport owns focus (and gained the
+  `isContentEditable` check its twin already had). **`Ctrl+Z / Y / D` are NOT focus-gated**: the run is not
+  undoable, so the graph owns undo from either pane and there is nothing to arbitrate.
+- **A modal or an open menu owns the keyboard.** Both this handler and the simulator's consult
+  `overlayOwnsKeyboard()` ([src/live/liveKeyboard.ts](src/live/liveKeyboard.ts)) — a DOM probe for
+  `[role="dialog"] / [role="menu"]`. ⚠ **`GraphEditor`'s context menu carries `role="menu"` for that
+  reason as much as for a11y**: it is the quick-add / connection-drop menu, it owns `Enter`, and its
+  search input is focused on a **50 ms timer** (the first frame renders `visibility: hidden` for viewport
+  clamping), so a focus-based test would miss exactly the window in which the user presses `Enter`.
+- **`F` collapses BOTH panel sets, through a shared intent.** In Live this handler dispatches
+  `genesis-toggle-canvas-fullscreen` instead of calling its own toggle, and the event carries
+  `detail.collapse` from `dispatchCanvasFullscreen()` — because two independent toggles are permanently
+  out of phase here (the Live policy enters with these panels closed and the simulator's bars open, so one
+  press would OPEN one while CLOSING the other). The graph's ⛶ button goes through the same dispatcher.
+  ⚠ `applyCanvasFullscreen` must **not** overwrite an existing snapshot with an all-closed one — an
+  explicit `collapse: true` can arrive when nothing here is open (the *other* workspace is the one with
+  panels), and that would make the matching restore a permanent no-op.
+- **The node-DRAG signal for the simulator's skip-blit guard is published from `handleNodesChange`** —
+  React Flow's own `dragging` flag on the position changes (`true` every move tick, `false` exactly once on
+  release), pushed to `liveState.setLiveGraphDragging`. Unconditional: the consumer gates it on `live`.
+  ⚠ It is also cleared from an **unmount cleanup**, because the editor is unmounted on every
+  non-Modeler/non-Live tab and a gesture interrupted that way emits no `dragging: false` — the viewport
+  would then never blit again.
+- **Verified in the real app:** graph focus → `Space` opens quick-add and posts 0 steps, `Esc` closes it
+  and the run keeps climbing; a node copied and pasted with graph focus posts **0** `writeRegion` /
+  `pasteAgents`; `Ctrl+Z` undoes from either focus; `F` collapsed the graph area 444 → 764 px together
+  with the simulator's bars and restored both exactly; the focus ring follows a real hover across the
+  splitter. 0 console errors.

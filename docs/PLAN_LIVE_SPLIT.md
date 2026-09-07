@@ -511,6 +511,70 @@ it (`ModelerView.tsx:266-267`). Align them in this phase.
   when the viewport has focus, and do nothing while typing in the graph.
 - **0 console errors.**
 
+## 4.8 Phase 4 — AS BUILT, and where it deviates from §4.1–4.7 (2026-09-07)
+
+Phase 4 shipped. `tsc -p tsconfig.app.json --noEmit`, `npm run build`,
+`check-compile-identity --compare` (**31 models, all surfaces unchanged**), `parity-agent-wasm.mjs` and
+`verify-agent-render.mjs` are green; `git diff --stat` touches **no file** under
+`src/modeler/vpl/compiler/**` or `src/modeler/vpl/nodes/**`, and `sim.worker.ts` has **no diff at all**.
+Reference documentation: [`docs/areas/simulator-ui.md`](areas/simulator-ui.md) § *LIVE mode — INPUT
+OWNERSHIP and the perf guards*, [`docs/areas/modeler-ui.md`](areas/modeler-ui.md) § *LIVE mode — the graph
+pane's INPUT OWNERSHIP*, [`docs/areas/overseer.md`](areas/overseer.md) § *Overseer ⇄ LIVE mode*, plus a
+line in [`grid-3d.md`](areas/grid-3d.md) (the numpad keys) and the two new files in
+[`project-structure.md`](areas/project-structure.md).
+
+| § | Planned | As built | Why |
+|---|---|---|---|
+| 4.2 Fix A | `if (!visibleRef.current) return;` unconditionally | `if (!visibleRef.current && !globalLiveKey) return;` | With the Live viewport COLLAPSED (Phase 2's `display: none` + `visible: false`) `live` is still true and the run still advances — and that state exists precisely so the user can work on the graph alone. Refusing `Enter` there would remove the only way to stop a running simulation without changing the layout. Verified: collapsed, gen 540 → 567, `Enter` pauses and resumes, `Space` posts nothing. |
+| 4.3 `Enter` | stand-down set = `INPUT/TEXTAREA/SELECT` + menus + dialogs | **`SELECT` is NOT in it** (INPUT / TEXTAREA / contentEditable / `[role=dialog]` / `[role=menu]` / the capture-review modal are) | A `<select>` KEEPS FOCUS after a pick and picking an option in a node is the commonest Live edit — the same finding Phase 3 recorded for `Ctrl+Enter` (§3.7). `Enter` has no native meaning in a closed dropdown, and while its popup is open the browser does not dispatch the key to the page at all. Every other key still stands down on `SELECT`. |
+| 4.3 `F` | "dispatch the event once; both consumers already listen" | The event carries **`detail.collapse`**, a SHARED intent flipped by `dispatchCanvasFullscreen()`; both consumers obey it, and both `⛶` buttons go through the same dispatcher | Two independent toggles are permanently OUT OF PHASE in Live: the panel policy enters with the graph's panels closed and the simulator's bars open, so one press would OPEN one while CLOSING the other — the plan's own acceptance test ("one press collapses both, a second restores both") is unreachable without an intent. Also required a snapshot fix in BOTH views: an explicit `collapse: true` arriving with nothing open must not overwrite the existing snapshot, or the matching restore is a permanent no-op. |
+| 4.3 | the stand-down set is a list of components to special-case | One shared predicate, **`overlayOwnsKeyboard()`** in the new [src/live/liveKeyboard.ts](src/live/liveKeyboard.ts) — a DOM probe for `[role="dialog"], [role="menu"]` — applied to the simulator's main handler, its `F` handler, `Ctrl+Enter` and `ModelerView`'s handler | The surfaces are written by six components but every one already renders ONLY while open, so presence in the DOM IS the signal, and `role` is the correct ARIA regardless. It also had to be DOM-based, not focus-based: the quick-add menu focuses its search input on a **50 ms timer**, which is exactly the window in which `Enter` arrives. Nine modals in `src/components` gained `role="dialog"` and `GraphEditor`'s context menu `role="menu"`. It fixes one more pre-existing misfire: `Enter` on a `ConfirmDialog` used to confirm the dialog AND toggle play. |
+| 4.5 FPS | "restore on exit" + "on first Live entry of a session" | Restored on exit **only if the user did not move the FPS control while in Live**; if they did, their value stands and Live never auto-lowers again this session | D11 says it is a default, not a clamp. Silently undoing a value the user set inside Live (or re-lowering it on every entry) is the clamp wearing a different hat. ⚠ The override test needs an explicit SETTLE step — the effect's deps include `live`, so it also runs in the commit where the entry effect only *scheduled* the drop to 30, and latching there makes the default never apply at all (observed, and silent). |
+| 4.5 skip-blit | `liveState.liveGraphDragging` read by the `stepped` handler | Read through a **subscription into a ref**, not `useSyncExternalStore` | A `useSyncExternalStore` read would re-render this 18 kloc component twice per drag gesture for a flag only the step loop consults. The subscription's falling edge is also where the single immediate redraw happens. |
+| 4.5 skip-blit | gate the per-`stepped` `draw()` | …**and its direct-render rAF follow-up** | Under direct render the follow-up is a second blit per step; gating only the first halves the saving instead of taking it. Also cleared from `GraphEditor`'s unmount cleanup (an interrupted gesture emits no `dragging: false`). |
+| — | *(not in the plan)* | The transport titles are Live-aware: **Reset (Esc)** → *Reset*, **Step (Space)** → *Step (Space — with the viewport focused)* | A tooltip that names a key the control no longer answers to is worse than one that names none — and `Esc` no longer resets in Live. |
+| — | *(not in the plan)* | A DEV-only `window.__setLiveGraphDragging` hook in `liveState.ts` | A React Flow node drag cannot be driven by synthetic pointer events (the Phase-2 note), so the skip-blit guard would be unverifiable otherwise. It drives the exact flag the real gesture publishes. |
+
+**Measured results** (all in the real app, real worker, real GPU, 0 console errors):
+
+- **The pre-existing bug, A/B on the same tree** (Phase-3 `SimulatorView.tsx` stashed, reproduced,
+  restored): in the **Modeler**, `Enter` posted a `step` and moved gen 250 → 251, `Esc` posted `reset` and
+  gen → 0. After: `Enter` / `Esc` / `Backspace` / `Space` → **0 posts, gen unchanged**.
+- **Live, Game of Life:** graph focus `Space` → quick-add, 0 steps; `Esc` → menu closed, 0 resets, gen
+  climbing 259 → 306. Viewport focus `Space` → exactly 1 step; `Esc` and `Backspace` → 0 resets. `Enter`
+  toggles play from both panes; inside the quick-add search input it adds the node and does **not** toggle;
+  with a node's `<select>` focused it **does**. `Ctrl+Z` undoes from either focus.
+- **Clipboard routing:** graph focus → node pasted, 0 `writeRegion`/`pasteAgents`; viewport focus over the
+  board → 1 `readRegion` + 1 `writeRegion`, 0 nodes added.
+- **`F`:** with a modeler panel and the sim bars open, press 1 → graph area 444 → 764 px + the transport
+  down to its bare ear; press 2 → both exactly restored.
+- **Overseer:** Run on `GoL Replicate Statistics` → the Live nav button disabled with the reason; Abort →
+  enabled; in Live no tab strip and no Run Experiment button.
+- **FPS:** 61 → Live 30 → back on the Simulator tab 61; raised to 45 inside Live → 45 on exit and on
+  re-entry.
+- **Skip-blit, 1.5 s playing windows:** Game of Life 79 blits / 39 steps normal → **0 blits / 40 steps,
+  gen +42** dragging → 5 blits within 60 ms of release. Particle Life (GPU-resident direct render):
+  80 → **0** → 5, with **0 `attachAgentCanvas`** during the drag.
+- **3D (Life3D):** numpad digits produce 0 GL draws with the graph focused and 4 with the viewport
+  focused; a real orbit drag in the Live pane works (8 GL draws, view changed).
+- **Simulator tab unchanged:** `Esc` still resets (1 `reset`, gen → 0), `Space` still steps.
+
+**What Phase 5 must document** (shortcut tables — `HelpView.tsx` `#help-shortcuts` and
+`KeyboardShortcutsOverlay.tsx`'s `GROUPS`):
+
+- A new **Live** group: `Enter` = play/pause **globally** (either pane) · `Ctrl+Enter` = apply now ·
+  `Space` = the focused pane (quick-add / step) · `Esc` **never resets in Live** (it dismisses menus) ·
+  `Ctrl+C/V/X` = the focused pane · `Ctrl+Z/Y/D` = the graph, from either pane · `F` = collapses BOTH
+  panel sets · digits `1-9` = 3D view angles, viewport focus only.
+- The **Simulator** group is unchanged on its own tab, but the note "Esc resets" now needs
+  "…on the Simulator tab; in Live, Reset is the ■ button".
+- Worth a sentence in Help: **focus follows the pointer** (click or hover) and the focused pane carries a
+  1 px accent ring.
+
+**Left for Phase 6** (unchanged): the Document Picture-in-Picture spike. Nothing in Phase 4 constrains it,
+except that a PiP viewport pane would need its own `liveFocus` source (the pane wrapper it currently hangs
+off would no longer be under the pointer).
+
 ---
 
 # Phase 5 — Documentation and the verification sweep

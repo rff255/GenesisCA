@@ -240,7 +240,7 @@ export function SpriteCropDialog({ frameUrls, initial, title = 'Crop sprite', on
   const hint: React.CSSProperties = { fontSize: 11, color: '#8090a0' };
 
   return (
-    <div style={overlay} onClick={onCancel} data-sprite-crop-dialog>
+    <div style={overlay} role="dialog" aria-modal="true" onClick={onCancel} data-sprite-crop-dialog>
       <div style={card} onClick={e => e.stopPropagation()}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
           <h3 style={{ margin: 0, fontSize: 15 }}>{title}</h3>

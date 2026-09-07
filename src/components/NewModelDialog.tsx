@@ -46,7 +46,7 @@ export function NewModelDialog({ onCreate, onCancel }: {
   }, [onCreate, onCancel]);
 
   return (
-    <div className={dlg.backdrop} onClick={onCancel} data-testid="new-model-dialog">
+    <div className={dlg.backdrop} role="dialog" aria-modal="true" aria-label="New model" onClick={onCancel} data-testid="new-model-dialog">
       <div className={`${dlg.dialog} ${styles.wide}`} onClick={e => e.stopPropagation()}>
         <div className={dlg.title}>
           New model

@@ -19,7 +19,11 @@ import { beginBusy } from './components/busyState';
 import { setPendingMacroImport } from './modeler/vpl/graphState';
 import { LiveSplitter } from './live/LiveSplitter';
 import { getLiveLayout, subscribeLiveLayout } from './live/liveUiState';
-import { setLiveShown } from './live/liveState';
+import {
+  setLiveShown, setLiveFocus, getLiveFocus, subscribeLiveFocus,
+  getOverseerRunning, subscribeOverseerRunning, LIVE_OVERSEER_BUSY_REASON,
+  resetLiveFullscreenIntent,
+} from './live/liveState';
 import { simLayoutApi } from './simulator/simLayoutState';
 import type { CAModel } from './model/types';
 import styles from './App.module.css';
@@ -67,6 +71,16 @@ function AppInner() {
   // useSyncExternalStore so the two panes' inline flex values follow it.
   const liveLayout = useSyncExternalStore(subscribeLiveLayout, getLiveLayout);
   const isLive = mode === 'live';
+  // LIVE (Phase 4) — which pane owns the keyboard, and the ring that says so.
+  // Set from a pointerdown OR a pointerenter on either pane wrapper (hovering
+  // is enough to type, which is what makes "point at the graph, hit Space"
+  // work without a click that would also deselect or paint something).
+  const liveFocus = useSyncExternalStore(subscribeLiveFocus, getLiveFocus);
+  // An Overseer experiment and Live are mutually exclusive (every graph edit
+  // aborts a running experiment), so the Live button greys with the reason
+  // while one runs — grey, not hide, because Abort is visible in the
+  // Experiments panel: the user CAN reach the working state.
+  const overseerRunning = useSyncExternalStore(subscribeOverseerRunning, getOverseerRunning);
   // The two pane wrappers. They exist in EVERY mode (see the <main> comment) —
   // the refs let the Live splitter mutate their `flex` directly during a drag
   // instead of re-rendering the whole app tens of times a second.
@@ -85,7 +99,9 @@ function AppInner() {
   // Publish the mode to the cross-tree flag store. `SimulatorView` reads Live
   // from its own `live` prop; the GRAPH side (GraphEditor's write-back debounce)
   // is in another tree and reads it from here. `App` is the one place that knows.
-  useEffect(() => { setLiveShown(isLive); }, [isLive]);
+  // (…and reset the shared canvas-fullscreen intent on the way out, so the next
+  // Live entry starts from "nothing collapsed by F".)
+  useEffect(() => { setLiveShown(isLive); if (!isLive) resetLiveFullscreenIntent(); }, [isLive]);
   // Live dirty-state ref for the once-registered file-handler consumer (below),
   // which would otherwise capture a stale isDirty from mount.
   const isDirtyRef = useRef(isDirty);
@@ -423,14 +439,17 @@ function AppInner() {
             onClick={() => setMode('simulator')}
           >{SIMULATOR_ICON}Simulator</button>
           {/* LIVE — the rule graph and the RUNNING simulation side by side.
-              (Phase 4 greys this out while an Overseer experiment is running:
+              GREYED with the reason while an Overseer experiment is running:
               every graph edit aborts a running experiment, so the two modes are
               genuinely exclusive — and Abort is visible in the Experiments
-              panel, which is the "grey with the reason" case, not the hide one.) */}
+              panel, which is the "grey with the reason" case, not the hide one. */}
           <button
             className={`${styles.navButton} ${styles.navModeButton} ${mode === 'live' ? styles.navButtonActive : ''}`}
             onClick={() => setMode('live')}
-            title="Live — edit the rule graph beside the running simulation"
+            disabled={overseerRunning}
+            title={overseerRunning
+              ? LIVE_OVERSEER_BUSY_REASON
+              : 'Live — edit the rule graph beside the running simulation'}
           >{LIVE_ICON}Live</button>
         </div>
 
@@ -503,7 +522,16 @@ function AppInner() {
       >
         <div
           ref={modelerPaneRef}
-          className={isLive ? styles.livePane : undefined}
+          className={isLive
+            ? `${styles.livePane} ${liveFocus === 'graph' ? styles.livePaneFocused : ''}`
+            : undefined}
+          // The keyboard owner follows the pointer. `Capture` on the down so a
+          // handler that stops propagation (React Flow's node drag, a widget)
+          // cannot swallow the ownership change; `pointerenter` so a hover is
+          // enough. Both are no-ops outside Live — where this wrapper is
+          // `display: contents` and holds no box of its own.
+          onPointerDownCapture={isLive ? () => setLiveFocus('graph') : undefined}
+          onPointerEnter={isLive ? () => setLiveFocus('graph') : undefined}
           // Outside Live the wrapper is `display: contents`, so `.modelerLayout`
           // is a direct child of `.content` exactly as it was before Live existed.
           style={isLive
@@ -521,7 +549,11 @@ function AppInner() {
         )}
         <div
           ref={simulatorPaneRef}
-          className={isLive && !liveLayout.viewportCollapsed ? styles.livePane : undefined}
+          className={isLive && !liveLayout.viewportCollapsed
+            ? `${styles.livePane} ${liveFocus === 'viewport' ? styles.livePaneFocused : ''}`
+            : undefined}
+          onPointerDownCapture={isLive ? () => setLiveFocus('viewport') : undefined}
+          onPointerEnter={isLive ? () => setLiveFocus('viewport') : undefined}
           // A COLLAPSED viewport is `display: none`, not a zero-width flex item:
           // a 0-width canvas makes `canvas.width = 0`, and the next `drawImage`
           // then throws `InvalidStateError` and unmounts React. `display: none`

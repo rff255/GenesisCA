@@ -81,7 +81,7 @@ export function NameInputDialog({
   }, [value, allowEmpty, onConfirm, onCancel]);
 
   return (
-    <div className={styles.backdrop} style={{ background: 'transparent' }} onClick={onCancel}>
+    <div className={styles.backdrop} role="dialog" aria-modal="true" style={{ background: 'transparent' }} onClick={onCancel}>
       <div
         ref={cardRef}
         className={styles.dialog}
