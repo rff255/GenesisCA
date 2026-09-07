@@ -238,3 +238,33 @@
   flex: 1;
   overflow: hidden;
 }
+
+/* --- LIVE mode: the split workspace -------------------------------------
+   Modifiers ONLY — the base `.content` rule above is untouched, so the
+   Modeler and Simulator tabs lay out byte-identically to before Live existed.
+   Dock right / dock bottom / swap sides are pure `flex-direction`, which is
+   why the layout menu costs nothing: no element ever moves in the DOM. */
+.content.liveRight {
+  display: flex;
+  flex-direction: row;
+}
+
+.content.liveBottom {
+  display: flex;
+  flex-direction: column;
+}
+
+.content.liveRight.liveSwap { flex-direction: row-reverse; }
+.content.liveBottom.liveSwap { flex-direction: column-reverse; }
+
+/* ⚠ `min-width: 0` / `min-height: 0` are LOAD-BEARING: a flex item refuses to
+   shrink below its content's intrinsic size without them, and the splitter
+   would jam as soon as either pane's content got wide (a large node graph, a
+   wide canvas). `position: relative` + `overflow: hidden` keep each view's
+   absolutely-positioned overlays inside their own pane. */
+.livePane {
+  position: relative;
+  overflow: hidden;
+  min-width: 0;
+  min-height: 0;
+}

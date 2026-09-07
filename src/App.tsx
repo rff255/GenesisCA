@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react';
 import type { ReactNode } from 'react';
 import { ModelProvider, useModel } from './model/ModelContext';
 import { readModelFile } from './model/fileOperations';
@@ -17,10 +17,13 @@ import { KeyboardShortcutsOverlay } from './components/KeyboardShortcutsOverlay'
 import { BusyOverlay, useBusy } from './components/BusyOverlay';
 import { beginBusy } from './components/busyState';
 import { setPendingMacroImport } from './modeler/vpl/graphState';
+import { LiveSplitter } from './live/LiveSplitter';
+import { getLiveLayout, subscribeLiveLayout } from './live/liveUiState';
+import { simLayoutApi } from './simulator/simLayoutState';
 import type { CAModel } from './model/types';
 import styles from './App.module.css';
 
-type AppMode = 'modeler' | 'simulator' | 'help' | 'library' | 'styleref';
+type AppMode = 'modeler' | 'simulator' | 'live' | 'help' | 'library' | 'styleref';
 
 /** How often an installed (long-lived) session asks the SW to look for a new
  *  build. Only fires while online; a page load / return-to-foreground checks too. */
@@ -47,12 +50,37 @@ const MODELER_ICON = modeIcon(
 const SIMULATOR_ICON = modeIcon(
   <><rect x="2.5" y="4" width="19" height="16" rx="2" /><polygon points="10,9 15.5,12 10,15" fill="currentColor" stroke="none" /></>,
 );
+/** Live — a split rectangle: the node graph on the left, the running model
+ *  (a play triangle) on the right. Reads as "graph + run, at once". */
+const LIVE_ICON = modeIcon(
+  <><rect x="2.5" y="4" width="19" height="16" rx="2" /><path d="M11 4v16" /><polygon points="14.5,9 19,12 14.5,15" fill="currentColor" stroke="none" /></>,
+);
 
 function AppInner() {
   // Every tab/reload lands on the Library — it's the natural starting point for
   // picking a model to explore or fork.
   const [mode, setMode] = useState<AppMode>('library');
   const { model, isDirty, loadedFileName, loadModel } = useModel();
+  // LIVE MODE — the persisted pane layout (dock / swap / split / collapse).
+  // A module global with localStorage write-through, read here through
+  // useSyncExternalStore so the two panes' inline flex values follow it.
+  const liveLayout = useSyncExternalStore(subscribeLiveLayout, getLiveLayout);
+  const isLive = mode === 'live';
+  // The two pane wrappers. They exist in EVERY mode (see the <main> comment) —
+  // the refs let the Live splitter mutate their `flex` directly during a drag
+  // instead of re-rendering the whole app tens of times a second.
+  const contentRef = useRef<HTMLElement>(null);
+  const modelerPaneRef = useRef<HTMLDivElement>(null);
+  const simulatorPaneRef = useRef<HTMLDivElement>(null);
+  // A DISCRETE Live layout change (entering/leaving Live, dock, swap, collapse,
+  // a committed split) is the FINAL size, so the simulator must re-size its
+  // backing stores and re-attach its direct-render canvases in the very frame
+  // the layout changed. A LAYOUT effect runs after the DOM mutation and before
+  // paint — the same shape as SimulatorView's own panel/bar trigger. NOT the
+  // ResizeObserver catch-all: see src/simulator/simLayoutState.ts.
+  useLayoutEffect(() => {
+    simLayoutApi?.drawNow();
+  }, [mode, liveLayout.dock, liveLayout.swapped, liveLayout.split, liveLayout.viewportCollapsed]);
   // Live dirty-state ref for the once-registered file-handler consumer (below),
   // which would otherwise capture a stale isDirty from mount.
   const isDirtyRef = useRef(isDirty);
@@ -242,18 +270,21 @@ function AppInner() {
     // are carried only when the Modeler was ALREADY active — otherwise the drop
     // landed on some other view and the editor places the macro at its
     // viewport centre instead.
+    // In LIVE the graph editor is already on screen, so the drop lands where the
+    // user is; switching modes would eject them from Live for no reason. The
+    // same guard is on every `setMode('simulator')` below.
     if (ext === 'gcamacro') {
       setPendingMacroImport(
-        mode === 'modeler' ? { file, clientX, clientY } : { file },
+        mode === 'modeler' || mode === 'live' ? { file, clientX, clientY } : { file },
       );
-      setMode('modeler');
+      if (mode !== 'live') setMode('modeler');
       window.dispatchEvent(new CustomEvent('genesis-import-macro-file'));
       return;
     }
     // .asc (Esri ASCII grid) rides the SAME dialog — it decides its own shape
     // from the file's header.
     if (['csv', 'tsv', 'asc'].includes(ext)) {
-      setMode('simulator');
+      if (mode !== 'live') setMode('simulator');
       window.dispatchEvent(new CustomEvent('genesis-open-csv-file', { detail: { file } }));
       return;
     }
@@ -262,7 +293,7 @@ function AppInner() {
     // which to disambiguate. A GeoJSON saved as `.json` goes through the transport
     // bar's "Import GeoJSON…" item instead, whose picker accepts it and sniffs.
     if (ext === 'geojson') {
-      setMode('simulator');
+      if (mode !== 'live') setMode('simulator');
       window.dispatchEvent(new CustomEvent('genesis-open-geojson-file', { detail: { file } }));
       return;
     }
@@ -270,12 +301,12 @@ function AppInner() {
     // a TIFF is an image by MIME, but a georeferenced raster belongs in the band
     // → attribute importer, not the colour-mapping one.
     if (['tif', 'tiff'].includes(ext)) {
-      setMode('simulator');
+      if (mode !== 'live') setMode('simulator');
       window.dispatchEvent(new CustomEvent('genesis-open-geotiff-file', { detail: { file } }));
       return;
     }
     if (file.type.startsWith('image/') || ['png', 'jpg', 'jpeg', 'bmp', 'webp'].includes(ext)) {
-      setMode('simulator');
+      if (mode !== 'live') setMode('simulator');
       window.dispatchEvent(new CustomEvent('genesis-open-image-file', { detail: { file } }));
       return;
     }
@@ -386,6 +417,16 @@ function AppInner() {
             className={`${styles.navButton} ${styles.navModeButton} ${mode === 'simulator' ? styles.navButtonActive : ''}`}
             onClick={() => setMode('simulator')}
           >{SIMULATOR_ICON}Simulator</button>
+          {/* LIVE — the rule graph and the RUNNING simulation side by side.
+              (Phase 4 greys this out while an Overseer experiment is running:
+              every graph edit aborts a running experiment, so the two modes are
+              genuinely exclusive — and Abort is visible in the Experiments
+              panel, which is the "grey with the reason" case, not the hide one.) */}
+          <button
+            className={`${styles.navButton} ${styles.navModeButton} ${mode === 'live' ? styles.navButtonActive : ''}`}
+            onClick={() => setMode('live')}
+            title="Live — edit the rule graph beside the running simulation"
+          >{LIVE_ICON}Live</button>
         </div>
 
         {/* Right: app-level controls */}
@@ -433,10 +474,65 @@ function AppInner() {
           </a>
         </div>
       </nav>
-      <main className={styles.content}>
-        {mode === 'modeler' && <ModelerView />}
-        <div style={{ display: mode === 'simulator' ? 'contents' : 'none' }}>
-          <SimulatorView visible={mode === 'simulator'} />
+      {/* ⚠ THE ONE INVARIANT THE LIVE MODE RESTS ON: `SimulatorView`'s POSITION
+          IN THE REACT ELEMENT TREE IS IDENTICAL IN `simulator` AND `live`, and
+          so is `ModelerView`'s in `modeler` and `live`. React reconciles by
+          position, so a Live-only wrapper around either view would UNMOUNT and
+          REMOUNT it — and `SimulatorView` owns the Web Worker, the WASM memory,
+          the WebGPU device, the agent SoA snapshot and the whole grid state.
+          Switching to Live would reset generation 12 000 to 0.
+
+          Therefore: both wrappers are mounted in EVERY mode (the modeler one is
+          an empty `display: contents` div outside Live/Modeler — free), and the
+          ONLY thing Live changes is `className` / `style`. Dock-bottom and
+          swap-sides are then pure `flex-direction` on `.content`; no element
+          moves at all. The splitter is a Live-only sibling BETWEEN the two
+          wrappers, and `{cond && …}` renders null elsewhere, holding the slot. */}
+      <main
+        ref={contentRef}
+        className={[
+          styles.content,
+          isLive ? (liveLayout.dock === 'bottom' ? styles.liveBottom : styles.liveRight) : '',
+          isLive && liveLayout.swapped ? styles.liveSwap : '',
+        ].filter(Boolean).join(' ')}
+      >
+        <div
+          ref={modelerPaneRef}
+          className={isLive ? styles.livePane : undefined}
+          // Outside Live the wrapper is `display: contents`, so `.modelerLayout`
+          // is a direct child of `.content` exactly as it was before Live existed.
+          style={isLive
+            ? { flex: liveLayout.viewportCollapsed ? '1 1 0%' : `${liveLayout.split} 1 0%` }
+            : { display: 'contents' }}
+        >
+          {(mode === 'modeler' || isLive) && <ModelerView live={isLive} />}
+        </div>
+        {isLive && (
+          <LiveSplitter
+            containerRef={contentRef}
+            graphPaneRef={modelerPaneRef}
+            viewportPaneRef={simulatorPaneRef}
+          />
+        )}
+        <div
+          ref={simulatorPaneRef}
+          className={isLive && !liveLayout.viewportCollapsed ? styles.livePane : undefined}
+          // A COLLAPSED viewport is `display: none`, not a zero-width flex item:
+          // a 0-width canvas makes `canvas.width = 0`, and the next `drawImage`
+          // then throws `InvalidStateError` and unmounts React. `display: none`
+          // is the proven-safe hidden state this view already lives in on every
+          // other tab (and `visible` goes false with it, so every draw is gated).
+          style={isLive
+            ? (liveLayout.viewportCollapsed
+              ? { display: 'none' }
+              : { flex: `${1 - liveLayout.split} 1 0%` })
+            : { display: mode === 'simulator' ? 'contents' : 'none' }}
+        >
+          <SimulatorView
+            visible={mode === 'simulator' || (isLive && !liveLayout.viewportCollapsed)}
+            activeTab={mode === 'simulator'}
+            live={isLive}
+          />
         </div>
         {mode === 'help' && <HelpView />}
         {mode === 'library' && <ModelsLibrary onLoadModel={handleLoadLibraryModel} />}

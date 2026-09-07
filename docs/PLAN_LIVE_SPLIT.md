@@ -204,6 +204,32 @@ Optional and small: on first Live entry, collapse both side panels via the exist
 - **0 console errors** throughout (install a `window.onerror` handler *before* reproducing — the
   blank-screen-React-crash rule).
 
+## 2.6 Phase 2 — AS BUILT, and where it deviates from §2.1–2.5 (2026-09-07)
+
+Phase 2 shipped. `tsc`, `npm run build`, `check-compile-identity --compare` (**31 models, all surfaces
+unchanged**), `verify-agent-render.mjs` and `parity-agent-wasm.mjs` all green; `git diff --stat` touches
+no file under `src/modeler/vpl/compiler/**` or `src/modeler/vpl/nodes/**`. Reference documentation is in
+[`docs/areas/simulator-ui.md`](areas/simulator-ui.md) § *LIVE mode* and
+[`docs/areas/modeler-ui.md`](areas/modeler-ui.md) § *LIVE mode*. The deviations, and why:
+
+| § | Planned | As built | Why |
+|---|---|---|---|
+| 2.1 | `src/live/liveState.ts` holds `liveShown`, `liveFocus`, `liveGraphDragging` | It holds **`liveLayoutLocked`** only | Phase 2 has no consumer for the other three. `liveShown` is a PROP (`live`) on `SimulatorView` — one source of truth beats a mirrored global; `liveFocus` / `liveGraphDragging` are Phase 4's, and the module is there for them. `liveLayoutLocked` IS needed now: `LiveSplitter` lives outside `SimulatorView` and must grey out while a recording pins the frame size (§S12/D9). |
+| 2.1 | `liveUiState` field `simPanelsCollapsed` | **Dropped** | The `preLivePanelStateRef` save/restore covers it, and Live always enters with the panels collapsed by policy. A persisted field nothing reads is dead weight. `applyPolicy` IS kept (Phase 3 reads it). |
+| 2.2 §6 | Brush + indicators as **popovers** hosting extracted right-panel JSX | The simulator's two side panels **FLOAT over the canvas in Live** (`.liveOverlayPanels`), toggled by Settings / Controls buttons on the viewport bar | Extracting ~760 lines of inline right-panel JSX (referencing dozens of locals declared below the return, plus `brushSectionRef` / `brushSectionH`) into render-body variables is a large, risky refactor whose only gain is the popover *shape*. Making the existing panels absolutely-positioned achieves the same thing — panel-sized surfaces floating over the viewport, reached from the bar — with a CSS modifier and zero JSX movement, and it also avoids any double-mount of the indicator charts (the mount-at-width-0 trap). |
+| 2.2 §5 | Viewport bar carries the **apply-policy switch** and the transport chip | **Neither is rendered** | Phase 2 does not change the edit→rule pipeline, so both would be visible, enabled and internally inert — precisely what the "an enabled control must do something" rule forbids. Phase 3 lands the behaviour and the controls together. |
+| 2.2 (ModelerView) | "Optional and small: collapse both side panels on first Live entry" | **Done, and it is NOT optional** | Measured on a 500 px Live graph pane with the Properties panel open: `.graphArea` = **101 px**. With the panels closed it is 421 px. It carries the same snapshot/restore discipline as the simulator's, **plus** an unmount-only cleanup that writes the snapshot back into `modelerUiState` (the write-through effect persists the collapsed state, so a Live → Library unmount would otherwise leave the panels shut for good). |
+| 2.3 | Collapse ⇒ the viewport pane shrinks away | Collapse ⇒ the pane is **`display: none`** and `visible` goes false | `canvas.parentElement?.clientWidth ?? 500` returns **0** (not the fallback) for a 0-width pane, so `canvas.width = 0` and the next `drawImage` throws `InvalidStateError` and unmounts React. `display: none` is the proven-safe hidden state. The auto-pause arm therefore had to become `!activeTab && !live && playing` (the impact map's own §3 formulation) so a collapsed viewport does not stop the run. |
+| 2.4 | Brush / Indicators popover triggers hidden when the model lacks that layer | One **Controls** toggle, always shown | It opens the whole right panel, which always has content (the brush is always there). Nothing inert is exposed. |
+| — | *(not in the plan)* | The **3D View panel's** inline `top` is `live ? 44 : 12` | It is the one other top-right `.canvasArea` overlay and it collided with the viewport bar (measured: bar `44..72`, panel `48..491`). |
+| — | *(not in the plan)* | One-line fix: the 3D GL canvas's window-level `onUp` now checks `hasPointerCapture` before `releasePointerCapture` | **Pre-existing**, reproduced on the plain Simulator tab: that call throws `NotFoundError` for any pointer release outside the GL canvas while a 3D model is loaded, so it fired on every transport-button click. The Live splitter drives it 30× a drag, which made "0 console errors" unverifiable otherwise. |
+
+**What Phase 3 / Phase 4 inherit.** The pipeline is still today's: a bad compile still nulls the running
+rule and still shows the red banner; a structural edit still re-seeds. Keyboard ownership is untouched, so
+in Live both surfaces still receive `Space` / `Enter` / `Esc` / `Backspace` / `Ctrl+C/V/X` — those remain
+the pre-existing defects §6 describes. The Live nav button is always enabled (no Overseer gate yet), and
+the FPS cap / skip-blit guards are not in.
+
 ---
 
 # Phase 3 — Pipeline (last-good-rule, apply policy, rebuild prompt)

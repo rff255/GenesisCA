@@ -1,0 +1,125 @@
+/* LIVE MODE — the compact bar over the simulation viewport pane.
+   Lives INSIDE `.canvasArea` (so every element can carry `data-sim-overlay` and
+   a click on it can never fall through and paint the grid) and is anchored
+   top-RIGHT: the author-instructions pill already owns `left: 36px`, and in a
+   narrow Live pane a second top-left widget would collide with it. */
+
+.bar {
+  position: absolute;
+  top: var(--space-4);
+  right: var(--space-4);
+  z-index: 7;
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: var(--space-1);
+  background: var(--color-bg-panel);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+}
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: var(--space-2) var(--space-4);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  color: var(--color-text-tertiary);
+  font-size: var(--font-2xs);
+  font-weight: 600;
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: color var(--duration-base), background var(--duration-base), border-color var(--duration-base);
+}
+
+.btn:hover:not(:disabled) {
+  color: var(--color-text-primary);
+  background: var(--color-overlay-hover-weak);
+}
+
+.btnActive {
+  color: var(--color-accent);
+  background: var(--color-accent-soft);
+  border-color: var(--color-accent);
+}
+
+.btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.btn svg { flex-shrink: 0; }
+
+/* --- Layout menu ------------------------------------------------------- */
+
+.menuWrap {
+  position: relative;
+  display: inline-flex;
+}
+
+.menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  z-index: 8;
+  min-width: 180px;
+  display: flex;
+  flex-direction: column;
+  padding: var(--space-2);
+  background: var(--color-bg-panel);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.5);
+}
+
+.menuLabel {
+  padding: var(--space-2) var(--space-4) var(--space-1);
+  font-size: var(--font-3xs);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--color-text-muted);
+}
+
+.menuItem {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  width: 100%;
+  padding: var(--space-3) var(--space-4);
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-sm);
+  color: var(--color-text-secondary);
+  font-size: var(--font-2xs);
+  text-align: left;
+  cursor: pointer;
+}
+
+.menuItem:hover:not(:disabled) {
+  background: var(--color-overlay-hover-weak);
+  color: var(--color-text-primary);
+}
+
+.menuItem:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.menuItemActive {
+  color: var(--color-accent);
+}
+
+.menuCheck {
+  width: 12px;
+  flex-shrink: 0;
+  text-align: center;
+}
+
+.menuSep {
+  height: 1px;
+  margin: var(--space-2) var(--space-2);
+  background: var(--color-border);
+}
