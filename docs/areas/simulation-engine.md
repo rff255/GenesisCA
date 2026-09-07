@@ -23,6 +23,52 @@
 - Grid Init Event (global procedural seeding — all 3 targets)
 - Skip Isolated Empty Cells (opt-in large-grid optimization — branch `sim_agent_fixes`)
 - LIVE mode adds NO worker message (2026-09-07)
+- ⚠ A `recompile` THAT REBUILDS A GPU RUNTIME MUST READ THE GPU DOWN FIRST (2026-09-07)
+
+---
+
+## ⚠ A `recompile` THAT REBUILDS A GPU RUNTIME MUST READ THE GPU DOWN FIRST (2026-09-07)
+
+**THE INVARIANT: no rebuild may re-seed a fresh GPU buffer from a CPU mirror that the GPU has been
+overwriting.** Break it and the simulation silently REWINDS to the last time that mirror was synced —
+the generation counter keeps its value, no error is raised, and the board looks plausible, which is why
+it survived every gate for as long as it did.
+
+**It has bitten twice, on both tiers, and the two fixes are siblings in one place** — the message
+dispatcher in [sim.worker.ts](src/simulator/engine/sim.worker.ts), which defers the `recompile`, does a
+one-shot readback and replays it (`asyncStepBatchInFlight` + `deferredDuringAsyncBatch` +
+`endAsyncStepBatch`, the mechanism the P0 async-batch guard already owned):
+
+| Tier | Authoritative when | Stale mirror | The re-seed | One-shot |
+|---|---|---|---|---|
+| **Agents** (GPU-resident, free mode) | `agentStoreStale` | the CPU `AgentStore` | `agentGpuUploadPending` → the next resident batch uploads the SoA | `ensureAgentStoreFresh()` (audit M3) |
+| **CA grid** (WebGPU target) | `gpuOwnsAttrs` — set by EVERY `runStepWebGPU` | the CPU `readAttrs` | `startWebGPUInit` → `uploadAttrs(rt, readAttrs)` after the rebuild | `ensureCpuAttrsFresh()` |
+
+The grid half was the **user-reported "Live syncs by going back to a previous state"** bug (2026-09-07),
+and it **pre-dated Live** — the identical rewind happens on the Simulator tab when you edit in the
+Modeler and switch back, because the rewind is entirely in the worker's handling of a message both
+paths send. Live just makes it happen dozens of times a minute. Measured, same protocol on both sides of
+a `git stash`, Game of Life on WebGPU: mirror synced at gen 20, board run on to gen 59, **one** edit →
+the board came back **bit-identical to the gen-20 board** (colour hash `2330622239`, 322 lit, vs
+`2342589582` / 393 lit an instant earlier) with the counter still at 59; after the fix the same sequence
+leaves the board exactly as it was.
+
+- **The readback is gated on `recompileDropsWebGPUGridState(msg)`, NOT on "is this a recompile".** A
+  readback is W·H·D·bytes off the GPU and most recompiles keep the running pipeline (`startWebGPUInit`'s
+  shader-hash cache returns early for byte-identical WGSL — a node move, a comment edit, a change in a
+  graph the grid shader does not read). Paying for those would be a real cost at 5000².
+- **⚠ THAT PREDICATE AND THE PIPELINE CACHE ARE ONE FUNCTION, deliberately** —
+  `webgpuShaderMatchesRuntime(shaderCode)`. A re-implementation that drifts is silent in the worst
+  direction: the dispatcher skips the readback for a rebuild that then happens anyway, and the rewind is
+  back. If you touch the cache condition, you have touched the readback condition.
+- **The window between teardown and the async rebuild is already CPU-stepped** (`webgpuRuntime` is null,
+  so `runStep` falls through to JS/WASM out of `readAttrs`), which is the second reason the CPU mirror
+  has to be right at that moment — those generations were running on stale data too, and the later
+  `uploadAttrs` shipped the result to the GPU.
+- **WASM is NOT affected and must not grow a copy of this**: `tryInstantiateWasmModule` re-instantiates
+  against the SAME `wasmMemory` the worker owns, so the grid state never leaves the module's memory.
+- The `setUseWasm` / `setUseWebGPU` handlers already drained GPU→CPU before tearing the runtime down;
+  `recompile` was the one teardown path that did not.
 
 ---
 

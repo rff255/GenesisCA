@@ -4257,6 +4257,37 @@ function codeIndexesNeighbourTable(code: string | undefined): boolean {
   return !!code && /nIdx_\w*\[/.test(code);
 }
 
+/** Is the LIVE grid runtime already built from exactly this shader?
+ *
+ *  ⚠ THE ONE DEFINITION OF "this recompile keeps the GPU grid state". It is the
+ *  pipeline-cache test inside `startWebGPUInit` (which returns early, keeping the
+ *  device + buffers + the attrs living in them) AND the test the message
+ *  dispatcher uses to decide whether a `recompile` is about to DROP those buffers
+ *  and therefore needs the GPU→CPU one-shot readback first. Re-implementing
+ *  either side would let the two drift, and the failure is silent: the readback
+ *  would be skipped on a rebuild that does happen, and the board would rewind.
+ *  Narrows nothing about `webgpuRuntime` for callers, so a caller that needs the
+ *  runtime after a `true` still asserts it. */
+function webgpuShaderMatchesRuntime(shaderCode: string | undefined): boolean {
+  return !!shaderCode && !!webgpuRuntime?.stepReady && shaderHashOf(shaderCode) === webgpuRuntime.shaderHash;
+}
+
+/** Will processing this `recompile` TEAR DOWN a live WebGPU grid runtime — and
+ *  with it every attribute buffer the GPU currently owns?
+ *
+ *  True exactly when the recompile handler reaches `startWebGPUInit` (it is
+ *  called only for a recompile carrying `webgpuShaderCode`) AND that call takes
+ *  the teardown path rather than the pipeline-cache early return — either because
+ *  the shader differs from the running one, or because it arrived with a compile
+ *  error (which destroys the runtime and falls the grid back to the CPU step).
+ *  In both cases the fresh/absent GPU buffers are re-seeded from the CPU
+ *  `readAttrs` mirror, so that mirror must be fresh first. */
+function recompileDropsWebGPUGridState(msg: RecompileMsg): boolean {
+  if (!useWebGPU || !webgpuRuntime?.stepReady) return false;
+  if (!msg.webgpuShaderCode) return false;
+  return !!msg.webgpuShaderError || !webgpuShaderMatchesRuntime(msg.webgpuShaderCode);
+}
+
 function startWebGPUInit(
   shaderCode: string | undefined,
   entryPoints: WebGPUEntryPoints | undefined,
@@ -4291,8 +4322,8 @@ function startWebGPUInit(
   // source). We can keep the device + buffers + pipelines and skip the
   // expensive async device + shaderModule + pipeline rebuild ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â saves hundreds
   // of ms on graph-only edits where the user isn't actually changing the rule.
-  if (shaderCode && webgpuRuntime?.stepReady && shaderHashOf(shaderCode) === webgpuRuntime.shaderHash) {
-    self.postMessage({ type: 'useWebGPUStatus', enabled: useWebGPU, ready: true, directRender: webgpuRuntime.directRender, voxelRender: webgpuRuntime.voxelRender });
+  if (webgpuShaderMatchesRuntime(shaderCode)) {
+    self.postMessage({ type: 'useWebGPUStatus', enabled: useWebGPU, ready: true, directRender: webgpuRuntime!.directRender, voxelRender: webgpuRuntime!.voxelRender });
     return;
   }
   // P7 ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â salvage any direct-render canvas attached to the previous runtime.
@@ -7151,6 +7182,50 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
     // asyncStepBatchInFlight set forever and the guard above would then defer every
     // subsequent message with no replay — a permanent, silent worker dead-lock.
     void (async () => { try { await ensureAgentStoreFresh(); } finally { endAsyncStepBatch(); } })();
+    return;
+  }
+
+  // ⚠ THE GRID SIBLING OF THE RULE ABOVE — the same one-shot, for the CA lattice.
+  //
+  // Under the WebGPU grid target the ATTRIBUTE BUFFERS LIVE ON THE GPU: every
+  // `runStepWebGPU` sets `gpuOwnsAttrs`, and the CPU `readAttrs` mirror is only
+  // refreshed by an explicit readback (getState / a paint that reads cells / the
+  // engine-toggle drains). A `recompile` that changes the rule REBUILDS the grid
+  // runtime — `startWebGPUInit` destroys the device+buffers and the fresh ones are
+  // seeded with `uploadAttrs(rt, readAttrs)` — so WITHOUT this readback the board
+  // was overwritten with the last-synced generation while the generation counter
+  // kept its value: the simulation silently REWOUND to "the last time the user
+  // interacted with it" on every edit, which is what Live mode does dozens of
+  // times a minute. (Measured on Game of Life / WebGPU: an edit at gen 502 put the
+  // gen-394 board back, bit-identical, gen counter still 502.)
+  //
+  // Gated on `recompileDropsWebGPUGridState` — the SAME predicate the pipeline
+  // cache uses — so a recompile that keeps the running pipeline (a node move, a
+  // comment edit, anything that emits byte-identical WGSL) still costs NOTHING.
+  // A readback of W·H·D·bytes is not something to spend on a no-op.
+  if (msg.type === 'recompile' && gpuOwnsAttrs && recompileDropsWebGPUGridState(msg as RecompileMsg)) {
+    asyncStepBatchInFlight = true;   // no message may interleave the one-shot readback
+    deferredDuringAsyncBatch.push(msg);
+    // `finally` for the same reason as above (audit H2): a throw that left the
+    // flag set would deadlock the worker silently.
+    //
+    // ⚠ AND THE CATCH IS NOT DECORATIVE — it is what stops an INFINITE MESSAGE
+    // LOOP. `ensureCpuAttrsFresh` clears `gpuOwnsAttrs` only on success, so a
+    // failed readback (runtime torn down mid-await, device lost) would replay a
+    // `recompile` that re-enters this very guard, for ever. Clearing the flag by
+    // hand degrades to the pre-fix behaviour for that one recompile — the same
+    // "just clear it" degradation `runStep` already documents for a target switch
+    // — which is a stale board once, not a hung worker.
+    void (async () => {
+      try {
+        await ensureCpuAttrsFresh();
+      } catch (e) {
+        gpuOwnsAttrs = false;
+        logRuntimeEvent('[webgpu] pre-recompile readback failed; the rebuild will re-seed from the CPU mirror: ' + ((e instanceof Error) ? e.message : String(e)));
+      } finally {
+        endAsyncStepBatch();
+      }
+    })();
     return;
   }
 
