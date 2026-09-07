@@ -786,6 +786,44 @@ next line loses the space in JSX — the three occurrences inside the NEW Live c
 
 ---
 
+# Post-ship adjustments — AS BUILT (2026-09-07, after the user's first real session in Live)
+
+Three user-reported adjustments, no new phase: presentation + input ownership only. **Zero compiler,
+worker, node, schema or file-format change** — `check-compile-identity --compare` **31 models, all
+surfaces unchanged**; `tsc -p tsconfig.app.json --noEmit` and `npm run build` green.
+
+| # | Reported | As built | Deviation from the brief |
+|---|---|---|---|
+| 1 | *"the panels have their own tabs AND the bar has Settings/Controls — why both?"* | The bar's **Settings / Controls buttons are removed**; the panels' ears are the single affordance. They needed placement work to actually BE one: the floating overlay panels (`z-index: 12`) covered the left ear at `left: 0` and the whole right half of the bar. `SimulatorView` now publishes **`--live-left-inset` / `--live-right-inset`** (a `ResizeObserver` over whatever holds each rail, measured off rects because the right panel's collapse tab protrudes 18 px) and the ear + the bar offset by them. | Also had to move the **viewer (Output Mapping) row**: it centres on the VISIBLE canvas in Live, and takes a second row (`--live-viewer-row-shift` = the bar's measured height + 6) when the two would still touch — otherwise the bar covers its tabs. This is a stop-gap for the crowding the planned Output-Mapping relocation owns. |
+| 2 | The Auto / On-demand segment is too wide | **One button showing the current policy**, opening a two-item popover with a one-line explanation under each label. Shares the layout menu's `openMenu` state + dismissal. | Kept the vocabulary **"On demand"**, not the suggested "Manual" — HelpView, the chip tooltips and the area docs all say On demand, and a third word for the same mode is worse than the ~20 px it would save. Popover is **click-only, never hover**: it carries `role="menu"`, and `overlayOwnsKeyboard()` would then hand it the keyboard (standing down the global `Enter`) merely on hover. |
+| 3 | Focus a node's `<select>`, hover the viewport, press `Enter` → the dropdown answers, not play/pause | **`claimLiveFocus`** in `liveKeyboard.ts`: moving the ring also **blurs the DOM focus the losing pane held**. Exempt (ring stands down too, rather than claiming a keyboard it will not get): an open `[role=dialog]`/`[role=menu]` — quick-add's 50 ms focus timer is the sharp case — and a focused **typing target** mid-edit. Both exemptions are hover-only; a `pointerdown` always transfers. | The typing-target exemption is an addition to the brief: blurring a half-typed node field because the pointer drifted would lose keystrokes, and refusing the transfer keeps ring and keyboard in agreement just as well. |
+
+**Verified in the real app** (dev server + driven browser, `window.onerror` + `console.error` hooks
+installed before each reproduction, **0 console errors throughout**): bar = chip · policy · Layout only;
+both ears open AND close their panel in Live, the left ear riding the panel edge (`left: 200px`,
+`z-index: 13`, title flips to *Close settings*); bar clear of the right rail in every combination
+(closed ⇒ inset 14, open ⇒ 238 incl. the protruding tab, bar right edge 1302 vs tab left 1310); at the
+**minimum pane width** (231 px) the bar wraps to two rows inside the pane and the viewer row drops to
+`y 102` under it; **no leak** — Simulator entered with `{left: true, right: false}`, both panels opened
+inside Live, exit restored `{left: true, right: false}` with the custom properties removed; policy switch
+persists to `genesisca_live_layout`, On demand → `● Pending` → `Ctrl+Enter` (with the `<select>` focused)
+and the chip's **Apply** both applied with the **board preserved and still playing** (gen 13 → 15,
+33 → 39); the reported focus sequence now toggles play with `activeElement` back on `BODY` and the select
+untouched; quick-add + hover viewport keeps the ring on the graph and the typing in the search box; `Esc`
+still never resets. Spot-checked on **Game of Life (2D, WebGPU)** and **Life3D (3D voxel)**.
+
+**For the next session (Output-Mapping bar relocation):** the top strip in Live is now a three-occupant
+lane — the instructions pill (`left: 36px`), the viewer row (centred on the visible canvas, droppable to a
+second row) and the Live bar (right-anchored, `--live-right-inset`, wraps at minimum width). Relocating
+the viewer row should make `--live-viewer-row-shift` and the `.liveOverlayPanels .viewerBarRow` override
+unnecessary; the insets themselves must stay (the ear and the bar depend on them). One anomaly seen once
+and **not reproducible** afterwards (12 later applies preserved the board): a chip-**Apply** right after
+dragging the splitter to the minimum width came back at gen 0 and paused — the pipeline was not touched by
+these adjustments, so if it recurs, look at a WebGPU re-init triggered by the extreme pane resize, not at
+the bar.
+
+---
+
 # Phase 6 — FUTURE PHASE: pop the Live viewport out to an OS window (Document PiP)
 
 **Feasibility-gated. This phase may end in a written deferral, and that is an acceptable outcome.**

@@ -4,10 +4,19 @@
    top-RIGHT: the author-instructions pill already owns `left: 36px`, and in a
    narrow Live pane a second top-left widget would collide with it. */
 
+/* ⚠ `--live-right-inset` is published by `SimulatorView` while Live is on (see
+   `SimulatorView.module.css`): it is the width of whatever occupies the
+   viewport's right rail — the floating Controls panel when it is open, its ear
+   when it is not. Without it the bar sits UNDER the 220 px overlay panel (which
+   is `z-index: 12` to the bar's 7) and the chip, the policy and the layout menu
+   all disappear the moment the Controls panel is opened. */
 .bar {
   position: absolute;
   top: var(--space-4);
-  right: var(--space-4);
+  right: calc(var(--space-4) + var(--live-right-inset, 0px));
+  max-width: calc(100% - var(--live-left-inset, 0px) - var(--live-right-inset, 0px) - 2 * var(--space-4));
+  flex-wrap: wrap;
+  justify-content: flex-end;
   z-index: 7;
   display: flex;
   align-items: center;
@@ -102,36 +111,6 @@
   background: var(--color-overlay-hover-weak);
 }
 
-/* --- Apply-policy segmented switch -------------------------------------- */
-
-.segment {
-  display: inline-flex;
-  align-items: center;
-  padding: 1px;
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-md);
-}
-
-.segBtn {
-  padding: var(--space-1) var(--space-3);
-  background: transparent;
-  border: none;
-  border-radius: calc(var(--radius-md) - 2px);
-  color: var(--color-text-muted);
-  font-size: var(--font-3xs);
-  font-weight: 600;
-  line-height: 1.6;
-  white-space: nowrap;
-  cursor: pointer;
-}
-
-.segBtn:hover { color: var(--color-text-primary); }
-
-.segBtnActive {
-  color: var(--color-accent);
-  background: var(--color-accent-soft);
-}
-
 .sep {
   width: 1px;
   align-self: stretch;
@@ -202,6 +181,24 @@
   width: 12px;
   flex-shrink: 0;
   text-align: center;
+}
+
+/* Apply-policy items: label over a one-line explanation, so the popover states
+   what each mode does without waiting for a tooltip. */
+.menuItemText {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.menuItemBlurb {
+  max-width: 210px;
+  color: var(--color-text-muted);
+  font-size: var(--font-3xs);
+  font-weight: 400;
+  line-height: 1.35;
+  white-space: normal;
 }
 
 .menuSep {

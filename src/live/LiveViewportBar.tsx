@@ -1,16 +1,10 @@
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { simLayoutApi } from '../simulator/simLayoutState';
-import { getLiveLayout, setLiveLayout, subscribeLiveLayout } from './liveUiState';
+import { getLiveLayout, setLiveLayout, subscribeLiveLayout, type LiveApplyPolicy } from './liveUiState';
 import { LIVE_LAYOUT_LOCK_REASON, type LiveRuleStatus } from './liveState';
 import styles from './LiveViewportBar.module.css';
 
 interface Props {
-  /** The simulator's Settings (left) panel is open. */
-  settingsOpen: boolean;
-  /** The simulator's Controls (right) panel — brush + layers + indicators. */
-  controlsOpen: boolean;
-  onToggleSettings: () => void;
-  onToggleControls: () => void;
   /** A capture recording is in progress: every LAYOUT control greys out with
    *  the reason, because the output frame size is pinned on the first frame. */
   locked: boolean;
@@ -53,9 +47,29 @@ const icon = (children: React.ReactNode) => (
     {children}
   </svg>
 );
-const SETTINGS_ICON = icon(<><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.6 1.6 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.6 1.6 0 0 0-2.7 1.1V21a2 2 0 1 1-4 0v-.1A1.6 1.6 0 0 0 7.5 19.4a1.6 1.6 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1A1.6 1.6 0 0 0 3 14.5a2 2 0 1 1 0-4h.1A1.6 1.6 0 0 0 4.6 7.5a1.6 1.6 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.6 1.6 0 0 0 1.8.3H9a1.6 1.6 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.6 1.6 0 0 0 2.7 1.1l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.6 1.6 0 0 0 1.1 2.7H21a2 2 0 1 1 0 4h-.1a1.6 1.6 0 0 0-1.5 1z" /></>);
-const CONTROLS_ICON = icon(<><rect x="3" y="4" width="18" height="16" rx="2" /><path d="M15 4v16M3 10h12M3 15h12" /></>);
 const LAYOUT_ICON = icon(<><rect x="3" y="4" width="18" height="16" rx="2" /><path d="M14 4v16" /></>);
+/** Apply policy: a lightning bolt for Auto, a hand-off arrow for On demand. */
+const AUTO_ICON = icon(<path d="M13 2 4 14h6l-1 8 9-12h-6z" />);
+const ONDEMAND_ICON = icon(<><circle cx="12" cy="12" r="9" /><path d="M12 8v4l3 2" /></>);
+
+/** The apply-policy options, in the order the popover lists them. The LABEL is
+ *  what the collapsed button shows, so it also has to read on its own — the
+ *  vocabulary is the same one HelpView and the chip tooltips use. */
+const POLICY: Record<LiveApplyPolicy, { label: string; glyph: React.ReactNode; blurb: string }> = {
+  auto: {
+    label: 'Auto', glyph: AUTO_ICON,
+    blurb: 'Every graph edit reaches the running simulation as you make it.',
+  },
+  ondemand: {
+    label: 'On demand', glyph: ONDEMAND_ICON,
+    blurb: 'Edits are held until you press Apply (or Ctrl+Enter).',
+  },
+};
+const POLICY_ORDER: LiveApplyPolicy[] = ['auto', 'ondemand'];
+const POLICY_TITLE =
+  'Apply policy — how a graph edit reaches the running simulation.\n\n'
+  + 'Auto: every edit is sent as soon as it compiles.\n'
+  + 'On demand: edits are held (the chip says Pending) until Apply / Ctrl+Enter.';
 
 /**
  * LIVE MODE — the compact bar over the simulation viewport pane.
@@ -64,23 +78,33 @@ const LAYOUT_ICON = icon(<><rect x="3" y="4" width="18" height="16" rx="2" /><pa
  * bar has to sit over the canvas, and every canvas overlay in this app MUST
  * carry `data-sim-overlay` or a click on it falls through and paints the grid.
  *
- * It carries the two panel toggles — the Live policy collapses the simulator's
- * own side panels on entry, so the brush / layers / indicators would otherwise
- * be unreachable without hunting for the collapsed-panel ears — plus the layout
- * menu (dock right · dock bottom · swap sides · collapse viewport).
+ * It carries the TRANSPORT CHIP (synced / stale / pending / rebuild needed) with
+ * its Apply / Later prompt, the APPLY-POLICY control (Auto / On demand) and the
+ * layout menu (dock right · dock bottom · swap sides · collapse viewport). Both
+ * pipeline controls exist ONLY in Live — the Simulator tab's surface for a
+ * compile error is the red banner, and a chip there would be meaningless rather
+ * than merely unavailable, so it is not rendered at all (hide, not grey).
  *
- * Phase 3 added the two pipeline controls: the APPLY-POLICY switch (Auto /
- * On demand) and the TRANSPORT CHIP (synced / stale / pending / rebuild needed).
- * Both exist ONLY in Live — the Simulator tab's surface for a compile error is
- * the red banner, and a chip there would be meaningless rather than merely
- * unavailable, so it is not rendered at all (hide, not grey).
+ * ⚠ It carries NO panel toggles. Phase 2 gave it Settings / Controls buttons
+ * because the Live panel policy enters with both simulator side panels
+ * collapsed — but the panels' own ears (`panelExpandBtn` /
+ * `panelExpandBtnRight`) are still rendered in Live, so those buttons were a
+ * SECOND affordance for the same state, which is what the user reported. The
+ * ears won (they sit ON the panel edge they act on, and they are the affordance
+ * the Simulator tab already teaches); the bar buttons are gone. What that
+ * requires of the ears is documented in `SimulatorView.module.css` —
+ * `--live-left-inset` / `--live-right-inset` keep them, and this bar, clear of
+ * the floating overlay panels.
  */
 export function LiveViewportBar({
-  settingsOpen, controlsOpen, onToggleSettings, onToggleControls, locked,
-  ruleStatus, ruleMessage, onApply, rebuildOutcome,
+  locked, ruleStatus, ruleMessage, onApply, rebuildOutcome,
 }: Props) {
   const layout = useSyncExternalStore(subscribeLiveLayout, getLiveLayout);
-  const [menuOpen, setMenuOpen] = useState(false);
+  // ONE popover open at a time (`layout` | `policy`), the SimulatorView
+  // `overlayPopup` convention — a single state means they can never both be up,
+  // and the dismissal effect below needs only one wrapper ref.
+  const [openMenu, setOpenMenu] = useState<'layout' | 'policy' | null>(null);
+  const menuOpen = openMenu !== null;
   const menuWrapRef = useRef<HTMLDivElement>(null);
   // "Later" collapses the rebuild prompt to the bare chip WITHOUT applying
   // anything — the deferral itself lives in `SimulatorView`'s `appliedModelRef`,
@@ -98,12 +122,12 @@ export function LiveViewportBar({
     const onDown = (e: PointerEvent) => {
       const w = menuWrapRef.current;
       if (w && e.target instanceof Node && w.contains(e.target)) return;
-      setMenuOpen(false);
+      setOpenMenu(null);
     };
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== 'Escape') return;
       e.stopPropagation();
-      setMenuOpen(false);
+      setOpenMenu(null);
     };
     document.addEventListener('pointerdown', onDown, true);
     document.addEventListener('keydown', onKey, true);
@@ -120,12 +144,13 @@ export function LiveViewportBar({
    *  the committed value happened not to change. */
   const applyLayout = useCallback((patch: Parameters<typeof setLiveLayout>[0]) => {
     setLiveLayout(patch);
-    setMenuOpen(false);
+    setOpenMenu(null);
     requestAnimationFrame(() => simLayoutApi?.drawNow());
   }, []);
 
   const lockTitle = locked ? LIVE_LAYOUT_LOCK_REASON : undefined;
   const chip = CHIP[ruleStatus];
+  const policy = POLICY[layout.applyPolicy];
   const canApply = ruleStatus === 'pending' || ruleStatus === 'rebuild';
   const showActions = canApply && !promptDismissed;
   const chipTitle = ruleStatus === 'rebuild'
@@ -133,7 +158,9 @@ export function LiveViewportBar({
     : (ruleMessage ? `${chip.hint}\n\n${ruleMessage}` : chip.hint);
 
   return (
-    <div className={styles.bar} data-sim-overlay>
+    // `data-live-bar` is how `SimulatorView` finds this element to measure it
+    // (it owns the top strip's crowding rule but not this component's tree).
+    <div className={styles.bar} data-sim-overlay data-live-bar>
       {/* The transport chip: what the WORKER is running relative to what the
           model now says. Clicking it re-opens a prompt dismissed with Later. */}
       <button
@@ -170,44 +197,55 @@ export function LiveViewportBar({
         </>
       )}
       {/* Apply policy. Auto is today's behaviour (~100 ms after an edit);
-          On demand holds the model→worker step until Apply / Ctrl+Enter. */}
-      <div className={styles.segment} role="group" aria-label="Apply policy">
-        <button
-          type="button" role="radio" aria-checked={layout.applyPolicy === 'auto'}
-          className={`${styles.segBtn} ${layout.applyPolicy === 'auto' ? styles.segBtnActive : ''}`}
-          onClick={() => setLiveLayout({ applyPolicy: 'auto' })}
-          title="Auto — every graph edit reaches the running simulation as you make it."
-        >Auto</button>
-        <button
-          type="button" role="radio" aria-checked={layout.applyPolicy === 'ondemand'}
-          className={`${styles.segBtn} ${layout.applyPolicy === 'ondemand' ? styles.segBtnActive : ''}`}
-          onClick={() => setLiveLayout({ applyPolicy: 'ondemand' })}
-          title="On demand — edits are held until you press Apply (or Ctrl+Enter)."
-        >On demand</button>
-      </div>
-      <div className={styles.sep} />
-      <button
-        type="button"
-        className={`${styles.btn} ${settingsOpen ? styles.btnActive : ''}`}
-        onClick={onToggleSettings}
-        title="Simulator settings panel (recompile, dimensions, presets, model attributes)"
-      >{SETTINGS_ICON}Settings</button>
-      <button
-        type="button"
-        className={`${styles.btn} ${controlsOpen ? styles.btnActive : ''}`}
-        onClick={onToggleControls}
-        title="Brush, layers and indicators"
-      >{CONTROLS_ICON}Controls</button>
-      <div className={styles.menuWrap} ref={menuWrapRef}>
+          On demand holds the model→worker step until Apply / Ctrl+Enter.
+          ONE button showing the CURRENT policy, opening a two-item popover —
+          the two-option segment it replaces spelled both labels out at all
+          times, which is ~60 px this bar does not have once the pane is dragged
+          narrow. The popover is CLICK-only (never hover): it carries
+          `role="menu"`, and `overlayOwnsKeyboard()` treats any open menu as the
+          keyboard owner, so a hover-open popover would silently stand the
+          global Enter (play/pause) down just for passing the pointer over it. */}
+      <div className={styles.menuWrap} ref={openMenu === 'policy' ? menuWrapRef : undefined}>
         <button
           type="button"
-          className={`${styles.btn} ${menuOpen ? styles.btnActive : ''}`}
-          onClick={() => setMenuOpen(o => !o)}
+          className={`${styles.btn} ${openMenu === 'policy' ? styles.btnActive : ''}`}
+          onClick={() => setOpenMenu(m => (m === 'policy' ? null : 'policy'))}
+          title={POLICY_TITLE}
+          aria-haspopup="menu"
+          aria-expanded={openMenu === 'policy'}
+        >{policy.glyph}{policy.label}</button>
+        {openMenu === 'policy' && (
+          <div className={styles.menu} role="menu" aria-label="Apply policy" data-sim-overlay>
+            <div className={styles.menuLabel}>Apply policy</div>
+            {POLICY_ORDER.map(id => (
+              <button
+                key={id}
+                type="button" role="menuitemradio" aria-checked={layout.applyPolicy === id}
+                className={`${styles.menuItem} ${layout.applyPolicy === id ? styles.menuItemActive : ''}`}
+                onClick={() => { setLiveLayout({ applyPolicy: id }); setOpenMenu(null); }}
+                title={POLICY[id].blurb}
+              >
+                <span className={styles.menuCheck}>{layout.applyPolicy === id ? '✓' : ''}</span>
+                <span className={styles.menuItemText}>
+                  {POLICY[id].label}
+                  <span className={styles.menuItemBlurb}>{POLICY[id].blurb}</span>
+                </span>
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+      <div className={styles.sep} />
+      <div className={styles.menuWrap} ref={openMenu === 'layout' ? menuWrapRef : undefined}>
+        <button
+          type="button"
+          className={`${styles.btn} ${openMenu === 'layout' ? styles.btnActive : ''}`}
+          onClick={() => setOpenMenu(m => (m === 'layout' ? null : 'layout'))}
           title="Workspace layout"
           aria-haspopup="menu"
-          aria-expanded={menuOpen}
+          aria-expanded={openMenu === 'layout'}
         >{LAYOUT_ICON}Layout</button>
-        {menuOpen && (
+        {openMenu === 'layout' && (
           <div className={styles.menu} role="menu" data-sim-overlay>
             <div className={styles.menuLabel}>Viewport position</div>
             <button
