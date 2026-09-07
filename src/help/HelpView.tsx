@@ -163,6 +163,7 @@ const sections = [
   { id: 'agents', label: 'Bond-Graph Agents' },
   { id: 'overseer', label: 'The Overseer (Experiments)' },
   { id: 'simulator', label: 'The Simulator' },
+  { id: 'live', label: 'Live Mode (edit while it runs)' },
   { id: 'shortcuts', label: 'Keyboard Shortcuts' },
   { id: 'fileformat', label: 'File Format' },
 ];
@@ -4154,7 +4155,10 @@ export function HelpView() {
             &sigma; curves from Collect Spatial Sample) &mdash; all exportable as
             <strong> CSV</strong>
             (long format) or <strong>JSON</strong> (journal + series + spatial aggregates).
-            Results are runtime artifacts: they are never saved into the model file. The{' '}
+            Results are runtime artifacts: they are never saved into the model file.
+            Because every edit to the graph aborts a running experiment, this tab and{' '}
+            <strong>Live</strong> mode exclude each other: the tab is not shown in Live, and
+            the <strong>Live</strong> button is greyed while an experiment runs. The{' '}
             <strong>Chromatography</strong> sample ships a built-in experiment that
             reproduces the paper&apos;s ensemble chromatogram (Fig. 3) as a run-averaged
             mean &plusmn; &sigma; curve.
@@ -4191,6 +4195,9 @@ export function HelpView() {
           <h2 className={styles.h2}>The Simulator</h2>
           <p className={styles.p}>
             The Simulator runs your compiled model and visualizes the results in real time.
+            Everything in this chapter applies in <strong>Live</strong> mode too, where the
+            same viewport sits beside the rule graph &mdash; see{' '}
+            <em>Live Mode</em> below for what changes there.
           </p>
 
           <h3 className={styles.h3}>Layout</h3>
@@ -4318,7 +4325,10 @@ export function HelpView() {
               reseeds <em>and</em> applies that board on top. Whichever is the default,{' '}
               <strong>hover or right-click the Reset button</strong> to pick either action
               explicitly (the menu appears only when the model actually carries a board).</li>
-            <li><strong>Recompile</strong> &mdash; Recompile the graph after editing in the modeler.</li>
+            <li><strong>Recompile</strong> &mdash; Recompile the graph after editing in the
+              modeler. (Rarely needed: a graph edit recompiles on its own, and in{' '}
+              <strong>Live</strong> mode it also applies whatever the status chip was
+              holding back.)</li>
           </ul>
 
           <h3 className={styles.h3}>Brush Tool</h3>
@@ -5045,6 +5055,129 @@ export function HelpView() {
         </section>
 
         {/* ============================================================ */}
+        <section id="help-live" className={styles.section}>
+          <h2 className={styles.h2}>Live Mode &mdash; edit the model while it plays</h2>
+          <p className={styles.p}>
+            <strong>Live</strong> is the third mode in the top bar, next to Modeler and
+            Simulator. It puts the <strong>rule graph</strong> and the <strong>running
+            simulation</strong> side by side in one workspace, so you can wire a node and
+            watch the new rule take over without ever stopping the run &mdash; the
+            edit&nbsp;&rarr;&nbsp;see&nbsp;&rarr;&nbsp;edit loop that otherwise costs a tab
+            switch each way.
+          </p>
+          <p className={styles.p}>
+            Nothing is restarted on the way in or out. The simulation keeps its worker, its
+            board and its generation counter across Modeler&nbsp;&harr;&nbsp;Simulator&nbsp;&harr;&nbsp;Live,
+            and it keeps <em>playing</em> in Live &mdash; including while the viewport pane is
+            collapsed, so you can work on the graph alone with the model still advancing.
+          </p>
+
+          <h3 className={styles.h3}>The layout</h3>
+          <p className={styles.p}>
+            A <strong>draggable splitter</strong> divides the two panes; drag it to give
+            either side more room, or <strong>double-click</strong> it to snap back to
+            50/50. The compact bar over the viewport carries a <strong>layout menu</strong>:
+          </p>
+          <ul className={styles.list}>
+            <li><strong>Dock right</strong> / <strong>Dock bottom</strong> &mdash; put the
+              simulation beside the graph or under it (a wide 2D board usually wants
+              &ldquo;bottom&rdquo;, a 3D volume &ldquo;right&rdquo;).</li>
+            <li><strong>Swap sides</strong> &mdash; exchange the two panes.</li>
+            <li><strong>Collapse viewport</strong> &mdash; hide the simulation and give the
+              whole window to the graph. The run continues; a small <strong>restore
+              ear</strong> takes the splitter&rsquo;s place to bring it back.</li>
+          </ul>
+          <p className={styles.p}>
+            The split position, the dock side, the swap and the collapsed state are
+            <strong> remembered between sessions</strong>. While a <em>recording</em> is
+            running the layout controls grey out with the reason &mdash; a view-scoped
+            recording pins its frame size on the first frame, so re-sizing the pane mid-take
+            would drop every frame after it. Stop the recording and they come back.
+          </p>
+          <p className={styles.p}>
+            The graph pane gets the <strong>Modeler&rsquo;s side panels</strong> (both start
+            collapsed &mdash; a half-width pane has no room to spare; open them from the
+            usual buttons). The simulator&rsquo;s own panels become <strong>overlays</strong>{' '}
+            floating over the viewport, toggled by the <strong>Settings</strong> and{' '}
+            <strong>Controls</strong> buttons on the viewport bar, so the brush, the layers
+            and the indicators stay one click away without eating the pane.
+          </p>
+
+          <h3 className={styles.h3}>The status chip &mdash; and the last good rule</h3>
+          <p className={styles.p}>
+            A graph you are halfway through wiring does not compile, and in the Simulator
+            that would leave the model with <em>no</em> rule. In Live it never does:{' '}
+            <strong>a failing edit is simply not sent</strong>, so the simulation keeps
+            running the last rule that <em>did</em> compile while you finish the thought.
+            The chip on the viewport bar always says which of the four states you are in
+            (its tooltip carries the compiler&rsquo;s own message, and the offending nodes
+            keep their amber <strong>!</strong> badge):
+          </p>
+          <table className={styles.table}>
+            <thead><tr><th>Chip</th><th>What it means</th></tr></thead>
+            <tbody>
+              <tr><td><strong>&#9679; Synced</strong></td><td>The simulation is running exactly the graph you see. This is the normal state.</td></tr>
+              <tr><td><strong>&#9679; Stale</strong></td><td>The graph does not compile, so the <em>previous</em> rule is still running. Fix the flagged node and it returns to Synced by itself &mdash; there is nothing to press.</td></tr>
+              <tr><td><strong>&#9679; Pending</strong></td><td>You are on <em>On demand</em> apply and have edits waiting. Press <kbd className={styles.kbd}>Ctrl</kbd>+<kbd className={styles.kbd}>Enter</kbd> or the chip&rsquo;s <strong>Apply</strong> to send them.</td></tr>
+              <tr><td><strong>&#8635; Rebuild needed</strong></td><td>The edit changed the model&rsquo;s <em>structure</em> (a new attribute, new grid dimensions&hellip;), which cannot be swapped into a running board. <strong>Apply</strong> re-seeds and starts over &mdash; the tooltip names what comes back, your saved board or a fresh seed from the Init Events &mdash; and <strong>Later</strong> keeps playing. Any number of structural edits made while it says &ldquo;Later&rdquo; cost a single re-seed when you finally apply.</td></tr>
+            </tbody>
+          </table>
+          <p className={styles.p}>
+            The <strong>Auto</strong> / <strong>On demand</strong> switch beside the chip is
+            the apply policy. <strong>Auto</strong> (the default) is the usual behaviour:
+            every edit reaches the simulation as soon as it compiles.{' '}
+            <strong>On demand</strong> holds them all back until you press{' '}
+            <kbd className={styles.kbd}>Ctrl</kbd>+<kbd className={styles.kbd}>Enter</kbd>,
+            which is what you want when a change takes several nodes to express and the
+            intermediate states are not worth watching. Editing itself is never held &mdash;
+            undo/redo, macros and saving all behave normally; only the hand-off to the
+            running simulation waits. Loading a model, pressing <strong>Recompile</strong> or
+            leaving Live all apply whatever was queued, so you can never walk away with the
+            simulation quietly running something else.
+          </p>
+          <p className={styles.p}>
+            The chip is only about <em>your graph</em>. Everything else that can go wrong
+            &mdash; a failed CSV, GeoTIFF, GeoJSON or preset import, a worker error &mdash;
+            still raises the usual red banner over the canvas, in Live as anywhere else.
+          </p>
+
+          <h3 className={styles.h3}>Who gets the keystroke</h3>
+          <p className={styles.p}>
+            Both panes are working surfaces, so Live gives the keyboard to the one you are{' '}
+            <strong>pointing at</strong> &mdash; hovering is enough, no click needed &mdash;
+            and draws a thin accent <strong>ring</strong> around it so you can always see who
+            will answer. Point at the graph and <kbd className={styles.kbd}>Space</kbd> opens
+            quick-add; point at the simulation and it steps one generation. Copy / paste / cut
+            follow the same owner (nodes on one side, cells or agents on the other), while
+            undo, redo and duplicate always mean the graph, from either pane.
+          </p>
+          <p className={styles.p}>
+            Two deliberate exceptions.{' '}
+            <kbd className={styles.kbd}>Enter</kbd> is <strong>global</strong>: play/pause
+            works from either pane, because being able to stop the run without leaving the
+            graph is the whole point of the mode. And{' '}
+            <kbd className={styles.kbd}>Esc</kbd> <strong>never resets in Live</strong>{' '}
+            &mdash; it is the graph&rsquo;s dismiss key (menus, popovers), and a stray press
+            wiping the run you are editing against is the one accident this mode must not
+            have. Reset in Live is the <strong>&#9632;</strong> button on the transport, and
+            nothing else. See the full table in <em>Keyboard Shortcuts</em> below.
+          </p>
+
+          <h3 className={styles.h3}>Two things to know</h3>
+          <ul className={styles.list}>
+            <li><strong>Live starts at 30 FPS.</strong> Two live views share one machine, so
+              entering Live lowers the frame cap to 30 if it was higher, and restores your
+              value on the way out. It is a default, not a limit: move the FPS control while
+              in Live and that value stands, on exit and on every later entry.</li>
+            <li><strong>Live and the Overseer exclude each other.</strong> Every graph edit
+              aborts a running experiment, so the <em>Overseer Experiments</em> tab is not
+              shown in Live, and while an experiment is running the <strong>Live</strong>{' '}
+              button is greyed with the reason (abort it from the Experiments panel and it
+              comes back).</li>
+          </ul>
+        </section>
+
+        {/* ============================================================ */}
         <section id="help-shortcuts" className={styles.section}>
           <h2 className={styles.h2}>Keyboard Shortcuts</h2>
           <p className={styles.p}>
@@ -5109,7 +5242,30 @@ export function HelpView() {
               <tr><td><kbd className={styles.kbd}>Space</kbd></td><td>Step (one generation; pauses if running)</td></tr>
               <tr><td><kbd className={styles.kbd}>Enter</kbd></td><td>Play / Pause</td></tr>
               <tr><td><kbd className={styles.kbd}>F</kbd></td><td>Toggle fullscreen canvas (collapses both side panels; press again to restore)</td></tr>
-              <tr><td><kbd className={styles.kbd}>Esc</kbd></td><td>Reset</td></tr>
+              <tr><td><kbd className={styles.kbd}>Esc</kbd></td><td>Reset &mdash; on the <strong>Simulator</strong> tab. In <strong>Live</strong>, Esc never resets; Reset is the <strong>&#9632;</strong> button</td></tr>
+            </tbody>
+          </table>
+
+          <h3 className={styles.h3}>Live Mode</h3>
+          <p className={styles.p}>
+            In Live the keyboard goes to the pane you are <strong>pointing at</strong> (a
+            click or just the pointer being over it), and that pane carries a thin accent
+            ring. Two keys are deliberate exceptions &mdash;{' '}
+            <kbd className={styles.kbd}>Enter</kbd> works from either pane, and{' '}
+            <kbd className={styles.kbd}>Esc</kbd> never reaches Reset.
+          </p>
+          <table className={styles.table}>
+            <thead><tr><th>Shortcut</th><th>Action</th></tr></thead>
+            <tbody>
+              <tr><td><kbd className={styles.kbd}>Enter</kbd></td><td>Play / Pause &mdash; <strong>global</strong>, from either pane (so you can stop the run without leaving the graph)</td></tr>
+              <tr><td><kbd className={styles.kbd}>Ctrl</kbd>+<kbd className={styles.kbd}>Enter</kbd></td><td>Apply now &mdash; send the queued edits to the running simulation (the chip&rsquo;s <strong>Apply</strong> does the same)</td></tr>
+              <tr><td><kbd className={styles.kbd}>Space</kbd></td><td>The focused pane: quick-add menu on the graph, one step on the simulation</td></tr>
+              <tr><td><kbd className={styles.kbd}>Esc</kbd></td><td><strong>Never resets in Live.</strong> It closes menus and popovers; Reset is the <strong>&#9632;</strong> transport button</td></tr>
+              <tr><td><kbd className={styles.kbd}>Ctrl</kbd>+<kbd className={styles.kbd}>C</kbd> / <kbd className={styles.kbd}>V</kbd> / <kbd className={styles.kbd}>X</kbd></td><td>The focused pane: nodes on the graph, cells or agents on the simulation</td></tr>
+              <tr><td><kbd className={styles.kbd}>Ctrl</kbd>+<kbd className={styles.kbd}>Z</kbd> / <kbd className={styles.kbd}>Y</kbd> / <kbd className={styles.kbd}>D</kbd></td><td>Undo / redo / duplicate &mdash; always the <strong>graph</strong>, from either pane (a run is not undoable, so there is nothing to arbitrate)</td></tr>
+              <tr><td><kbd className={styles.kbd}>F</kbd></td><td>Collapses <strong>both</strong> panel sets at once (press again to restore both)</td></tr>
+              <tr><td><kbd className={styles.kbd}>1</kbd>&hellip;<kbd className={styles.kbd}>9</kbd> (or numpad)</td><td>3D view angles &mdash; only with the <strong>simulation</strong> pane focused, so the digits stay free over the graph</td></tr>
+              <tr><td>Double-click the splitter</td><td>Snap the split back to 50/50</td></tr>
             </tbody>
           </table>
         </section>

@@ -14654,8 +14654,22 @@ export function SimulatorView({ visible = true, activeTab = true, live = false, 
       if (state.brushRingWidth != null) setBrushRingWidth(state.brushRingWidth);
       if (state.brushLineWidth != null) setBrushLineWidth(state.brushLineWidth);
       if (state.brushMapping != null) setBrushMapping(state.brushMapping);
-      if (state.targetFps != null) setTargetFps(state.targetFps);
-      if (state.unlimitedFps != null) setUnlimitedFps(state.unlimitedFps);
+      // ⚠ A RESTORE IS NOT THE USER MOVING THE FPS CONTROL. While Live is
+      // holding its 30 FPS default (`preLiveFpsRef` non-null) a restored cap
+      // goes into the SNAPSHOT — what gets put back on the way out — instead of
+      // into live state. Writing it straight through would (a) drop the Live
+      // perf guard silently mid-session and (b) make the override detector
+      // below latch, so Live would never auto-lower again this session. It is
+      // reachable from every restore path: a structural Apply that re-seeds
+      // from the saved board, a `.gcastate` load, a board-carrying preset.
+      const liveHoldingFps = liveRef.current && preLiveFpsRef.current;
+      if (liveHoldingFps) {
+        if (state.targetFps != null) preLiveFpsRef.current!.fps = state.targetFps;
+        if (state.unlimitedFps != null) preLiveFpsRef.current!.unlimited = state.unlimitedFps;
+      } else {
+        if (state.targetFps != null) setTargetFps(state.targetFps);
+        if (state.unlimitedFps != null) setUnlimitedFps(state.unlimitedFps);
+      }
       if (state.gensPerFrame != null) setGensPerFrame(state.gensPerFrame);
       if (state.unlimitedGens != null) setUnlimitedGens(state.unlimitedGens);
       // Per-indicator chart-settings overrides (gear popover). Replace

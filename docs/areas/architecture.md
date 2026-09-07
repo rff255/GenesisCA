@@ -86,12 +86,13 @@ A complete GenesisCA model definition consists of:
 
 The app is **100% client-side**. No backend, no server, no paid hosting.
 
-### Two Application Modes
+### Three Application Modes
 
 - **Modeler** — UI for designing CA models (properties, attributes, neighborhoods, mappings, update rules graph). All editing panels are React components.
 - **Simulator** — Runs and visualizes models. Grid rendering via Canvas, simulation loop in a Web Worker.
+- **Live** — both of the above in one split workspace: the rule graph beside the *running* simulation, so a model can be edited while it plays. It is a CSS re-layout of the same two views, not a third view — `SimulatorView`'s position in the React tree is identical in `simulator` and `live`, which is what keeps the worker, the WASM memory, the WebGPU device and the board alive across a mode switch. See [`simulator-ui.md`](simulator-ui.md) § *LIVE mode* and [`modeler-ui.md`](modeler-ui.md) § *LIVE mode*.
 
-Both modes coexist in one app. The user can seamlessly switch between editing and simulating.
+All three modes coexist in one app. The user can seamlessly switch between editing and simulating, or do both at once — the simulation is never restarted by a mode switch.
 
 ### Graph → Compile Strategy
 

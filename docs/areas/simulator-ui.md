@@ -814,6 +814,20 @@ FPS chip keeping its old number. So the flag arms only once the applied default 
 committed state. **Verified:** 61 → Live shows 30 → back on the Simulator tab 61; raise it to 45 inside
 Live → 45 on exit, and 45 again on re-entry.
 
+⚠ **A RESTORE IS NOT THE USER MOVING THE CONTROL** (found in the Phase-5 UI sweep, fixed there).
+`applySimulationState` is the one funnel that writes the FPS programmatically (`state.targetFps` /
+`state.unlimitedFps`), and it runs on **every structural Apply that re-seeds from a saved board**, on a
+`.gcastate` load and on a board-carrying preset. Written straight through, it did two silent things at
+once: the Live cap jumped back to the saved value mid-session (the perf guard simply gone), and the
+override detector above — which INFERS "the user moved it" from a state change — **latched**, so Live
+never auto-lowered again for the rest of the session. So while Live is holding its default
+(`liveRef.current && preLiveFpsRef.current`) a restored cap is written into **`preLiveFpsRef` — the
+snapshot, i.e. what goes back on the way out** — and never into live state. **Reproduced and re-verified
+on Game of Life and Life3D:** add a cell attribute → `⟳ Rebuild needed` → Apply → exactly 1 `terminate`,
+gen 0, and the chip still reads **FPS 30** (it read 61 before the fix); leaving Live still restores the
+saved 61. The general lesson for anything else that ever gets a Live default: the inference has to be
+blind only to the user, so every PROGRAMMATIC writer of that state needs the same redirect.
+
 ### Perf guard 2 — skip the BLIT, never the step, during a node drag
 
 `GraphEditor` publishes React Flow's own `dragging` flag through `liveState.setLiveGraphDragging`;

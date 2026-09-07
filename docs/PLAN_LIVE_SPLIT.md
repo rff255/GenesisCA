@@ -635,6 +635,115 @@ this whole feature — Live is presentation, mounting and input ownership.
 Also: reload with a persisted Live layout; enter Live from each of Modeler / Simulator / Library; leave
 Live to `help` and back (the run must auto-pause on `help` — `activeTab` and `shown` are both false there).
 
+## 5.4 Phase 5 — AS BUILT (2026-09-07)
+
+Phase 5 shipped. **All gates green:** `npx tsc -b`, `npm run build`,
+`check-compile-identity --compare` (**31 models, all surfaces unchanged** — the headline claim for the
+whole feature, re-run before AND after the phase's edits), `parity-agent-wasm`,
+`check-claude-md-budget` (308/600 lines, 27.8/60 KB), `test-macro-references`, `verify-agent-render`,
+`verify-sparse-stepping --wasm`, `test-agent-capabilities` (204), `test-bonds-allocation` (19).
+**`docs/NODES_REFERENCE.md` was NOT touched, deliberately: no node, port or emit changed.**
+
+| Layer | As built |
+|---|---|
+| `src/help/HelpView.tsx` | A new **`#help-live`** section (its own TOC entry, between the Simulator and the shortcuts) covering what Live is, the mounting promise (no restart on a mode switch), the layout menu + persistence + the recording interlock, the panel policy, a 4-row **chip table** (Synced / Stale / Pending / Rebuild needed), the apply policy + `Ctrl+Enter`, "the chip is only about your graph" (imports still raise the red banner), focus-follows-the-pointer + the ring, and the two gotchas (FPS 30 default · Overseer exclusion). `#help-shortcuts` gained a **Live Mode** table (9 rows) and its Simulator `Esc` row now says "on the Simulator tab; in Live, Reset is the ■ button". Cross-links added from the Simulator intro, the Playback/Recompile bullet and the Overseer Experiments paragraph. |
+| `KeyboardShortcutsOverlay.tsx` | A new **`Live — edit while it runs`** group (`wide`), 10 rows, plus the same `Esc` qualification on the Simulator group. |
+| `README.md` | One sentence added to **`### Interact while it runs`** — no new group, no inventory. |
+| `docs/areas/README.md` | Six stale sizes refreshed (`simulator-ui` 100→137 KB is the big one) and the `covers` blurbs for `simulator-ui` / `modeler-ui` / `overseer` now name Live. |
+| `CLAUDE.md` | Two lines: "Two coexisting modes" → three (Live named), and **one routing row** for `src/live/**` → `simulator-ui.md` § *LIVE mode*. No Live section — the budget check stays green. |
+| `docs/areas/project-structure.md` | **Already complete** — all 7 `src/live/*` files, `simLayoutState.ts` and the three planning docs were entered by Phases 2–4. No edit needed. |
+| `docs/areas/indicators.md` | One bullet: the Live overlay panel, and why it is the SAME panel rather than a second popover copy (every chart measures its own box; a second mount, or one inside a `display:none` pane, sizes a canvas at width 0). |
+
+**Stale statements found by the audit, and where** (all fixed):
+
+| Statement | Where | Now |
+|---|---|---|
+| "**Esc** → Reset", unqualified | `HelpView.tsx` shortcuts table · `KeyboardShortcutsOverlay.tsx` `GROUPS` | qualified with "Simulator tab only — in Live, Reset is the ■ button" |
+| "**Two** Application Modes … Both modes coexist" | `docs/areas/architecture.md` | Three, with the D1 mounting invariant stated in one line and links to both LIVE sections |
+| "the **two** work modes Modeler / Simulator" | `docs/areas/modeler-ui.md` (navbar layout) | three, `LIVE_ICON` described, and the note that Live is the only nav button that can be DISABLED |
+| the cheat sheet "grouping the Global / Modeler / Simulator shortcuts" | `docs/areas/modeler-ui.md` (discoverability) | + Live + 3D, with the `Esc`-row rule recorded as an invariant |
+| "both dispatch a bare `genesis-toggle-canvas-fullscreen`" | `docs/areas/modeler-ui.md` (same bullet) | + the pointer to the shared `detail.collapse` intent Live needs |
+| "**Two coexisting modes** in one app" | `CLAUDE.md` | three, + "a mode switch never restarts the run" |
+| "they are **mutually exclusive**: switching to the Modeler unmounts the simulator UI and auto-pauses the run" | `docs/BRAINSTORM_SEE_THROUGH_CANVAS.md` | a **status banner** at the top marking the doc as the point-in-time origin record, naming the two claims that are now false and pointing at the impact map's § 16 |
+
+`docs/NODES_REFERENCE.md` was grepped for mode behaviour and carries **none** — nothing to change.
+
+### The defect the UI pass found (and fixed): a RESTORE was read as a user override of the Live FPS default
+
+`applySimulationState` wrote `state.targetFps` / `state.unlimitedFps` straight into state. It runs on a
+**structural Apply that re-seeds from a saved board**, a `.gcastate` load and a board-carrying preset —
+so a Live rebuild silently put the cap back to the model's saved value (**measured: FPS 30 → 61 the
+instant Apply landed**) *and* the "did the user move it" detector latched on that change, so Live never
+auto-lowered again for the session. The fix, in that one funnel: while Live is holding its default, a
+restored cap goes into the **snapshot** (`preLiveFpsRef` — what is restored on exit), not into live
+state. Zero compiler/emit surface; documented in
+[`areas/simulator-ui.md`](areas/simulator-ui.md) § *Perf guard 1*. **Re-verified on Game of Life and
+Life3D:** rebuild → Apply → 1 `terminate`, gen 0, chip **FPS 30**; leaving Live still restores 61.
+
+### The live UI pass — what was actually observed
+
+**Game of Life (2D grid, WebGPU).** Enter Live mid-session → same worker, `● Synced`, FPS 30.
+`Enter` **from the graph pane** started the run (gen 0 → 82). Benign edit (`Set Alive` True → False)
+→ **1 `recompile`**, chip stayed `Synced`, gen 2934 → 2971 climbing, and the board really changed —
+it went extinct but for the still-lifes. `Ctrl+Z` from graph focus → 1 `recompile`, restored.
+**Break** (clear the `Set Attribute` attribute) → `● Stale`, **0 `recompile`**, gen 4981 → 5057 still
+climbing, **no red banner**; re-select → exactly **1 `recompile`**, `● Synced`. **Structural:**
++1 cell attribute → `⟳ Rebuild needed`, 0 terminates, gen 5734 → 5811 climbing; **Later** → bare chip;
+a SECOND attribute → still one prompt, still 0 posts (the Trap-C check); click the chip → Apply/Later
+back; **Apply** → exactly **1 terminate**, gen 0, `● Synced`. **On demand** → edit → `● Pending`,
+**0 posts**; `Ctrl+Enter` → **1 `recompile`**, `● Synced`.
+**Layout:** dock bottom (panes 1694×402 stacked, canvases resized to match) · swap (graph to the
+bottom) · collapse (single pane, restore ear present) · restore · dock right · **30-move splitter drag**
+→ panes 613/1075 with **0 canvas/box mismatches** at rest and **0 worker posts** during the drag,
+fraction committed as `0.363` on release · **double-click → exactly 50/50**.
+**Keyboard:** graph focus + `Space` → quick-add opened, **0 step posts**; `Esc` → menu closed,
+**0 resets**; viewport focus + `Space` → **exactly 1 step** (gen 0 → 1); `Esc` and `Backspace` there →
+**0 resets**; `Enter` toggled play from **both** panes; **`F`** → graph area **124 → 764 px** and the
+simulator's viewer bar hidden, second press restored **both** exactly.
+**Exit:** to the Simulator tab — **same worker object**, gen 56 preserved, no chip, no viewport bar,
+**FPS back to 61**; then the Modeler — `Enter` / `Esc` / `Backspace` posted **0** and gen never moved
+(the pre-existing defect stays fixed), while `Space` still opened the graph's quick-add.
+
+**Life3D (3D voxel).** Live entry rendered the voxel stack in the half-width pane with the 3D View
+panel clear of the viewport bar. **3D digit ownership: 0 `setGridCamera` with the graph focused, 1 with
+the viewport focused.** Break (clear `Set Attribute`) → `● Stale`, **0 `recompile`**, gen 652 → 714;
+fix → **1 `recompile`**, `Synced`. **30-move splitter drag while playing → exactly 1
+`attachVoxelCanvas`** and, once settled, canvas backing stores **exactly** equal to their CSS boxes
+(the mismatches sampled DURING the drag are an artefact of reading before the rAF, not a defect).
+Structural rebuild via `Ctrl+Enter` → **1 terminate**, gen 0, voxels rendering, FPS still 30.
+
+**Particle Life (2D agents, GPU-resident direct render).** Deleting the **Behaviour Step** node →
+`● Stale`, **0 `recompile`**, gen 1071 → 1139, and two screenshots two seconds apart show the
+population in **visibly different configurations** — the agents kept moving on the last good behaviour;
+`Ctrl+Z` → **1 `recompile`**, `Synced`. **Skip-blit guard** (via the DEV `__setLiveGraphDragging` hook,
+1.5 s windows): normal **76 blits / 38 steps** → dragging **0 blits / 39 steps, gen +39**, with **0
+`attachAgentCanvas`** → release **7 blits within 80 ms**.
+
+**GoL Replicate Statistics (Overseer).** Run Experiment → the **Live nav button DISABLED** with the full
+reason in its `title`; **Abort** → enabled again. Inside Live: **no `Overseer Experiments` tab and no
+`Run Experiment` button** anywhere in the DOM.
+
+**Persistence.** With `{dock: bottom, swapped: true, viewportCollapsed: true}` in
+`genesisca_live_layout`, a **full page reload** came back to exactly that layout — graph filling the
+window, restore ear in the splitter's slot, FPS 30 applied, `● Synced`.
+
+**Help.** The new `#help-live` section, its chip table, the `Live Mode` shortcut table and the overlay's
+`Live — edit while it runs` group were all read back from the rendered DOM and screenshotted.
+
+**0 console errors across the entire pass** (`window.onerror` + `unhandledrejection` + a `console.error`
+hook installed before every model). ⚠ Two verification-only artefacts, NOT app defects, worth recording
+for the next session: (1) a synthetic `MouseEvent`/`PointerEvent` **without `view: window`** makes a
+handler throw `Cannot read properties of null (reading 'document')` — always set `view`; (2) this
+harness cannot deliver `Space` (it arrives as `key: ""`, and `e.code` is empty for every key), so
+`Space` and the 3D digits must be driven with a hand-built `KeyboardEvent({key, code})`.
+
+**Left open for Phase 6** (unchanged): the Document Picture-in-Picture spike, still feasibility-gated,
+still needing its own `liveFocus` source for a popped-out viewport pane. Nothing in Phase 5 constrains
+it. One cosmetic pre-existing nit noticed while proof-reading Help and deliberately NOT swept here (it
+is everywhere in the file and unrelated to Live): a `</strong>` at end-of-line followed by a word on the
+next line loses the space in JSX — the three occurrences inside the NEW Live copy were fixed with
+`{' '}` and the rendered text re-read to prove no glued words remain.
+
 ---
 
 # Phase 6 — Stretch: pop the Live viewport out to an OS window (Document PiP)
