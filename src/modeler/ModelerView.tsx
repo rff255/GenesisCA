@@ -116,7 +116,10 @@ const rightPanelTitles: Record<RightPanelId, string> = {
   palette: 'Palette',
 };
 
-export function ModelerView() {
+/** `live` — the Modeler is sharing the workspace with the running simulation
+ *  (the Live split). The graph pane is then roughly half a window wide, so the
+ *  side panels start collapsed and are restored on the way out. */
+export function ModelerView({ live = false }: { live?: boolean } = {}) {
   const { model } = useModel();
   const variegatedEnabled = !!model.variegatedCells?.enabled;
   // Neighborhoods is a lattice-CA-only panel; the ActivityBar elides its tab for
@@ -174,6 +177,43 @@ export function ModelerView() {
   // early return so a repeated canvas click re-renders nothing.
   const clearAllSelections = useCallback(() => {
     setSelectedByPanel(prev => (Object.values(prev).every(v => v == null) ? prev : {}));
+  }, []);
+
+  // --- LIVE panel policy ---------------------------------------------------
+  // In Live the graph shares the workspace with the simulation viewport, so the
+  // pane is about half a window wide — with a 320 px master panel (plus a detail
+  // panel) open, the React Flow canvas measured **101 px**, which is unusable.
+  // So both side panels start collapsed in Live and are put back on the way out,
+  // INCLUDING null entries — the same discipline `prePanelStateRef` uses for the
+  // F-fullscreen toggle, and the mirror of `SimulatorView`'s own Live policy.
+  //
+  // ⚠ ModelerView stays MOUNTED across a Modeler ⇄ Live switch (App keeps its
+  // wrapper in the tree in every mode), so without the restore the collapse
+  // would silently leak into the Modeler tab. And because the write-through
+  // effect below persists the COLLAPSED state to `modelerUiState`, an unmount
+  // that happens while still in Live (Live → Library) has to put the snapshot
+  // back there itself, or the panels stay shut for good.
+  const preLivePanelRef = useRef<{ left: PanelId | null; right: RightPanelId | null } | null>(null);
+  const panelStateRef = useRef<{ left: PanelId | null; right: RightPanelId | null }>({ left: null, right: null });
+  panelStateRef.current = { left: activePanel, right: activeRightPanel };
+  useEffect(() => {
+    if (live) {
+      if (preLivePanelRef.current) return;     // already inside Live
+      preLivePanelRef.current = { ...panelStateRef.current };
+      setActivePanel(null);
+      setActiveRightPanel(null);
+    } else if (preLivePanelRef.current) {
+      const p = preLivePanelRef.current;
+      preLivePanelRef.current = null;
+      setActivePanel(p.left);
+      setActiveRightPanel(p.right);
+    }
+  }, [live]);
+  useEffect(() => () => {
+    const p = preLivePanelRef.current;
+    if (!p) return;
+    modelerUiState.activePanel = p.left;
+    modelerUiState.activeRightPanel = p.right;
   }, []);
 
   // Write the layout state through to the module-level snapshot on every change

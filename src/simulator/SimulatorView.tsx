@@ -15,6 +15,9 @@ import { NeighborIndexValuePicker } from '../modeler/panels/NeighborIndexDefault
 import { LookupTableEditor } from '../modeler/panels/LookupTableEditor';
 import { compileGraphWebGPU } from '../modeler/vpl/compiler/webgpu/compile';
 import { createSimWorker } from './createSimWorker';
+import { setSimLayoutApi } from './simLayoutState';
+import { LiveViewportBar } from '../live/LiveViewportBar';
+import { setLiveLayoutLocked } from '../live/liveState';
 import { buildModelDocument } from './showCode';
 import { computeDefaultModelAttrs } from '../model/modelAttrDefaults';
 import type { AgentCodeBundle } from './showCode';
@@ -2267,13 +2270,33 @@ const DiagnosticsPopover = memo(function DiagnosticsPopover({ diag, demotions, g
 });
 
 /**
+ *  `visible` — "this view's canvas has a REAL, non-zero box on screen". True on
+ *  the Simulator tab AND in LIVE mode (where the viewport shares the workspace
+ *  with the node graph). It is what `visibleRef` carries, and therefore what
+ *  gates every draw call outside the step loop — `SimulatorView` is always
+ *  mounted (behind `display: none` on other tabs), so its canvas is 0×0 there
+ *  and `drawImage` into a 0-width canvas THROWS `InvalidStateError`, unmounting
+ *  React.
+ *
+ *  `activeTab` — "this view IS the whole content area, and owns the keyboard by
+ *  default". True only on the Simulator tab. Exactly two things key off it: the
+ *  auto-pause below, and (Phase 4) the default keyboard owner. Everything else
+ *  follows `visible`. Defaults to `true` so the standalone viewer shell
+ *  ([src/viewer/ViewerApp.tsx]) is unchanged.
+ *
+ *  `live` — the Live split workspace is showing. Drives the Live viewport bar,
+ *  the side-panel policy (collapsed on entry, restored on exit) and the overlay
+ *  panel layout. Note it stays TRUE while the Live viewport is collapsed, where
+ *  `visible` is false — that combination is what keeps the run going while the
+ *  user works on the graph alone.
+ *
  *  `hideInstructionsPill` — the standalone-simulation VIEWER shell
  *  ([src/viewer/ViewerApp.tsx]) renders its OWN top-left "ⓘ Info" button
  *  (anchored just right of the settings ear) whose About panel ALREADY shows
  *  the model's instructions, so the pill would both collide with it and be
  *  redundant there. The main app leaves it undefined (pill shown).
  */
-export function SimulatorView({ visible = true, hideInstructionsPill = false }: { visible?: boolean; hideInstructionsPill?: boolean }) {
+export function SimulatorView({ visible = true, activeTab = true, live = false, hideInstructionsPill = false }: { visible?: boolean; activeTab?: boolean; live?: boolean; hideInstructionsPill?: boolean }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const { model, modelVersion, updateIndicator, setSimulationState, addPreset, duplicatePreset, deletePreset, updatePreset, reorderPresets, updateProperties, updateAttribute } = useModel();
   const presetReorder = useListReorder(model.presets || [], reorderPresets);
@@ -9378,6 +9401,27 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
     if (layoutSettleTimer.current) clearTimeout(layoutSettleTimer.current);
   }, []);
 
+  /** DISCRETE layout change: the size is FINAL, so close any drag deferral and
+   *  redraw straight away — the same two statements the panel/bar layout
+   *  `useLayoutEffect` (trigger 1) performs. Exposed through `simLayoutApi` for
+   *  the LIVE splitter and layout menu, which live outside this component. */
+  const drawNow = useCallback(() => {
+    const area = canvasAreaRef.current;
+    if (!area || area.clientWidth < 2 || area.clientHeight < 2) return;
+    layoutResizeUntilRef.current = 0;
+    drawRef.current();
+  }, []);
+
+  // (4) The LIVE splitter / layout menu are siblings of this component in
+  // <main>, so they can reach none of the three triggers. Register the seam.
+  // See src/simulator/simLayoutState.ts for why the ResizeObserver catch-all
+  // alone is not enough (stale stretched bitmap + one OffscreenCanvas re-attach
+  // per drag frame — measured 26 attaches over a 30-move drag).
+  useEffect(() => {
+    setSimLayoutApi({ scheduleLayoutDraw, drawNow });
+    return () => setSimLayoutApi(null);
+  }, [scheduleLayoutDraw, drawNow]);
+
   // (1) lives further down, next to the panel/bar state it depends on.
 
   // (3) The catch-all. The observed element is the one draw() measures; the
@@ -10113,7 +10157,13 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
       }
     };
     const onUp = (e: PointerEvent) => {
-      glc.releasePointerCapture?.(e.pointerId);
+      // ⚠ This handler is on WINDOW, so it sees EVERY pointerup in the app —
+      // including releases that never touched the GL canvas (a transport button,
+      // a panel splitter, the Live splitter). `releasePointerCapture` THROWS
+      // `NotFoundError` for a pointer this element never captured, so the bare
+      // call raised an uncaught exception on every such release while a 3D model
+      // was loaded. Ask first.
+      if (glc.hasPointerCapture?.(e.pointerId)) glc.releasePointerCapture(e.pointerId);
       // Double RIGHT-click on the GL canvas = Reset view. `moved` is the same
       // 3-px drag flag the gizmo click uses, so an RMB PAN never resets; a press
       // that did not start on this canvas leaves `active` null and `moved` false
@@ -10715,10 +10765,17 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
         if (view) { lastAgentCameraKeyRef.current = ''; workerRef.current.postMessage({ type: 'setAgentCamera', view }); }
         workerRef.current.postMessage({ type: 'refreshAgentDisplay' });
       }
-    } else if (playing) {
+    } else if (!activeTab && !live && playing) {
+      // AUTO-PAUSE — leaving the view for another top-level tab stops the run.
+      // ⚠ `!live` is load-bearing: in Live the user may COLLAPSE the viewport to
+      // work on the graph alone, which makes `visible` false, and pausing the
+      // simulation out from under them there would defeat the point of the mode.
+      // `!activeTab` is a belt-and-braces restatement (`activeTab` implies
+      // `visible`, so this arm never sees it true) kept explicit so the rule
+      // reads as "not the active tab AND not Live" rather than as a bare else.
       setPlaying(false);
     }
-  }, [visible, draw, playing, computeAgentRenderView, computeVoxelRenderView]);
+  }, [visible, activeTab, live, draw, playing, computeAgentRenderView, computeVoxelRenderView]);
 
   // Brush refs (so event handlers don't need to re-register)
   const brushColorRef = useRef('#4cc9f0');
@@ -14995,6 +15052,49 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
   const [topBarOpen, setTopBarOpen] = useState(true);
   const [bottomBarOpen, setBottomBarOpen] = useState(true);
 
+  // --- LIVE panel policy: collapse the simulator's side panels, and PUT THEM
+  // BACK on the way out ------------------------------------------------------
+  // In Live the graph pane owns the model-authoring surface, so the simulator's
+  // two side panels start collapsed and the viewport bar's Settings / Controls
+  // toggles bring them back as OVERLAYS over the canvas (they float rather than
+  // squeeze the already-narrow pane — see `.liveOverlayPanels`).
+  //
+  // ⚠ Simulator and Live share ONE `SimulatorView` instance, so collapsing on
+  // entry and leaving it collapsed would silently change the Simulator tab.
+  // The snapshot is restored on exit INCLUDING false entries — the exact
+  // discipline `prePanelStateRef` uses for the F-fullscreen toggle — or a user
+  // who had already closed the right panel gets it re-opened on the way out.
+  const panelStateRef = useRef({ left: true, right: true, top: true, bottom: true });
+  panelStateRef.current = { left: leftPanelOpen, right: rightPanelOpen, top: topBarOpen, bottom: bottomBarOpen };
+  const preLivePanelStateRef = useRef<{ left: boolean; right: boolean; top: boolean; bottom: boolean } | null>(null);
+  useEffect(() => {
+    if (live) {
+      if (preLivePanelStateRef.current) return;   // already inside Live
+      preLivePanelStateRef.current = { ...panelStateRef.current };
+      setLeftPanelOpen(false);
+      setRightPanelOpen(false);
+      // The bars stay: the transport bar IS the transport, and the viewer bar
+      // is how you pick which Output Mapping you are watching.
+    } else if (preLivePanelStateRef.current) {
+      const p = preLivePanelStateRef.current;
+      preLivePanelStateRef.current = null;
+      setLeftPanelOpen(p.left);
+      setRightPanelOpen(p.right);
+      setTopBarOpen(p.top);
+      setBottomBarOpen(p.bottom);
+    }
+  }, [live]);
+
+  // Publish the capture lock for the Live layout controls (splitter + menu).
+  // A 'view'-scope recording pins its output frame size on the first captured
+  // frame, so re-sizing the source box mid-run changes what is being recorded
+  // while the frame size cannot follow — hence "greyed with the reason", the
+  // same interlock the capture settings already use.
+  useEffect(() => {
+    setLiveLayoutLocked(live && recording);
+    return () => setLiveLayoutLocked(false);
+  }, [live, recording]);
+
   // (1) of the LAYOUT-resize triggers (see `scheduleLayoutDraw` above) — the
   // panel / bar collapse state and the right-panel tab swap. DIRECT (not
   // rAF-coalesced) and in a LAYOUT effect, so the canvas is re-sized and
@@ -15131,7 +15231,10 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
   const activeAgentInputParams = inputParamsOf(agentInputMappings.find(m => m.id === agentPaintMapping));
 
   return (
-    <div className={styles.simulatorLayout}>
+    // In LIVE the two side panels FLOAT over the viewport instead of squeezing
+    // it (a 200 + 220 px pair would eat most of an already-halved pane). A class
+    // modifier only — the element tree is identical in every mode.
+    <div className={`${styles.simulatorLayout}${live ? ` ${styles.liveOverlayPanels}` : ''}`}>
       {/* === Left Panel (collapsible) === */}
       {leftPanelOpen && (
         <div className={styles.sidePanel} ref={leftPanelRef}>
@@ -15536,6 +15639,20 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
           title={leftPanelOpen ? 'Close settings' : 'Open settings'}
           data-sim-overlay
         >{leftPanelOpen ? '‹' : '›'}</button>
+        {/* LIVE viewport bar — the panel toggles + the workspace layout menu.
+            Rendered HERE, inside `.canvasArea`, because every overlay element on
+            this canvas MUST carry `data-sim-overlay` (the component sets it) or
+            a click on it falls through the overlay guard and paints the grid.
+            Top-RIGHT: the author-instructions pill already owns `left: 36px`. */}
+        {live && (
+          <LiveViewportBar
+            settingsOpen={leftPanelOpen}
+            controlsOpen={rightPanelOpen}
+            onToggleSettings={() => setLeftPanelOpen(v => !v)}
+            onToggleControls={() => setRightPanelOpen(v => !v)}
+            locked={recording}
+          />
+        )}
         <canvas ref={canvasRef} className={styles.canvas} style={is3D ? { display: 'none' } : undefined} />
         {/* Phase C — 3D agent free-mode direct render: the worker composites the
             WGSL sphere impostors into a canvas we imperatively append here, UNDER
@@ -16466,7 +16583,9 @@ export function SimulatorView({ visible = true, hideInstructionsPill = false }: 
             <button className={tbtn(viz3d[key])} title={title} onClick={() => setViz3d(v => ({ ...v, [key]: !v[key] }))}>{label}</button>
           );
           return (
-            <div className={styles.zoomControls} data-sim-overlay style={{ bottom: 'auto', top: 12, right: 12, left: 'auto', flexDirection: 'column', alignItems: 'stretch', width: 196, gap: 6, padding: 8 }}>
+            // In LIVE the viewport bar owns the pane's top-right corner, so this
+            // panel drops below it (bar top 8 + height 28 + a 6 px gap).
+            <div className={styles.zoomControls} data-sim-overlay style={{ bottom: 'auto', top: live ? 44 : 12, right: 12, left: 'auto', flexDirection: 'column', alignItems: 'stretch', width: 196, gap: 6, padding: 8 }}>
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', cursor: 'pointer' }}
                 onClick={() => setControls3dOpen(o => !o)} title={controls3dOpen ? 'Collapse' : 'Expand'}>
                 <span style={{ fontSize: '0.66rem', color: '#aaa', fontWeight: 600 }}>3D View</span>

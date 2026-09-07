@@ -2,7 +2,7 @@
 
 > Area doc for **GenesisCA**. React Flow graph editor, CaNode, panels, reroutes, the cross-tab clipboard, and the large "Key Patterns" catalogue of editor gotchas. Read before touching src/modeler/**.
 >
-> **Also read** — a change here usually reaches [`compiler-core.md`](compiler-core.md) · [`macros.md`](macros.md) · [`agent-nodes.md`](agent-nodes.md) · [`project-structure.md`](project-structure.md).
+> **Also read** — a change here usually reaches [`compiler-core.md`](compiler-core.md) · [`macros.md`](macros.md) · [`agent-nodes.md`](agent-nodes.md) · [`project-structure.md`](project-structure.md) · and, since **Live** mode puts this editor beside the running simulation in one workspace, [`simulator-ui.md`](simulator-ui.md).
 > Keep following those onward until a pass turns up nothing new; the reading is not done at the first
 > doc that answers your question. See *Read to CLOSURE, not to the first hit* in `../../CLAUDE.md`.
 >
@@ -22,6 +22,7 @@
 - Modeler UX & node additions (v1.15)
 - Reroute Links (wire reroute points)
 - Cross-tab graph clipboard (copy/paste BETWEEN models — branch `updates`)
+- LIVE mode — the graph pane beside the running simulation (Phase 2, 2026-09-07)
 
 ---
 
@@ -423,3 +424,51 @@ and Ctrl+V is a no-op; a fresh third tab that never copied shows an ENABLED Past
 pastes; four malformed payloads are ignored with no throw; the 2.6 MB guard removes
 the key, warns once, and still pastes in-tab. Zero console errors in all three tabs.
 
+
+---
+
+## LIVE mode — the graph pane beside the running simulation (Phase 2, 2026-09-07)
+
+**Live** is the third top-level mode: `ModelerView` and `SimulatorView` share one workspace, split by a
+draggable splitter. Design authority: [docs/IMPACT_MAP_LIVE_SPLIT.md](docs/IMPACT_MAP_LIVE_SPLIT.md) +
+[docs/PLAN_LIVE_SPLIT.md](docs/PLAN_LIVE_SPLIT.md). The simulator half — the mounting invariant, the
+`visible`/`activeTab` split, the `simLayoutApi` seam, `genesisca_live_layout`, the capture interlock —
+is documented in [`simulator-ui.md`](simulator-ui.md) § *LIVE mode*. What the MODELER side owns:
+
+- **`ModelerView` is mounted in a wrapper that exists in EVERY mode.** [App.tsx](src/App.tsx) renders
+  `<div className={livePane|contents}>{(mode === 'modeler' || live) && <ModelerView live={live} />}</div>`.
+  Outside Live the wrapper is `display: contents`, so `.modelerLayout` is a direct child of `.content`
+  exactly as before and the Modeler tab lays out byte-identically. ⚠ **The wrapper must not be
+  Live-conditional**: React reconciles by position, so introducing it only in Live would remount
+  `ModelerView` (and rebuild React Flow, re-fitting nodes) on every Modeler ⇄ Live switch. The upside is
+  also the trap — see the panel policy below.
+- **React Flow resizes ITSELF.** The Live splitter needs no modeler-side plumbing at all; only the
+  simulator has to be told (`simLayoutApi`). This is the same property the panel-resize work recorded
+  ("the Modeler's React Flow canvas is untouched and resizes itself, 1000 → 1320 on a panel collapse").
+- **⚠ THE LIVE PANEL POLICY, AND WHY IT IS NOT OPTIONAL.** In Live the graph pane is about half a window.
+  **Measured on a 500 px pane with the Properties panel open: ActivityBar 40 + PanelShell 320 +
+  `.graphArea` 101 + RightActivityBar 40** — a 101 px canvas is unusable. So `ModelerView` snapshots
+  `{activePanel, activeRightPanel}` into `preLivePanelRef` on Live-enter, closes both, and restores them
+  **including null entries** on exit (the `prePanelStateRef` discipline). With the panels closed the graph
+  area measured **421 px** on the same pane, and the Modeler tab came back with its 320 px panel and a
+  1200 px canvas.
+  - ⚠ **`ModelerView` stays MOUNTED across Modeler ⇄ Live** (the wrapper above), so without the restore
+    the collapse would silently leak into the Modeler tab — the mirror of the `SimulatorView` leak.
+  - ⚠ **And because the write-through effect persists the COLLAPSED state to `modelerUiState`**, an
+    unmount that happens while still in Live (Live → Library) has to put the snapshot back into
+    `modelerUiState` itself, from an unmount-only cleanup, or the panels stay shut for good. Verified:
+    Live → Library → Modeler restores the 320 px panel.
+- **Panel WIDTHS still do not persist** — `PanelShell.tsx` mutates `panel.style.width` / `minWidth`
+  directly on drag and the element is unmounted on close, so re-opening starts from the CSS default. The
+  Live splitter therefore could NOT copy a panel-width pattern; it has its own store
+  (`genesisca_live_layout`), and the brainstorm's "the splitter position persists like the panel widths"
+  premise was simply wrong.
+- **Macro scope survives.** Editing inside a macro while the simulation runs is the same pipeline
+  (`scheduleSync` routes macro scopes to `updateMacro`), and `graphState.ts`'s `savedCurrentScope`
+  already survives every remount. The breadcrumb costs the graph pane's own vertical budget — in a split
+  (unlike an overlay) that is not a special case.
+- **Keyboard ownership is NOT yet resolved (Phase 4).** Today `SimulatorView`'s main keyboard handler is
+  not visibility-gated and `GraphEditor`'s `Ctrl+C/V/X` is double-bound against it in the same phase on
+  the same target, so in Live both surfaces receive those keys. Both are **pre-existing** defects (`Esc`
+  in the Modeler resets the running simulation today); Live only makes them unmissable. Phase 4 adds the
+  `liveFocus` owner to [src/live/liveState.ts](src/live/liveState.ts).

@@ -1,0 +1,101 @@
+/* LIVE MODE — the splitter between the graph pane and the viewport pane, and
+   the restore ear that replaces it while the viewport is collapsed.
+
+   The panes themselves are styled by `App.module.css` (.livePane + the .content
+   direction modifiers) because they are `<main>`'s own children. */
+
+.splitter {
+  flex: 0 0 auto;
+  position: relative;
+  background: var(--color-border);
+  border: none;
+  padding: 0;
+  transition: background var(--duration-base);
+  /* Never let the handle itself become a scroll/flex sizing problem. */
+  align-self: stretch;
+  touch-action: none;
+}
+
+.splitterVertical {
+  width: 6px;
+  cursor: col-resize;
+}
+
+.splitterHorizontal {
+  height: 6px;
+  cursor: row-resize;
+}
+
+.splitter:hover,
+.splitter:active {
+  background: var(--color-accent);
+}
+
+/* Locked (a recording is in progress — the frame dims are pinned on the first
+   captured frame, so re-sizing the source box mid-run is exactly the interlock
+   the capture rules already enforce elsewhere). Greyed IN PLACE with the reason
+   in its `title`, never hidden: stopping the recording is one click away. */
+.splitterLocked,
+.splitterLocked:hover,
+.splitterLocked:active {
+  cursor: not-allowed;
+  background: var(--color-border);
+  opacity: 0.5;
+}
+
+/* The grip pips — three dots centred on the bar so the handle reads as a
+   draggable object rather than as a border. */
+.grip {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  display: flex;
+  gap: 3px;
+  pointer-events: none;
+}
+
+.splitterVertical .grip { flex-direction: column; }
+.splitterHorizontal .grip { flex-direction: row; }
+
+.gripDot {
+  width: 2px;
+  height: 2px;
+  border-radius: 50%;
+  background: var(--color-bg-canvas);
+  opacity: 0.85;
+}
+
+/* Restore ear — takes the splitter's slot while the viewport is collapsed
+   (there is nothing to divide, so the splitter is HIDDEN, not disabled). Same
+   vocabulary as the simulator's `.panelExpandBtn` / the modeler's expand ears. */
+.restoreEar {
+  flex: 0 0 auto;
+  align-self: flex-start;
+  margin-top: var(--space-4);
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  background: var(--color-bg-elevated);
+  border: 1px solid var(--color-border);
+  color: var(--color-text-muted);
+  font-size: var(--font-2xs);
+  cursor: pointer;
+  padding: var(--space-4) var(--space-2);
+  line-height: 1;
+  transition: color var(--duration-base), background var(--duration-base);
+  writing-mode: vertical-rl;
+}
+
+.restoreEarHorizontal {
+  align-self: center;
+  margin-top: 0;
+  writing-mode: horizontal-tb;
+  padding: var(--space-2) var(--space-6);
+  border-radius: var(--radius-md);
+}
+
+.restoreEar:hover {
+  color: var(--color-text-primary);
+  background: var(--color-overlay-hover-medium);
+}

@@ -3,6 +3,30 @@
   height: 100%;
 }
 
+/* LIVE mode: the two side panels FLOAT over the canvas instead of being flex
+   siblings that squeeze it. The Live viewport pane is typically half a window
+   wide, where a 200 px + 220 px pair would leave almost nothing to look at —
+   so in Live they behave as panel-sized popovers, opened from the viewport
+   bar's Settings / Controls toggles (or from the existing collapsed-panel ears,
+   which are unchanged). A class modifier ONLY: the element tree is identical in
+   every mode, which is the invariant that keeps the worker alive across a
+   Simulator ⇄ Live switch. */
+.liveOverlayPanels {
+  position: relative;
+}
+
+.liveOverlayPanels > .sidePanel,
+.liveOverlayPanels > .rightPanel {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  z-index: 12;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.45);
+}
+
+.liveOverlayPanels > .sidePanel { left: 0; }
+.liveOverlayPanels > .rightPanel { right: 0; }
+
 /* --- Collapsible side panels --- */
 
 .sidePanel {

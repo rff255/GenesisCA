@@ -2,7 +2,7 @@
 
 > Area doc for **GenesisCA**. SimulatorView: rendering, the transport bar, capture (screenshot/recording), the cursor overlay, panel layout and resize.
 >
-> **Also read** — a change here usually reaches [`simulation-engine.md`](simulation-engine.md) · [`agent-render.md`](agent-render.md) · [`agent-brush-ui.md`](agent-brush-ui.md) · [`grid-3d.md`](grid-3d.md) · [`io-and-formats.md`](io-and-formats.md).
+> **Also read** — a change here usually reaches [`simulation-engine.md`](simulation-engine.md) · [`agent-render.md`](agent-render.md) · [`agent-brush-ui.md`](agent-brush-ui.md) · [`grid-3d.md`](grid-3d.md) · [`io-and-formats.md`](io-and-formats.md) · and, since **Live** mode puts this view beside the graph editor in one workspace, [`modeler-ui.md`](modeler-ui.md).
 > Keep following those onward until a pass turns up nothing new; the reading is not done at the first
 > doc that answers your question. See *Read to CLOSURE, not to the first hit* in `../../CLAUDE.md`.
 >
@@ -20,6 +20,7 @@
 - Quick-wins batch (branch `improvements`, 2026-07-27)
 - Medium-features batch (branch `improvements`, 2026-07-28 — five features, one commit each)
 - Panel resize responsiveness: the canvas re-sizes DURING the drag (2026-08-05)
+- LIVE mode — the simulator inside the split workspace (Phase 2, 2026-09-07)
 
 ---
 
@@ -363,3 +364,165 @@ Game of Life (2D, WebGPU grid): **paused** — all four collapse/expand actions 
 
 ---
 
+## LIVE mode — the simulator inside the split workspace (Phase 2, 2026-09-07)
+
+**Live** is the third top-level mode (`Modeler · Simulator · Live`): the rule graph and the *running*
+simulation side by side in two opaque panes divided by a draggable splitter. Design authority:
+[docs/IMPACT_MAP_LIVE_SPLIT.md](docs/IMPACT_MAP_LIVE_SPLIT.md) + [docs/PLAN_LIVE_SPLIT.md](docs/PLAN_LIVE_SPLIT.md)
+(Phase 2 = the mode, the dual mount, the layout; Phase 3 = the last-good-rule / apply policy;
+Phase 4 = keyboard ownership, Overseer exclusion, perf guards). **Zero compiler/emit impact** —
+`check-compile-identity`: 31 models, all surfaces unchanged.
+
+### ⚠ THE MOUNTING INVARIANT — `SimulatorView`'s POSITION IN THE REACT TREE IS IDENTICAL IN `simulator` AND `live`
+
+`SimulatorView` owns the Web Worker, the WASM memory, the WebGPU device, the agent SoA snapshot and the
+whole grid state. React reconciles by POSITION, so a Live-only wrapper around it would unmount + remount
+it and the running simulation would be *gone* (generation 12 000 → 0). So [App.tsx](src/App.tsx) mounts
+**both** pane wrappers in **every** mode — the modeler one is an empty `display: contents` div outside
+Modeler/Live, which is free — and Live changes only `className` / `style`. The splitter is a Live-only
+sibling BETWEEN them (`{cond && …}` renders null elsewhere and holds the slot). Dock-bottom / swap-sides
+are therefore pure `flex-direction` on `.content` ([App.module.css](src/App.module.css) `.liveRight` /
+`.liveBottom` / `.liveSwap` + `.livePane`); **no element ever moves**, which is why the layout menu costs
+nothing. `min-width: 0` / `min-height: 0` on `.livePane` are load-bearing — without them a flex item will
+not shrink below its content and the splitter jams. **Measured:** entering Live from a Simulator run at
+gen 808 kept the counter climbing (940 four seconds later) with `window.__simWorker` the *same object
+identity*, across Simulator ⇄ Live ⇄ Modeler ⇄ Library round trips.
+
+### `visible` = SHOWN, `activeTab` = the active tab — the prop split
+
+`SimulatorView({ visible, activeTab, live, hideInstructionsPill })`:
+
+- **`visible`** keeps its name and means *"this view's canvas has a real, non-zero box on screen"* —
+  true on the Simulator tab AND in Live. It is what `visibleRef` carries, i.e. what gates every draw
+  outside the step loop (the 0×0 `drawImage` → `InvalidStateError` → React-unmount rule). It is FALSE
+  while the Live viewport is collapsed.
+- **`activeTab`** means *"this view IS the whole content area and owns the keyboard by default"* — true
+  only on the Simulator tab. Defaults to `true` so the standalone viewer shell is unchanged. Phase 4's
+  keyboard-ownership work is the other consumer.
+- **`live`** drives the viewport bar, the panel policy and the overlay panel layout. It stays TRUE while
+  the viewport is collapsed — that combination is what keeps the run going while the user works on the
+  graph alone.
+
+⚠ **The auto-pause arm is `else if (!activeTab && !live && playing)`**. `!live` is load-bearing: a
+collapsed Live viewport makes `visible` false, and pausing there would defeat the mode. `activeTab` and
+`live` are both in the effect's dep list. Everything else in that effect (the `refreshDisplay` /
+`setGridCamera`+`refreshGridDisplay` / `setAgentCamera`+`refreshAgentDisplay` re-present block) keys off
+`visible` and fires on Live-enter for free — entering Live is the same hidden-0×0 → real-box transition
+the block exists for, and the 3D camera re-send it performs is what stops a `refresh*Display` presenting
+the OLD view.
+
+### THE `simLayoutApi` SEAM — the Live splitter is OUTSIDE `SimulatorView`
+
+[src/simulator/simLayoutState.ts](src/simulator/simLayoutState.ts) is a module global registered by
+`SimulatorView` on mount and nulled on unmount (the `quickAddApi` pattern): `{ scheduleLayoutDraw, drawNow }`.
+The Live splitter is a sibling in `<main>`, so it can reach none of the three existing resize triggers.
+
+- `onPointerMove` → `simLayoutApi.scheduleLayoutDraw()` (rAF-coalesced draw **plus** the 140 ms
+  `layoutResizeUntilRef` window that holds off the `OffscreenCanvas` re-attach).
+- `onPointerUp` and every layout-menu action → `simLayoutApi.drawNow()` = *clear the deferral, then
+  `drawRef.current()`* — the same two statements the panel/bar `useLayoutEffect` performs. `App` also
+  runs a `useLayoutEffect` on `[mode, dock, swapped, split, viewportCollapsed]` that calls `drawNow`, so
+  a discrete change repaints before paint.
+
+⚠ **Relying on the `ResizeObserver` catch-all alone is the documented failure**: RO delivery is part of
+the browser's rendering steps, an occluded pane delivers none, and without the deferral window the drag
+drives one transfer + one worker pipeline rebuild per frame. **Measured over a 30-move Live splitter
+drag: 1 `attachAgentCanvas` (Particle Life, GPU-resident direct render), 1 `attachAgentCanvas`
+(Chemotaxis, E2 composite), 2 `attachVoxelCanvas` (Life3D)** — against 26 for the unguarded case — with
+`canvas.width === canvasArea.clientWidth` (×dpr in 3D) at **every one of the 30 samples, 0 mismatches**.
+
+⚠ **The splitter mutates the two panes' inline `flex` DIRECTLY during the drag** and only COMMITS the
+fraction to `liveUiState` on release — the discipline the simulator's own side-panel handles use. Routing
+every `pointermove` through React state would re-render both views tens of times a second. Its
+`pointermove`/`pointerup` listeners are on **`document`**, not on the 6 px handle: `setPointerCapture` is
+best-effort (`tryCapture`), and without capture a handle-scoped listener stops firing the instant the
+cursor leaves the bar.
+
+### Live layout state — `genesisca_live_layout`, a FRACTION, and why it is not `genesisca_sim_settings`
+
+[src/live/liveUiState.ts](src/live/liveUiState.ts) is a module global + pub/sub with localStorage
+write-through under **`genesisca_live_layout`**:
+`{ dock: 'right'|'bottom', swapped, split (0–1, the GRAPH pane's share), viewportCollapsed, applyPolicy }`.
+
+- A **fraction, not pixels** — it survives a window resize and a dock flip with no re-clamping. Clamped to
+  `[0.15, 0.85]`; double-clicking the splitter snaps to 0.5.
+- **NOT `genesisca_sim_settings`**: that key is owned by `SimulatorView`'s single 300 ms persist effect
+  whose declaration-order trap requires every persisted state to be declared above it. Live layout is
+  App-level state.
+- **The panel widths still do NOT persist** (both `PanelShell` and the simulator's own handles mutate
+  inline `style.width` on an element that is unmounted on close) — that is *why* Live needed its own
+  store rather than a pattern to copy.
+- `applyPolicy` is stored but has **no control yet**: Phase 2 does not change the edit→rule pipeline, so
+  an enabled Auto/On-demand switch would be internally inert — exactly what the UI doctrine forbids.
+  Phase 3 lands the behaviour and the control together. Same for the transport chip.
+
+### ⚠ COLLAPSE IS `display: none`, NOT A ZERO-WIDTH FLEX ITEM
+
+`canvas.parentElement?.clientWidth ?? 500` returns **0**, not the fallback, for a 0-width pane — so
+`canvas.width = 0` and the next `drawImage` throws `InvalidStateError` and unmounts React. A collapsed
+Live viewport therefore uses `display: none` (with `visible` false), the proven-safe hidden state this
+always-mounted view already lives in on every other tab. The splitter is HIDDEN while collapsed (there is
+nothing to divide) and `LiveSplitter` renders a **restore ear** in its slot instead — the menu item is
+collapse-ONLY, because the viewport bar lives INSIDE the pane it collapses and could never offer the
+inverse.
+
+### The Live viewport bar and the panel policy
+
+- [src/live/LiveViewportBar.tsx](src/live/LiveViewportBar.tsx) renders **inside `.canvasArea`**, from
+  `SimulatorView`, and carries `data-sim-overlay` — mandatory, or a click on it falls through the overlay
+  guard and paints the grid. It is anchored **top-RIGHT** (the author-instructions pill already owns
+  `left: 36px`). It holds the Settings / Controls panel toggles and the layout menu
+  (dock right · dock bottom · swap sides · collapse viewport).
+- ⚠ **The 3D View panel is the one other top-right overlay** and it collided with the bar (measured:
+  bar `44..72`, panel `48..491`). Its inline `top` is now `live ? 44 : 12`. Anything new anchored
+  top-right in `.canvasArea` has to make the same allowance.
+- **The simulator's two side panels FLOAT over the canvas in Live** (`.liveOverlayPanels` modifier on
+  `.simulatorLayout` → `position: absolute` on `.sidePanel` / `.rightPanel`). A 200 + 220 px pair would
+  eat most of an already-halved pane; as overlays they behave as panel-sized popovers, which is how the
+  brush, the layers matrix and the indicators stay reachable with the panels collapsed by policy.
+- ⚠ **PANEL STATE MUST NOT LEAK INTO THE SIMULATOR TAB.** Both modes share ONE `SimulatorView` instance,
+  so `preLivePanelStateRef` snapshots `{left, right, top, bottom}` on Live-enter and restores it on exit
+  **including false entries** — the exact `prePanelStateRef` discipline. Verified: right panel closed in
+  the Simulator, both opened inside Live, back to the Simulator ⇒ `{left: true, right: false}` again.
+  (The bars are deliberately left open — the transport bar IS the transport.)
+
+### Capture ↔ layout interlock
+
+A `'view'`-scope recording pins the output frame dimensions on its first captured frame (`recordCropRef`
+/ `recordDimsRef`) and drops every mismatched frame after that, so re-sizing the pane mid-recording
+changes the source box while the frame size cannot follow. `SimulatorView` publishes `recording && live`
+through [src/live/liveState.ts](src/live/liveState.ts) (`setLiveLayoutLocked`) and the splitter + every
+layout-menu item **grey out in place with the reason** — the same disposition the existing "capture
+settings while recording" rule uses, never a hide (stopping the recording is one click away). Capture
+itself stays fully available in Live: the `'simulation'` scope renders the whole world at a fit framing
+on the main thread, independent of zoom/pan and of the pane size.
+
+### A pre-existing throw the Live splitter made unmissable
+
+The 3D GL canvas's pointer effect registers `onUp` on **`window`**, and it called
+`glc.releasePointerCapture?.(e.pointerId)` unconditionally — which **throws `NotFoundError`** for a
+pointer that element never captured. So *every* pointer release outside the GL canvas (a transport
+button, a panel splitter, the Live splitter) raised an uncaught exception while a 3D model was loaded.
+Reproduced on the plain **Simulator** tab, i.e. it is not a Live regression. Now guarded with
+`if (glc.hasPointerCapture?.(e.pointerId))`.
+
+### Verified (real app, real worker, real GPU) — Phase 2
+
+Game of Life (2D grid, WebGPU), Particle Life (2D agents, GPU-resident direct render), Life3D (3D voxel),
+Morphogenesis — Growing Tissue (agents-only, no CA layer) and Chemotaxis — Aggregation (both topologies,
+E2 composite): enter Live mid-run with the worker identity preserved and the generation counter climbing;
+30-move splitter drags in both dock orientations with 0 canvas/container mismatches and ≤ 2 re-attaches;
+dock right / dock bottom / swap sides / collapse / restore / double-click-snap; a reload restoring
+`{dock: bottom, swapped: true, split: 0.30}`; a real graph edit (Get Random `bool → float` and back) while
+playing → **2 `recompile` posts, generation 3933 → 4012 → 4091, same worker**; the recording interlock
+locking and unlocking. **0 console errors throughout** (`window.onerror` + a `console.error` hook installed
+before each reproduction). `tsc`, `npm run build`, `check-compile-identity` (**31 models, all surfaces
+unchanged**), `verify-agent-render.mjs` and `parity-agent-wasm.mjs` all green.
+
+**NB for future verification here:** React Flow node drags and the 3D orbit gesture cannot be driven by
+synthetic pointer events (`setPointerCapture` throws for a pointerId the browser never issued, which
+aborts the handler) — drive the pure state instead, or verify by measurement. The Live splitter *can* be
+driven synthetically because its capture is wrapped in `tryCapture` and its move/up listeners are on
+`document`.
+
+---

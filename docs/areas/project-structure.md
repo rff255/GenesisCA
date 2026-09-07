@@ -106,8 +106,16 @@ genesis-ca/
 │   │           ├── agentWasm/compile.ts # SEPARATE WASM agent-loop compiler (reuses wasm/encoder.ts; emits its own behaviour+forcePass module over the wasmBacked AgentStore memory). FULL coverage — the WHOLE agent-graph catalogue runs on WASM with JS bit-parity (2D+3D field bridge [bilinear/trilinear + r-disk/r-sphere], array tier, structural writes, setters, universal nodes, array vars); divisionEvent+agentInit stay JS-on-CPU. Reject set = zero (only a getNearbyAgents scratch-slot budget). Heavy-rule benchmark: 2-5x faster than JS.
 │   │           ├── agentWebgpu/         # PR7: SEPARATE WebGPU agent-loop compiler (layout.ts GPU agent SoA + agent-attr/request/3D-z runs + auxF32/indicators/bondStore regions, compile.ts behaviour shader + gate + full-coverage node set + 2D/3D field bridge [bilinear/trilinear], forcePass.ts 2D/3D force integrator). Runtime = simulator/engine/agentWebgpuRuntime.ts (FULL coverage DONE — Boids 2D/3D + Chemotaxis 2D/3D + GoL-on-agents + Tissue run on WebGPU; reject set = the genuine fundamentals only: median/uniform-random + order-dependent indicator ops + the agent-array-producer capacity gate. Glyph setCellLooks = parity no-op; 3D field bridge DONE).
 │   │           └── overseer/compile.ts  # Overseer: compiles the experiment graph to an ASYNC main-thread JS driver (NOT a compile target — reuses per-node JS compile() for the universal value subset; own flow emitter with awaited O.* actions)
+│   ├── live/                         # LIVE mode — the split workspace (graph + running simulation)
+│   │   ├── liveUiState.ts            # The PERSISTED pane layout (dock / swapped / split fraction / viewportCollapsed / applyPolicy): module global + pub/sub + localStorage write-through under `genesisca_live_layout`
+│   │   ├── liveState.ts              # Transient cross-tree flags (Phase 2: `liveLayoutLocked` = a recording is pinning the frame size). Phase 4 adds liveFocus / liveGraphDragging
+│   │   ├── LiveSplitter.tsx          # The draggable divider (mutates the panes' inline flex, commits on release, drives simLayoutApi) + the restore ear it renders while the viewport is collapsed
+│   │   ├── LiveViewportBar.tsx       # The compact bar over the viewport pane (Settings / Controls panel toggles + the layout menu). Rendered by SimulatorView INSIDE .canvasArea so it carries `data-sim-overlay`
+│   │   ├── Live.module.css           # Splitter + restore-ear styles
+│   │   └── LiveViewportBar.module.css
 │   ├── simulator/
 │   │   ├── SimulatorView.tsx         # Canvas rendering, zoom/pan, brush tool
+│   │   ├── simLayoutState.ts         # The `simLayoutApi` seam ({scheduleLayoutDraw, drawNow}) SimulatorView registers on mount — how the Live splitter, which lives outside its React tree, re-sizes the canvases without hitting the ResizeObserver-only path
 │   │   ├── ExperimentsPanel.tsx      # Overseer: the "Overseer Experiments" right-panel TAB (Run/Abort, Journal, Series table, CSV/JSON export) — one of the shared right panel's tabs (Controls | Overseer Experiments)
 │   │   ├── spriteRegistry.ts         # Agent sprites: main-thread ImageDecoder→ImageBitmap[] cache (decode side)
 │   │   ├── csvImport.ts              # CSV import core (pure): RFC-4180 parser, delimiter/header detection, per-attr-type decode, agent column auto-map, grid value block
@@ -182,6 +190,7 @@ genesis-ca/
 ├── docs/
 │   ├── IMPACT_MAP_PWA_INSTALL.md     # PWA install + offline impact map (+ PLAN_PWA_INSTALL.md/.html)
 │   ├── IMPACT_MAP_GRAPH_REWRITING_AGENTS.md  # GRA design authority (+ PLAN_ + HANDOFF_GRAPH_REWRITING_AGENTS.md and the per-phase HANDOFF_GRA_*.md)
+│   ├── IMPACT_MAP_LIVE_SPLIT.md      # LIVE mode design authority (+ PLAN_LIVE_SPLIT.md/.html; origin BRAINSTORM_SEE_THROUGH_CANVAS.md/.html)
 │   ├── PLAN_PANEL_ELEMENT_AFFORDANCE.md  # Panel element rows as grabbable objects (+ .html mockup, both themes)
 │   └── NODES_REFERENCE.md            # Node catalogue + Mermaid diagrams + redundancy analysis
 ├── .github/
