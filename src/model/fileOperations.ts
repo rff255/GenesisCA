@@ -596,7 +596,7 @@ export function serializeSimState(
   },
   uiSettings: {
     activeViewer: string;
-    /** The active AGENT viewer (two-layer viewer bar). */
+    /** The active AGENT viewer (the two-layer viewer control on the transport bar). */
     activeAgentViewer?: string;
     brushColor: string;
     brushW: number;

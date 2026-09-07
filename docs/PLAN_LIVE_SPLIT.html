@@ -484,6 +484,161 @@ Phase 4 fixes both. They are corrections, not new-feature scaffolding, and they 
 </div>
 <p class="cap">Chromium-only is acceptable — WebGPU already requires it. What is <em>not</em> acceptable is shipping a pop-out that silently freezes the agent or voxel layer, so the spike runs on a throwaway branch with no product code, against Particle Life, Accretor, Life3D and Game of Life, and must also prove a clean return when the window closes.</p>
 
+<hr style="margin:56px 0 0;border:none;border-top:1px solid #2a2e37">
+
+<h2>Output-Mapping bar relocation <span class="tag">as built &middot; 2026-09-07</span></h2>
+<p class="lead">The centred top viewer bar is retired in <b>every</b> mode. Its whole job &mdash; cell
+views, agent views, per-mapping tooltips &mdash; is now one compact control on the transport bar, between
+<code>G/F</code> and play/pause. Hovering (or clicking) it opens a vertical popup; the <code>--live-viewer-row-shift</code>
+machinery the previous round added to keep the row clear of the Live bar is gone with it.</p>
+
+<h3>Before &middot; after</h3>
+<div style="display:flex;gap:16px;flex-wrap:wrap;align-items:flex-start">
+
+  <!-- BEFORE -->
+  <div style="flex:1 1 420px;min-width:380px">
+    <div style="position:relative;height:250px;border:1px solid #2a2e37;border-radius:9px;overflow:hidden;background:#0a0b0e">
+      <!-- canvas -->
+      <svg viewBox="0 0 400 250" width="100%" height="100%" style="position:absolute;inset:0" aria-label="Simulator canvas, before">
+        <defs>
+          <linearGradient id="vbg" x1="0" y1="0" x2="1" y2="1">
+            <stop offset="0" stop-color="#12211a"/><stop offset="1" stop-color="#0d1512"/>
+          </linearGradient>
+        </defs>
+        <rect x="0" y="0" width="400" height="250" fill="url(#vbg)"/>
+        <g fill="#3f6b4f" opacity=".85">
+          <rect x="40" y="60" width="10" height="10"/><rect x="70" y="90" width="10" height="10"/>
+          <rect x="120" y="55" width="10" height="10"/><rect x="180" y="130" width="10" height="10"/>
+          <rect x="250" y="80" width="10" height="10"/><rect x="300" y="160" width="10" height="10"/>
+          <rect x="330" y="70" width="10" height="10"/><rect x="90" y="180" width="10" height="10"/>
+          <rect x="200" y="200" width="10" height="10"/><rect x="260" y="140" width="10" height="10"/>
+        </g>
+        <!-- the retired top bar -->
+        <g>
+          <rect x="70" y="12" width="18" height="18" rx="5" fill="#16181d" stroke="#2a2e37"/>
+          <path d="M75 23 l4 -4 l4 4" fill="none" stroke="#8a8f9a" stroke-width="1.4"/>
+          <rect x="93" y="10" width="240" height="22" rx="8" fill="#16181d" stroke="#2a2e37"/>
+          <text x="101" y="24.5" font-family="system-ui" font-size="8" fill="#8a8f9a">Output Mapping (A&#8594;C):</text>
+          <rect x="188" y="13.5" width="52" height="15" rx="4" fill="#2b2f38" stroke="#43485a"/>
+          <text x="193" y="24" font-family="system-ui" font-size="8" fill="#e6e8ee">City on th&#8230;</text>
+          <text x="246" y="24" font-family="system-ui" font-size="8" fill="#8a8f9a">Land use</text>
+          <text x="288" y="24" font-family="system-ui" font-size="8" fill="#8a8f9a">Slope</text>
+        </g>
+        <!-- transport bar -->
+        <g>
+          <rect x="120" y="216" width="160" height="24" rx="11" fill="#16181d" stroke="#2a2e37"/>
+          <text x="130" y="231" font-family="system-ui" font-size="8" fill="#8a8f9a">&#9109; &#9111;</text>
+          <line x1="152" y1="222" x2="152" y2="234" stroke="#2a2e37"/>
+          <text x="158" y="231" font-family="system-ui" font-size="8" fill="#8a8f9a">FPS 61</text>
+          <text x="188" y="231" font-family="system-ui" font-size="8" fill="#8a8f9a">G/F 1</text>
+          <line x1="213" y1="222" x2="213" y2="234" stroke="#2a2e37"/>
+          <text x="220" y="231.5" font-family="system-ui" font-size="9" fill="#e6e8ee">&#9654;</text>
+          <text x="240" y="231.5" font-family="system-ui" font-size="9" fill="#8a8f9a">&#9654;|</text>
+          <text x="260" y="231.5" font-family="system-ui" font-size="9" fill="#8a8f9a">&#8635;</text>
+        </g>
+      </svg>
+    </div>
+    <p class="cap"><b>Before.</b> A whole strip of canvas for a rarely-pressed control &mdash; and in Live
+    it shared that strip with the Live viewport bar, which is why it had to be able to drop to a second row.</p>
+  </div>
+
+  <!-- AFTER -->
+  <div style="flex:1 1 420px;min-width:380px">
+    <div style="position:relative;height:250px;border:1px solid #2a2e37;border-radius:9px;overflow:hidden;background:#0a0b0e">
+      <svg viewBox="0 0 400 250" width="100%" height="100%" style="position:absolute;inset:0" aria-label="Simulator canvas, after">
+        <rect x="0" y="0" width="400" height="250" fill="url(#vbg)"/>
+        <g fill="#3f6b4f" opacity=".85">
+          <rect x="40" y="30" width="10" height="10"/><rect x="70" y="90" width="10" height="10"/>
+          <rect x="120" y="25" width="10" height="10"/><rect x="180" y="130" width="10" height="10"/>
+          <rect x="250" y="50" width="10" height="10"/><rect x="300" y="160" width="10" height="10"/>
+          <rect x="330" y="40" width="10" height="10"/><rect x="90" y="180" width="10" height="10"/>
+          <rect x="200" y="200" width="10" height="10"/><rect x="260" y="110" width="10" height="10"/>
+          <rect x="150" y="70" width="10" height="10"/><rect x="215" y="35" width="10" height="10"/>
+        </g>
+        <!-- the popup, opened on hover -->
+        <g>
+          <rect x="188" y="120" width="104" height="86" rx="6" fill="#16181d" stroke="#2a2e37"/>
+          <text x="196" y="133" font-family="system-ui" font-size="7" fill="#8a8f9a">Output Mapping (A&#8594;C)</text>
+          <rect x="192" y="138" width="96" height="15" rx="4" fill="#2b2f38" stroke="#43485a"/>
+          <text x="196" y="148.5" font-family="system-ui" font-size="7.5" fill="#e8a13a">&#10003;</text>
+          <text x="205" y="148.5" font-family="system-ui" font-size="8" fill="#e6e8ee">City on the map</text>
+          <text x="205" y="164" font-family="system-ui" font-size="8" fill="#8a8f9a">Land use</text>
+          <text x="205" y="179" font-family="system-ui" font-size="8" fill="#8a8f9a">Distance to road</text>
+          <text x="205" y="194" font-family="system-ui" font-size="8" fill="#8a8f9a">Slope</text>
+        </g>
+        <!-- transport bar with the viewer control -->
+        <g>
+          <rect x="98" y="216" width="204" height="24" rx="11" fill="#16181d" stroke="#2a2e37"/>
+          <text x="107" y="231" font-family="system-ui" font-size="8" fill="#8a8f9a">&#9109; &#9111;</text>
+          <line x1="129" y1="222" x2="129" y2="234" stroke="#2a2e37"/>
+          <text x="135" y="231" font-family="system-ui" font-size="8" fill="#8a8f9a">FPS 61</text>
+          <text x="165" y="231" font-family="system-ui" font-size="8" fill="#8a8f9a">G/F 1</text>
+          <line x1="190" y1="222" x2="190" y2="234" stroke="#2a2e37"/>
+          <rect x="194" y="220" width="72" height="16" rx="4" fill="#2b2f38" stroke="#5a4320"/>
+          <text x="199" y="231" font-family="system-ui" font-size="8" fill="#e6e8ee">City on the&#8230;</text>
+          <line x1="271" y1="222" x2="271" y2="234" stroke="#2a2e37"/>
+          <text x="277" y="231.5" font-family="system-ui" font-size="9" fill="#e6e8ee">&#9654;</text>
+          <text x="288" y="231.5" font-family="system-ui" font-size="9" fill="#8a8f9a">&#9654;|</text>
+        </g>
+        <!-- pointer -->
+        <path d="M232 244 l0 -12 l8 8 l-4 0 l3 6 l-3 1.5 l-3 -6 z" fill="#e6e8ee" stroke="#0a0b0e" stroke-width=".6"/>
+      </svg>
+    </div>
+    <p class="cap"><b>After.</b> The canvas keeps its whole top strip. The current view&rsquo;s name sits
+    between <code>G/F</code> and play, truncated with an ellipsis (the full name is in the tooltip); hover
+    or click opens the list, grouped <b>Cells (A&#8594;C)</b> / <b>Agents (A&#8594;C)</b> when the model has both,
+    with a <span style="color:#e8a13a">&#10003;</span> on the current entry.</p>
+  </div>
+</div>
+
+<div class="note warn"><b>Two rules the mockup encodes.</b> The popup carries <b>no</b>
+<code>role="menu"</code>: it opens on hover, and <code>overlayOwnsKeyboard()</code> stands the global
+<span class="kbd">Enter</span> (play/pause) down while a <code>[role=menu]</code> is in the DOM &mdash; the
+same trap that made the Live bar&rsquo;s apply-policy popover click-only. And the name is clamped to
+108&nbsp;px: the bar is <i>centred</i>, so an unclamped label would nudge every neighbouring control, the
+same reason the play button&rsquo;s width is pinned.</div>
+
+<h3>When there is nothing to switch to</h3>
+<div style="display:flex;gap:16px;flex-wrap:wrap;align-items:center">
+  <svg viewBox="0 0 300 44" width="300" height="44" aria-label="Readout form of the viewer control">
+    <rect x="2" y="8" width="230" height="26" rx="12" fill="#16181d" stroke="#2a2e37"/>
+    <text x="13" y="25" font-family="system-ui" font-size="9" fill="#8a8f9a">&#9109; &#9111;</text>
+    <line x1="40" y1="14" x2="40" y2="28" stroke="#2a2e37"/>
+    <text x="47" y="25" font-family="system-ui" font-size="9" fill="#8a8f9a">FPS 61</text>
+    <text x="82" y="25" font-family="system-ui" font-size="9" fill="#8a8f9a">G/F 1</text>
+    <line x1="112" y1="14" x2="112" y2="28" stroke="#2a2e37"/>
+    <text x="120" y="25" font-family="system-ui" font-size="9" fill="#6f747e">Default</text>
+    <line x1="162" y1="14" x2="162" y2="28" stroke="#2a2e37"/>
+    <text x="171" y="25.5" font-family="system-ui" font-size="10" fill="#e6e8ee">&#9654;</text>
+    <text x="188" y="25.5" font-family="system-ui" font-size="10" fill="#8a8f9a">&#9654;|</text>
+    <text x="205" y="25.5" font-family="system-ui" font-size="10" fill="#8a8f9a">&#8635;</text>
+  </svg>
+  <p class="cap" style="flex:1 1 340px;margin:0"><b>A model with one view per layer</b> gets a plain
+  muted <i>readout</i> &mdash; no button, no hover, no pointer cursor. <i>Which mapping am I looking at</i>
+  stays answered; nothing that cannot be pressed looks pressable. The predicate is per LAYER
+  (<code>cellOMs&nbsp;&gt;&nbsp;1 || agentOMs&nbsp;&gt;&nbsp;1</code>), because one cell view plus one agent
+  view is two entries and still no reachable different state.</p>
+</div>
+
+<h3>What the Live top strip looks like now</h3>
+<svg viewBox="0 0 700 70" width="100%" height="70" style="max-width:700px" aria-label="Live top strip occupants">
+  <rect x="1" y="16" width="698" height="40" rx="6" fill="#0a0b0e" stroke="#2a2e37"/>
+  <rect x="10" y="26" width="70" height="18" rx="9" fill="#16181d" stroke="#2a2e37"/>
+  <text x="20" y="38" font-family="system-ui" font-size="9" fill="#8a8f9a">&#9432; Instructions</text>
+  <rect x="470" y="26" width="200" height="18" rx="9" fill="#16181d" stroke="#2a2e37"/>
+  <text x="480" y="38" font-family="system-ui" font-size="9" fill="#5bc98a">&#9679; Synced</text>
+  <text x="536" y="38" font-family="system-ui" font-size="9" fill="#8a8f9a">On demand</text>
+  <text x="606" y="38" font-family="system-ui" font-size="9" fill="#8a8f9a">Layout &#9662;</text>
+  <line x1="675" y1="20" x2="675" y2="52" stroke="#4a3a1e" stroke-dasharray="3 3"/>
+  <text x="606" y="14" font-family="system-ui" font-size="8" fill="#8a8f9a">&#8592; --live-right-inset</text>
+</svg>
+<p class="cap"><b>Two occupants, not three.</b> The instructions pill is left-anchored and the Live bar is
+right-anchored behind <code>--live-right-inset</code>; they cannot collide, so the strip needs no
+arbitration. <code>--live-viewer-row-shift</code> and the
+<code>.liveOverlayPanels .viewerBarRow</code> override are deleted. The two <b>insets</b> stay &mdash; the
+panel ears and the Live bar both read them.</p>
+
+
 <div class="note" style="margin-top:26px"><b>Companion documents.</b> <code>docs/IMPACT_MAP_LIVE_SPLIT.md</code> — the subsystem-by-subsystem analysis with <code>file:line</code> evidence for every claim here, the top five traps, the brainstorm assumptions that turned out wrong, and the twelve decisions taken. <code>docs/PLAN_LIVE_SPLIT.md</code> — the phase-by-phase execution order, the exact files, the UI-doctrine disposition of every new control, and the verification recipe per phase. Origin: <code>docs/BRAINSTORM_SEE_THROUGH_CANVAS.md</code> + <code>.html</code>.</div>
 
 </div>

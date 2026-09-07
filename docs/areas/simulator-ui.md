@@ -23,6 +23,7 @@
 - LIVE mode — the simulator inside the split workspace (Phase 2, 2026-09-07)
 - LIVE mode — the edit→rule PIPELINE (Phase 3, 2026-09-07)
 - LIVE mode — INPUT OWNERSHIP and the perf guards (Phase 4, 2026-09-07)
+- The VIEWER CONTROL — the Output-Mapping choice lives on the TRANSPORT bar (2026-09-07)
 
 ---
 
@@ -346,7 +347,7 @@ The "handoff" batch (the spawned agent hit the session limit, so it was implemen
 **The bug (user-reported):** *"Resizing the side panels distorts the canvas, shrinking it, and it remains like that until some interaction with the canvas area triggers a refresh."* **`draw()` is the ONE place that re-sizes every backing store** (2D `canvas.width = parentW` + the two cursor overlays, gl3d's `r.resize(cssW, cssH, dpr)`) **AND does the direct-render OffscreenCanvas re-attach** — but it only ran on **step messages, canvas interactions and WINDOW resize** ([SimulatorView.tsx](src/simulator/SimulatorView.tsx) `window.addEventListener('resize', draw)`). A side-panel **splitter drag** mutates `panel.style.width` directly (no React update, no window resize) and a **panel/bar collapse** is a React state change nothing was listening to — so the canvas's CSS box grew/shrank while the backing store kept its old dimensions and the browser stretched the stale bitmap. On a **PAUSED** sim that was indefinite. **Reproduced before fixing** (real app, Game of Life, paused): collapsing the settings panel took `canvasArea.clientWidth` 980 → 1180 while `canvas.width` stayed **980**, and nothing else in the app ever corrected it.
 
 **THREE triggers, all funnelling into one redraw** — deliberately not ResizeObserver alone, because RO delivery is part of the browser's rendering steps and (1)+(2) are the paths that must be immediate:
-1. **`useLayoutEffect` on `[visible, leftPanelOpen, rightPanelOpen, topBarOpen, bottomBarOpen, rightPanelTab]`** → a DIRECT `drawRef.current()`. A LAYOUT effect runs after the DOM mutation and **before paint**, so a discrete collapse/expand never shows even one stretched frame. It also **clears the drag deferral** (`layoutResizeUntilRef.current = 0`) — a drag that ends in a snap-close lands here and must not wait out the settle window.
+1. **`useLayoutEffect` on `[visible, leftPanelOpen, rightPanelOpen, bottomBarOpen, rightPanelTab]`** → a DIRECT `drawRef.current()`. (It carried `topBarOpen` too until the top viewer bar was retired — see *The VIEWER CONTROL* below.) A LAYOUT effect runs after the DOM mutation and **before paint**, so a discrete collapse/expand never shows even one stretched frame. It also **clears the drag deferral** (`layoutResizeUntilRef.current = 0`) — a drag that ends in a snap-close lands here and must not wait out the settle window.
 2. **Both splitter `onMove` handlers** call `scheduleLayoutDraw()` — they mutate the DOM directly, so nothing else would ever fire.
 3. **A `ResizeObserver` on `canvasAreaRef`** as the general catch-all (browser zoom, font metrics, devtools, future chrome). The observed element is the one `draw()` measures; the canvases are `width/height: 100%` inside it and it is `overflow: hidden`, so **they can never feed back into its size** (no observer loop).
 
@@ -510,17 +511,21 @@ whatever occupies each rail (the open panel, else that panel's ear), and both co
   `style.width` directly, which is what the observer sees) and the right panel's collapse tab **sticks out
   18 px past its edge** — measuring `root.right - min(el.left)` means no consumer has to know that number.
 - The properties are **removed on Live exit**, so nothing leaks to the Simulator tab.
-- **The top strip has a third occupant**: the viewer (Output Mapping) row, which in Live centres on the
-  VISIBLE canvas (`left: calc(50% + (left-inset − right-inset) / 2)`). When the bar and the row would still
-  touch — a halved pane with a panel open, or the minimum-width pane where the bar WRAPS to two rows — the
-  row takes a **second row** (`--live-viewer-row-shift`, set to the bar's measured height + 6, so a wrapped
-  bar is cleared too). Otherwise the bar (`z-index: 7`) covers the viewer's tabs: a control you can see and
-  cannot press. The planned Output-Mapping bar relocation supersedes this crowding rule.
+- **The top strip has exactly TWO occupants**: the instructions pill (`left: 36px`) and the Live bar
+  (right-anchored, `--live-right-inset`). They cannot collide, so the strip needs no arbitration.
+  ⚠ **It briefly had a third** — the centred viewer (Output Mapping) row — and that needed a
+  `--live-viewer-row-shift` custom property to drop the row below the bar when the two would touch on a
+  narrow pane. **Both the row and the shift are GONE** (2026-09-07): the viewer choice moved onto the
+  transport bar (see *The VIEWER CONTROL* below), which is what the shift was always a stop-gap for. The
+  two INSETS stay — the panel ears and the Live bar both read them.
 - ⚠ **PANEL STATE MUST NOT LEAK INTO THE SIMULATOR TAB.** Both modes share ONE `SimulatorView` instance,
-  so `preLivePanelStateRef` snapshots `{left, right, top, bottom}` on Live-enter and restores it on exit
+  so `preLivePanelStateRef` snapshots `{left, right, bottom}` on Live-enter and restores it on exit
   **including false entries** — the exact `prePanelStateRef` discipline. Verified: right panel closed in
   the Simulator, both opened inside Live, back to the Simulator ⇒ `{left: true, right: false}` again.
-  (The bars are deliberately left open — the transport bar IS the transport.)
+  (The transport bar is deliberately left open — it IS the transport.) The snapshot carried a fourth
+  `top` flag while the top viewer bar existed; it went with the bar, in BOTH snapshots
+  (`preLivePanelStateRef` and the F-fullscreen `prePanelStateRef`) and in `applyCanvasFullscreen`'s
+  `anyOpen` test — a snapshot field for a bar that no longer exists restores nothing, silently.
 
 ### Capture ↔ layout interlock
 
@@ -986,3 +991,82 @@ hover for focus-follows-hover; (4) a `keydown` dispatched on `document` never re
 root-delegated handlers — dispatch on `document.activeElement` instead.
 
 ---
+
+## The VIEWER CONTROL — the Output-Mapping choice lives on the TRANSPORT bar (2026-09-07)
+
+**The centred top viewer bar is GONE, in every mode.** From the first release the Attribute→Color choice
+was its own pill floating at the top-centre of the canvas: an attached ear (`topBarOpen`), a
+`Output Mapping (A→C):` caption and one `.viewerTab` per mapping — plus, once agents got their own views,
+a second `Agents (A→C):` caption and its own tabs. It cost a whole strip of canvas for a control most
+users press a handful of times per session, and in **Live** it competed with the Live viewport bar for
+the same lane (`--live-viewer-row-shift`, the stop-gap that dropped it to a second row).
+
+**It is now ONE compact control on the transport bar, between `G/F` and play/pause** — the retired bar's
+whole job, in the width of one button.
+
+### What it is
+
+| | |
+|---|---|
+| **Label** | the CURRENT viewer's name, `.viewerPickName`: `max-width: 108px`, `text-overflow: ellipsis`. The bar is CENTRED, so an unclamped name would nudge every neighbouring control — the `.transportBtnPlay` fixed-width rule, again. The full text is always in the `title`. |
+| **Which name**, when both layers have views | the CELL viewer (a model with a cell layer is looking at the grid); the AGENT viewer when the model has no cell A→C mapping. The `title` names BOTH: `Viewer — Cells: X · Agents: Y`. |
+| **Popup** | `.speedPopup` + `.viewerPopup` — the SAME wrapper (`.transportSpeed`), the same `overlayPopup` state, the same `overlayPopupWrapRef`, and the same outside-`pointerdown`-capture / `Escape` dismissal as the FPS and G/F sliders. Opens on **hover OR click**, exactly as those two do. |
+| **Grouping** | one group per layer, captioned with the retired bar's own words: `Cells (A→C)` + `Agents (A→C)` when both exist, `Output Mapping (A→C)` when only the cell layer does. The current entry carries a `✓` in a **fixed-width** column, so switching never shifts the names sideways. |
+| **Per-entry tooltip** | `mapping.description`, exactly as the tabs had. |
+
+### ⚠ NO `role="menu"` ON THE POPUP — it opens on HOVER
+
+`overlayOwnsKeyboard()` ([src/live/liveKeyboard.ts](src/live/liveKeyboard.ts)) is
+`document.querySelector('[role="dialog"], [role="menu"]') != null`, and in Live it stands the global
+`Enter` (play/pause) down while an overlay owns the keyboard. A hover-opened `role="menu"` would therefore
+disable play/pause **merely for mousing past the control**. This is the identical trap that made the Live
+bar's apply-policy popover **click-only** (see PLAN_LIVE_SPLIT's post-ship round). The FPS / G-F popovers
+carry no role either; this one follows them.
+
+### ⚠ THE DOCTRINE CALL: switchable ⇒ popup, otherwise a READOUT
+
+`viewerSwitchable = attrToColorMappings.length > 1 || agentColorMappings.length > 1` — **per layer, not
+the total.** One cell mapping plus one agent mapping is two entries and still nothing to switch to; a
+popup there is inert decoration, which is exactly what *an enabled control must do something* forbids.
+
+When it is not switchable the name is still shown, as a plain **`.transportStat` readout** — a `<span>`,
+no button, no hover, no pointer cursor. *Which mapping am I looking at* stays answered (the old bar
+answered it too), and nothing that cannot be pressed looks pressable. With **no** A→C mapping at all,
+neither form renders — as the old row didn't.
+
+### State, cascades and capture — what did NOT change
+
+- **The switch itself is byte-for-byte the old tab click**: `setActiveViewer(m.id)` /
+  `setActiveAgentViewer(m.id)`. The existing `useEffect([activeViewer, activeAgentViewer])` still posts
+  one `colorPass`, so the change lands immediately even while paused.
+- **Coercion is unchanged.** The CELL viewer is re-pointed at the first A→C mapping by the full-reinit
+  path (`setActiveViewer(model.mappings.find(isAttributeToColor)?.id ?? '')`), which a mapping
+  add/remove already triggers; the AGENT viewer has its own repair effect
+  (`useEffect([model.agentMappings, activeAgentViewer])`). Neither lived in the retired row, so neither
+  moved. A dangling id (a `.gcastate` restored against a model whose mapping was since removed) renders
+  as `—` instead of an unmarked tab strip.
+- **No keyboard or wheel cycle ever stepped the viewer tabs** (grep: the only `setActiveViewer` call
+  sites were the row's `onClick`, the reinit default and the `.gcastate` restore), so there is no cycle
+  to re-point — the hidden-control-state rule is satisfied vacuously here, unlike the agent brush.
+- **Capture is unaffected.** No DOM overlay was ever recorded: the `'view'` scope blits the display
+  CANVAS, the `'simulation'` scope re-renders from the colours buffer + the agent snapshot. The row's
+  `data-sim-overlay` was only ever the brush-passthrough guard, and the new control inherits it from
+  `.transportBarRow`.
+
+### What was deleted with it
+
+`topBarOpen` / `setTopBarOpen`; the `top` field of `panelStateRef`, `preLivePanelStateRef` and
+`prePanelStateRef`, and its arm of `applyCanvasFullscreen`; `viewerBarRowRef`; the
+`--live-viewer-row-shift` custom property and the whole tight-strip measurement inside the Live inset
+effect (whose deps drop `ruleState.status`, which was only there because the Live bar's width changes
+with the chip); and the CSS `.viewerBarRow` / `.liveOverlayPanels .viewerBarRow` / `.viewerBar` /
+`.viewerBarLabel` / `.viewerTab` / `.viewerTabActive`. `--live-left-inset` / `--live-right-inset` STAY —
+the panel ears and the Live bar depend on them.
+
+### Known limitation (pre-existing, now reached sooner)
+
+The transport bar is content-sized and centred inside an `overflow: hidden` canvas area, so on a very
+narrow pane it is clipped at both ends. The bar measures **~424 px** with the viewer control (was
+~296 px), so the clipping threshold moves out by roughly the control's width. It only bites at the Live
+splitter's extreme (a 231 px minimum pane, where the bar was already clipped) — the default Live split on
+a laptop leaves an ~820 px pane.

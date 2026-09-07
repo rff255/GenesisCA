@@ -981,7 +981,8 @@ export function MappingsPanelContent({ mode = 'list' }: PanelContentProps = {}) 
           <div className={styles.sectionTitle}>Agent Output Mappings (A&rarr;C)</div>
           <span style={{ color: '#888', fontSize: '0.66rem', display: 'block', margin: '0 0 6px' }}>
             Each is a colour view of the agents, picking an agent attribute → colour.
-            Switch between them in the simulator&apos;s viewer bar (Agents row).
+            Switch between them from the viewer control on the simulator&apos;s transport bar
+            (the <em>Agents</em> group of its popup).
           </span>
           {agentViews.length === 0 && (
             <span style={{ color: '#888', fontSize: '0.68rem', fontStyle: 'italic' }}>No agent views yet.</span>
@@ -1195,7 +1196,7 @@ export function MappingsPanelContent({ mode = 'list' }: PanelContentProps = {}) 
               />
               <span style={{ color: '#888', fontSize: '0.66rem', marginTop: 3, display: 'block' }}>
                 {selectedAgent.isAttributeToColor
-                  ? "Shown as the tooltip on this view's tab in the simulator's Agents viewer row."
+                  ? "Shown as the tooltip on this view's entry in the viewer popup's Agents group (simulator transport bar)."
                   : "Shown as the tooltip on this mapping's tab in the simulator's agent Paint brush."}
               </span>
             </div>

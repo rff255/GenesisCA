@@ -265,7 +265,7 @@ First-class, user-facing color node: input `index` (int), multi-output `r`/`g`/`
 - `UPDATE_ATTRIBUTE` tagOptions change: remaps `linkedColors.tag[]` by the same `indexMap` (renamed/reordered keep their color, deleted drop out, new options get `defaultTagColor`).
 
 ### Gotchas
-- Viewer tabs come from `model.mappings.filter(isAttributeToColor)` ([SimulatorView.tsx](src/simulator/SimulatorView.tsx)), so a linked mapping is selectable with no node placed; the worker dispatches the OM by `mappingId === activeViewer` exactly like a standalone OM (no new runtime path).
+- The viewer control's entries come from `model.mappings.filter(isAttributeToColor)` ([SimulatorView.tsx](src/simulator/SimulatorView.tsx) — the transport bar's viewer popup since 2026-09-07; it was a row of tabs in a top bar before, same list), so a linked mapping is selectable with no node placed; the worker dispatches the OM by `mappingId === activeViewer` exactly like a standalone OM (no new runtime path).
 - `style={{ width: N, ...sharedStyle }}` foot-gun: if `sharedStyle` sets `width: '100%'`, the spread overrides the `N`. Put the override AFTER the spread (bit the GradientStopsEditor position input — kept the bar from squashing the color/delete controls).
 - Inline-style overrides in shared widgets: the position spinbox is fixed-width + `flex: 0 0 auto`; the color input is `flex: 1`. Don't reintroduce `width: 100%` on the spinbox.
 - A linked-only model with no Step node still hits the separate "No Step node" compile gate (the empty-graph reorder only covers the `length === 0` check). Realistic models always have a Step; relaxing the Step requirement is out of scope.

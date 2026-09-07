@@ -395,7 +395,7 @@ export function IndicatorDisplay({ indicators, values, history, generation, grid
                 <button
                   className={styles.chartBtn}
                   onClick={() => onClearHistory(ind.id)}
-                  title="Clear chart history \u2014 start monitoring this indicator afresh"
+                  title="Clear chart history — start monitoring this indicator afresh"
                 >
                   {'\u232b'}
                 </button>
@@ -405,7 +405,7 @@ export function IndicatorDisplay({ indicators, values, history, generation, grid
                   className={styles.chartBtn}
                   disabled
                   style={{ opacity: 0.35, cursor: 'default' }}
-                  title="Nothing to clear \u2014 a spatial chart redraws from the CURRENT generation each step (it keeps no history)"
+                  title="Nothing to clear — a spatial chart redraws from the CURRENT generation each step (it keeps no history)"
                 >
                   {'\u232b'}
                 </button>
