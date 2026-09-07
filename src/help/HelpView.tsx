@@ -5098,9 +5098,11 @@ export function HelpView() {
             The graph pane gets the <strong>Modeler&rsquo;s side panels</strong> (both start
             collapsed &mdash; a half-width pane has no room to spare; open them from the
             usual buttons). The simulator&rsquo;s own panels become <strong>overlays</strong>{' '}
-            floating over the viewport, toggled by the <strong>Settings</strong> and{' '}
-            <strong>Controls</strong> buttons on the viewport bar, so the brush, the layers
-            and the indicators stay one click away without eating the pane.
+            floating over the viewport, opened from their usual <strong>edge tabs</strong>{' '}
+            (the small <strong>&rsaquo;</strong> / <strong>&lsaquo;</strong> ears at the left
+            and right of the canvas, exactly as on the Simulator tab &mdash; in Live they ride
+            the open panel&rsquo;s outer edge), so the brush, the layers and the indicators
+            stay one click away without eating the pane.
           </p>
 
           <h3 className={styles.h3}>The status chip &mdash; and the last good rule</h3>
@@ -5123,8 +5125,9 @@ export function HelpView() {
             </tbody>
           </table>
           <p className={styles.p}>
-            The <strong>Auto</strong> / <strong>On demand</strong> switch beside the chip is
-            the apply policy. <strong>Auto</strong> (the default) is the usual behaviour:
+            The button beside the chip is the <strong>apply policy</strong>: it shows the mode
+            you are in and opens a small menu with both.{' '}
+            <strong>Auto</strong> (the default) is the usual behaviour:
             every edit reaches the simulation as soon as it compiles.{' '}
             <strong>On demand</strong> holds them all back until you press{' '}
             <kbd className={styles.kbd}>Ctrl</kbd>+<kbd className={styles.kbd}>Enter</kbd>,
@@ -5150,6 +5153,14 @@ export function HelpView() {
             quick-add; point at the simulation and it steps one generation. Copy / paste / cut
             follow the same owner (nodes on one side, cells or agents on the other), while
             undo, redo and duplicate always mean the graph, from either pane.
+          </p>
+          <p className={styles.p}>
+            The ring never lies about it: when the keyboard changes sides, whatever you had
+            selected on the other side (a node&rsquo;s dropdown, say) lets go, so the next key
+            really does go where the ring is. The two things that keep the keyboard whatever
+            you point at are a <strong>field you are typing in</strong> and an{' '}
+            <strong>open menu or dialog</strong> &mdash; hovering away from those leaves both
+            the keyboard and the ring where they are, and moves them the moment you click.
           </p>
           <p className={styles.p}>
             Two deliberate exceptions.{' '}

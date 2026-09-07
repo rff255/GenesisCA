@@ -15559,6 +15559,78 @@ export function SimulatorView({ visible = true, activeTab = true, live = false, 
 
   const leftPanelRef = useRef<HTMLDivElement>(null);
   const rightPanelRef = useRef<HTMLDivElement>(null);
+
+  // --- LIVE: publish what each SIDE RAIL occupies, as CSS custom properties --
+  // In Live the two side panels FLOAT over the canvas (`.liveOverlayPanels`),
+  // so anything anchored to a canvas edge is drawn UNDER them (they are
+  // `z-index: 12`). Two things must dodge that, and both are now the only way
+  // to reach what they control:
+  //   • the Settings ear (`.panelExpandBtn`), which the bar's removed
+  //     Settings/Controls buttons used to duplicate — with the panel open it sat
+  //     at `left: 0`, i.e. buried under the panel it closes;
+  //   • the Live viewport bar, whose whole right half (chip, apply policy,
+  //     layout menu) vanished under the 220 px Controls panel.
+  // So the layout root carries `--live-left-inset` / `--live-right-inset` = how
+  // far that rail's occupants REACH INTO the canvas, and both consumers offset
+  // by it. Measured off the live rects rather than a width constant, for two
+  // reasons: both panels are drag-resizable (the drag mutates `style.width`
+  // directly, which is exactly what a `ResizeObserver` sees), and the right
+  // panel's own collapse tab STICKS OUT 18 px past its edge — measuring the
+  // union means nothing has to know that number.
+  const simLayoutRootRef = useRef<HTMLDivElement>(null);
+  const rightPanelEarRef = useRef<HTMLButtonElement>(null);
+  const rightPanelCollapseRef = useRef<HTMLButtonElement>(null);
+  const viewerBarRowRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const root = simLayoutRootRef.current;
+    if (!root) return;
+    if (!live) {
+      root.style.removeProperty('--live-left-inset');
+      root.style.removeProperty('--live-right-inset');
+      root.style.removeProperty('--live-viewer-row-shift');
+      return;
+    }
+    // The left ear is the left rail's own occupant, so it never insets itself:
+    // with the panel CLOSED the ear belongs at `left: 0`, exactly as elsewhere.
+    const leftRail = leftPanelOpen ? [leftPanelRef.current] : [];
+    const rightRail = rightPanelOpen
+      ? [rightPanelRef.current, rightPanelCollapseRef.current]
+      : [rightPanelEarRef.current];
+    const sync = () => {
+      const box = root.getBoundingClientRect();
+      let left = 0, right = 0;
+      for (const el of leftRail) if (el) left = Math.max(left, el.getBoundingClientRect().right - box.left);
+      for (const el of rightRail) if (el) right = Math.max(right, box.right - el.getBoundingClientRect().left);
+      root.style.setProperty('--live-left-inset', `${Math.max(0, Math.round(left))}px`);
+      root.style.setProperty('--live-right-inset', `${Math.max(0, Math.round(right))}px`);
+      // …and the top strip has THREE occupants in Live: the viewer (Output
+      // Mapping) row, centred on the visible canvas, and the Live bar, inset
+      // from the right. On a halved pane with an overlay panel open they can
+      // reach each other, and the bar (z-index 7) would then cover the viewer's
+      // tabs — a control the user can see but not press, which is worse than
+      // either being moved. So when they would touch, the viewer row takes the
+      // SECOND row. Measured after the insets are written (reading a rect
+      // flushes the pending layout), and the predicate is HORIZONTAL only, so
+      // the shift cannot feed back into its own condition.
+      const barBox = root.querySelector('[data-live-bar]')?.getBoundingClientRect();
+      const rowBox = viewerBarRowRef.current?.getBoundingClientRect();
+      // The drop is the BAR'S OWN HEIGHT plus a gap, not a constant: on a
+      // minimum-width pane the bar wraps to two rows, and a fixed 32 px would
+      // put the viewer row straight back through it.
+      const tight = !!(barBox && rowBox && rowBox.width > 0 && barBox.left < rowBox.right + 8);
+      root.style.setProperty('--live-viewer-row-shift',
+        tight && barBox ? `${Math.round(barBox.height + 6)}px` : '0px');
+    };
+    sync();
+    const ro = new ResizeObserver(sync);
+    for (const el of [...leftRail, ...rightRail, root, viewerBarRowRef.current]) if (el) ro.observe(el);
+    // The Live bar grows and shrinks with the chip (an Apply / Later prompt is
+    // ~150 px wider), which changes whether the strip is tight.
+    const bar = root.querySelector('[data-live-bar]');
+    if (bar) ro.observe(bar);
+    return () => ro.disconnect();
+  }, [live, leftPanelOpen, rightPanelOpen, ruleState.status]);
+
   // Remembers panel + bar state before entering F-fullscreen so the toggle
   // restores the user's previous layout (instead of always opening everything).
   const prePanelStateRef = useRef<{ left: boolean; right: boolean; top: boolean; bottom: boolean } | null>(null);
@@ -15650,7 +15722,7 @@ export function SimulatorView({ visible = true, activeTab = true, live = false, 
     // In LIVE the two side panels FLOAT over the viewport instead of squeezing
     // it (a 200 + 220 px pair would eat most of an already-halved pane). A class
     // modifier only — the element tree is identical in every mode.
-    <div className={`${styles.simulatorLayout}${live ? ` ${styles.liveOverlayPanels}` : ''}`}>
+    <div ref={simLayoutRootRef} className={`${styles.simulatorLayout}${live ? ` ${styles.liveOverlayPanels}` : ''}`}>
       {/* === Left Panel (collapsible) === */}
       {leftPanelOpen && (
         <div className={styles.sidePanel} ref={leftPanelRef}>
@@ -16047,25 +16119,27 @@ export function SimulatorView({ visible = true, activeTab = true, live = false, 
         {/* Settings panel ear — sits at the canvas's left edge. We render it
             inside canvasArea (not inside .sidePanel, which has overflow:hidden
             and would clip a sticking-out ear) so it works in both states.
-            Glyph + handler swap based on whether the panel is open. */}
+            Glyph + handler swap based on whether the panel is open.
+            ⚠ In LIVE it is the ONLY way to open/close the Settings panel (the
+            viewport bar's duplicate toggle was removed), and the panel FLOATS
+            over the canvas there — so `left` follows `--live-left-inset` and the
+            ear rides the panel's outer edge instead of being buried under it.
+            See `.liveOverlayPanels .panelExpandBtn`. */}
         <button
           className={styles.panelExpandBtn}
-          style={{ left: 0 }}
           onClick={() => setLeftPanelOpen(v => !v)}
           title={leftPanelOpen ? 'Close settings' : 'Open settings'}
           data-sim-overlay
         >{leftPanelOpen ? '‹' : '›'}</button>
-        {/* LIVE viewport bar — the panel toggles + the workspace layout menu.
+        {/* LIVE viewport bar — the transport chip, the apply policy and the
+            workspace layout menu (NO panel toggles: the panels' own ears are
+            the single affordance for that).
             Rendered HERE, inside `.canvasArea`, because every overlay element on
             this canvas MUST carry `data-sim-overlay` (the component sets it) or
             a click on it falls through the overlay guard and paints the grid.
             Top-RIGHT: the author-instructions pill already owns `left: 36px`. */}
         {live && (
           <LiveViewportBar
-            settingsOpen={leftPanelOpen}
-            controlsOpen={rightPanelOpen}
-            onToggleSettings={() => setLeftPanelOpen(v => !v)}
-            onToggleControls={() => setRightPanelOpen(v => !v)}
             locked={recording}
             ruleStatus={ruleState.status}
             ruleMessage={ruleState.message}
@@ -16597,7 +16671,7 @@ export function SimulatorView({ visible = true, activeTab = true, live = false, 
             the bar, not as one of the bar's tabs. Chevrons are inline SVGs so
             the up/down pair is pixel-identical. */}
         {(attrToColorMappings.length > 0 || agentColorMappings.length > 0) && (
-          <div className={styles.viewerBarRow} data-sim-overlay>
+          <div ref={viewerBarRowRef} className={styles.viewerBarRow} data-sim-overlay>
             <button
               className={styles.barAttachedEar}
               onClick={() => setTopBarOpen(v => !v)}
@@ -17240,9 +17314,12 @@ export function SimulatorView({ visible = true, activeTab = true, live = false, 
           );
         })()}
 
-        {/* Right panel expand button */}
+        {/* Right panel expand button. ⚠ In LIVE it is (with the panel's own
+            collapse tab) the ONLY way to reach the brush / layers / indicators,
+            and its width is what `--live-right-inset` publishes so the Live
+            viewport bar can sit clear of it. */}
         {!rightPanelOpen && (
-          <button className={styles.panelExpandBtnRight} data-sim-overlay
+          <button ref={rightPanelEarRef} className={styles.panelExpandBtnRight} data-sim-overlay
             onClick={() => setRightPanelOpen(true)} title="Open side panel">&lsaquo;</button>
         )}
       </div>
@@ -17252,6 +17329,7 @@ export function SimulatorView({ visible = true, activeTab = true, live = false, 
         <div className={styles.rightPanel} ref={rightPanelRef}>
           {/* Collapse button outside panel (left edge tab) */}
           <button
+            ref={rightPanelCollapseRef}
             className={styles.rightPanelCollapseTab}
             onClick={() => setRightPanelOpen(false)}
             title="Close side panel"

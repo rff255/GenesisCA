@@ -24,6 +24,7 @@ import {
   getOverseerRunning, subscribeOverseerRunning, LIVE_OVERSEER_BUSY_REASON,
   resetLiveFullscreenIntent,
 } from './live/liveState';
+import { claimLiveFocus } from './live/liveKeyboard';
 import { simLayoutApi } from './simulator/simLayoutState';
 import type { CAModel } from './model/types';
 import styles from './App.module.css';
@@ -102,6 +103,18 @@ function AppInner() {
   // (…and reset the shared canvas-fullscreen intent on the way out, so the next
   // Live entry starts from "nothing collapsed by F".)
   useEffect(() => { setLiveShown(isLive); if (!isLive) resetLiveFullscreenIntent(); }, [isLive]);
+  // THE RING AND THE KEYBOARD MOVE TOGETHER. Both pane wrappers hand their
+  // pointer events to `claimLiveFocus`, which moves `liveFocus` AND releases the
+  // DOM focus the losing pane was holding — a `<select>` left focused on a node
+  // used to answer `Enter` while the ring sat on the viewport. It also declines
+  // to move the ring at all when the losing surface genuinely still owns the
+  // keyboard (an open dialog/menu — quick-add included — or a text field
+  // mid-edit); see `src/live/liveKeyboard.ts` for the full reasoning.
+  const claimPane = (next: 'graph' | 'viewport', cause: 'hover' | 'press') => claimLiveFocus(
+    next,
+    { graph: modelerPaneRef.current, viewport: simulatorPaneRef.current },
+    cause, getLiveFocus(), setLiveFocus,
+  );
   // Live dirty-state ref for the once-registered file-handler consumer (below),
   // which would otherwise capture a stale isDirty from mount.
   const isDirtyRef = useRef(isDirty);
@@ -530,8 +543,8 @@ function AppInner() {
           // cannot swallow the ownership change; `pointerenter` so a hover is
           // enough. Both are no-ops outside Live — where this wrapper is
           // `display: contents` and holds no box of its own.
-          onPointerDownCapture={isLive ? () => setLiveFocus('graph') : undefined}
-          onPointerEnter={isLive ? () => setLiveFocus('graph') : undefined}
+          onPointerDownCapture={isLive ? () => claimPane('graph', 'press') : undefined}
+          onPointerEnter={isLive ? () => claimPane('graph', 'hover') : undefined}
           // Outside Live the wrapper is `display: contents`, so `.modelerLayout`
           // is a direct child of `.content` exactly as it was before Live existed.
           style={isLive
@@ -552,8 +565,8 @@ function AppInner() {
           className={isLive && !liveLayout.viewportCollapsed
             ? `${styles.livePane} ${liveFocus === 'viewport' ? styles.livePaneFocused : ''}`
             : undefined}
-          onPointerDownCapture={isLive ? () => setLiveFocus('viewport') : undefined}
-          onPointerEnter={isLive ? () => setLiveFocus('viewport') : undefined}
+          onPointerDownCapture={isLive ? () => claimPane('viewport', 'press') : undefined}
+          onPointerEnter={isLive ? () => claimPane('viewport', 'hover') : undefined}
           // A COLLAPSED viewport is `display: none`, not a zero-width flex item:
           // a 0-width canvas makes `canvas.width = 0`, and the next `drawImage`
           // then throws `InvalidStateError` and unmounts React. `display: none`

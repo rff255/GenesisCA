@@ -473,8 +473,15 @@ inverse.
 - [src/live/LiveViewportBar.tsx](src/live/LiveViewportBar.tsx) renders **inside `.canvasArea`**, from
   `SimulatorView`, and carries `data-sim-overlay` — mandatory, or a click on it falls through the overlay
   guard and paints the grid. It is anchored **top-RIGHT** (the author-instructions pill already owns
-  `left: 36px`). It holds the Settings / Controls panel toggles and the layout menu
-  (dock right · dock bottom · swap sides · collapse viewport).
+  `left: 36px`). It holds the **transport chip** (+ its Apply / Later prompt), the **apply-policy control**
+  and the **layout menu** (dock right · dock bottom · swap sides · collapse viewport). It also carries
+  `data-live-bar`, which is how `SimulatorView` finds it to measure (below).
+- ⚠ **IT HAS NO PANEL TOGGLES — the panels' own ears are the single affordance** (user report, 2026-09-07:
+  *"why are there two ways to open the same panel?"*). Phase 2 gave the bar Settings / Controls buttons
+  because the Live policy enters with both side panels collapsed — but `panelExpandBtn` /
+  `panelExpandBtnRight` / `rightPanelCollapseTab` are still rendered in Live, so those buttons were a
+  second control for the same state. The ears won (they sit ON the edge they act on, and the Simulator tab
+  already teaches them) and the bar buttons are gone.
 - ⚠ **The 3D View panel is the one other top-right overlay** and it collided with the bar (measured:
   bar `44..72`, panel `48..491`). Its inline `top` is now `live ? 44 : 12`. Anything new anchored
   top-right in `.canvasArea` has to make the same allowance.
@@ -482,6 +489,33 @@ inverse.
   `.simulatorLayout` → `position: absolute` on `.sidePanel` / `.rightPanel`). A 200 + 220 px pair would
   eat most of an already-halved pane; as overlays they behave as panel-sized popovers, which is how the
   brush, the layers matrix and the indicators stay reachable with the panels collapsed by policy.
+
+### ⚠ `--live-left-inset` / `--live-right-inset` — the floating panels cover the canvas EDGES
+
+The overlay panels are `z-index: 12` over a canvas whose own furniture is anchored to those same edges, so
+in Live **anything edge-anchored is drawn under an open panel**. Two things had to dodge that once the bar
+stopped duplicating the ears — and both are now the *only* way to reach what they control:
+
+- the **Settings ear** (`.panelExpandBtn`), which at `left: 0` sat buried under the very panel it closes;
+- the **Live bar**, whose whole right half disappeared under the 220 px Controls panel.
+
+`SimulatorView` therefore publishes two custom properties on the layout root, from a `ResizeObserver` over
+whatever occupies each rail (the open panel, else that panel's ear), and both consumers offset by them:
+`.liveOverlayPanels .panelExpandBtn { left: var(--live-left-inset); z-index: 13 }` and the bar's
+`right: calc(var(--space-4) + var(--live-right-inset))`. Notes that matter:
+
+- **A custom property inherits through the DOM**, which is how the value reaches
+  `LiveViewportBar.module.css` — a different CSS module, one element tree.
+- **Measured off rects, never a width constant**: both panels are drag-resizable (the drag mutates
+  `style.width` directly, which is what the observer sees) and the right panel's collapse tab **sticks out
+  18 px past its edge** — measuring `root.right - min(el.left)` means no consumer has to know that number.
+- The properties are **removed on Live exit**, so nothing leaks to the Simulator tab.
+- **The top strip has a third occupant**: the viewer (Output Mapping) row, which in Live centres on the
+  VISIBLE canvas (`left: calc(50% + (left-inset − right-inset) / 2)`). When the bar and the row would still
+  touch — a halved pane with a panel open, or the minimum-width pane where the bar WRAPS to two rows — the
+  row takes a **second row** (`--live-viewer-row-shift`, set to the bar's measured height + 6, so a wrapped
+  bar is cleared too). Otherwise the bar (`z-index: 7`) covers the viewer's tabs: a control you can see and
+  cannot press. The planned Output-Mapping bar relocation supersedes this crowding rule.
 - ⚠ **PANEL STATE MUST NOT LEAK INTO THE SIMULATOR TAB.** Both modes share ONE `SimulatorView` instance,
   so `preLivePanelStateRef` snapshots `{left, right, top, bottom}` on Live-enter and restores it on exit
   **including false entries** — the exact `prePanelStateRef` discipline. Verified: right panel closed in
@@ -637,9 +671,20 @@ the soft recompile, the latter *after* the last-good-rule gate). Consequences wo
 
 ### Apply policy — Auto vs On demand, and `Ctrl+Enter`
 
-`liveUiState.applyPolicy` (persisted in `genesisca_live_layout`) is edited by a two-button segment on the
-Live viewport bar. **Auto** is today's behaviour. **On demand** holds the *model→worker* step: the model
-effect returns early with `status: 'pending'` and `Ctrl+Enter` (or the chip's **Apply**) re-runs it.
+`liveUiState.applyPolicy` (persisted in `genesisca_live_layout`) is edited from the Live viewport bar.
+**Auto** is today's behaviour. **On demand** holds the *model→worker* step: the model effect returns early
+with `status: 'pending'` and `Ctrl+Enter` (or the chip's **Apply**) re-runs it.
+
+⚠ **The control is ONE button showing the CURRENT policy, opening a two-item popover** — not the
+two-option segment Phase 3 shipped, which spelled both labels out at all times and cost ~60 px of a bar
+that has to survive a minimum-width pane (user report, 2026-09-07). The popover states what each mode does
+under its label, so the meaning does not depend on a tooltip. **It opens on CLICK ONLY, never on hover**
+(unlike the transport's FPS / G/F popovers it otherwise resembles): it carries `role="menu"`, and
+`overlayOwnsKeyboard()` treats any open menu as the keyboard owner — a hover-open popover would stand the
+global `Enter` (play/pause) down just for passing the pointer over it. Both bar popovers (policy, layout)
+share one `openMenu` state, so only one can be up and the outside-`pointerdown` + `Escape` dismissal has a
+single wrapper ref. The vocabulary stays **Auto / On demand** (the words HelpView, the chip tooltips and
+these docs already use), not "Manual".
 
 ⚠ **`scheduleSync` is deliberately NOT what is held.** It also feeds undo/redo, the macro write-back and
 the dirty flag; holding the graph→model step would break all three. Holding the model→worker step keeps
@@ -670,7 +715,8 @@ the Init Events"*.
 | Transport chip | **only exists in Live** — the Simulator tab's surface for a compile error is the red banner, so a chip there would be meaningless rather than unavailable (hide, not grey) |
 | Chip **Apply** | rendered only in `pending` / `rebuild` |
 | Chip **Later** | rendered only in `rebuild` (a `pending` queue is already "later" by definition) |
-| Apply-policy switch | always enabled, Live only |
+| Apply-policy control | always enabled, Live only; one button + a click popover, current policy on its face |
+| Settings / Controls panel toggles on the bar | **removed** — the panels' own ears are the single affordance (two enabled controls for one state is the confusion the doctrine forbids, even though both worked) |
 | Red compile banner | unchanged code; in Live it simply never receives a graph-compile message — import / export / worker errors still raise it |
 
 ### Verified (real app, real worker, real GPU) — Phase 3
@@ -756,6 +802,35 @@ pseudo-element**, not a border or an `outline`: a border would re-size both canv
 and the pane's own background is painted over by the canvas stack, so the ring has to sit on top
 (`z-index: 60`, `pointer-events: none` — it covers the whole pane, so without that nothing under it would
 be clickable).
+
+### ⚠ THE RING AND THE REAL KEYBOARD MUST AGREE — `claimLiveFocus`
+
+`liveFocus` is *our* notion of ownership; `document.activeElement` is the browser's, and they used to
+diverge. The user's report (2026-09-07): **focus a `<select>` on a graph node, move the pointer over the
+viewport (the ring follows), press `Enter` — and the dropdown answered instead of play/pause.** The ring
+claimed the viewport while DOM focus was still in the graph.
+
+Both pane wrappers now go through **[`claimLiveFocus`](src/live/liveKeyboard.ts)** instead of calling
+`setLiveFocus` directly. It moves the ring **and releases the DOM focus the losing pane was holding**
+(`active.blur()`, only for an element inside the losing pane's wrapper). Two surfaces are exempt — and in
+both the **ring stands down too**, because claiming ownership it would not have is the same defect
+mirrored:
+
+| Exempt while… | Why |
+|---|---|
+| `overlayOwnsKeyboard()` — a dialog, a menu, quick-add | quick-add focuses its search input on a **50 ms timer**, so a pointer crossing the viewport in that window would blur an input that is about to receive the user's typing. An overlay keeps the keyboard until it closes. An element inside a `[role=dialog]` / `[role=menu]` is **never** blurred, whichever pane renders it. |
+| the focused element `isTypingTarget()` | blurring a half-typed node field because the pointer drifted over the other pane loses the keystrokes being typed. `<select>` is deliberately **not** a typing target — which is exactly what makes the reported case hand over. |
+
+**Both exemptions are HOVER-only.** A `pointerdown` is an explicit act on the pane pressed, so it always
+transfers and always blurs (the browser is moving DOM focus for the same gesture anyway).
+
+**Verified** (Game of Life, 2D, mid-run): select focused on a node + ring on the graph → hover the
+viewport ⇒ ring moves AND `activeElement` becomes `BODY`; `Enter` then toggles play (`Gen 0 → 2`, button
+`Pause (Enter)`) with the select's value untouched. Reverse: hover the graph ⇒ ring back, graph keys work,
+the run keeps stepping. Quick-add open + hover the viewport ⇒ ring **stays** on the graph, the search input
+keeps focus, typed text lands in it; `Escape` closes it and does **not** reset the run. A text field
+focused in the viewport pane ⇒ hovering the graph does not move the ring, but *clicking* the graph does
+(and blurs the field).
 
 ### The per-key table (Live)
 

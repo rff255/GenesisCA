@@ -513,6 +513,11 @@ focus ring, the two pre-existing fixes and the perf guards — is in
   reason as much as for a11y**: it is the quick-add / connection-drop menu, it owns `Enter`, and its
   search input is focused on a **50 ms timer** (the first frame renders `visibility: hidden` for viewport
   clamping), so a focus-based test would miss exactly the window in which the user presses `Enter`.
+  ⚠ **The same predicate now also stops the FOCUS RING from moving off this pane while such a surface is
+  open** — `claimLiveFocus` (see `simulator-ui.md` § *THE RING AND THE REAL KEYBOARD MUST AGREE*) blurs
+  whatever the losing pane still had focused when ownership transfers, and quick-add's timer is exactly
+  why a hover must not do that. A `<select>` on a node, by contrast, IS blurred on transfer: it keeps
+  focus after a pick, and that focus used to swallow the global `Enter` while the ring pointed elsewhere.
 - **`F` collapses BOTH panel sets, through a shared intent.** In Live this handler dispatches
   `genesis-toggle-canvas-fullscreen` instead of calling its own toggle, and the event carries
   `detail.collapse` from `dispatchCanvasFullscreen()` — because two independent toggles are permanently

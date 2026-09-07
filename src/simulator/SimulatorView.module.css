@@ -6,13 +6,31 @@
 /* LIVE mode: the two side panels FLOAT over the canvas instead of being flex
    siblings that squeeze it. The Live viewport pane is typically half a window
    wide, where a 200 px + 220 px pair would leave almost nothing to look at —
-   so in Live they behave as panel-sized popovers, opened from the viewport
-   bar's Settings / Controls toggles (or from the existing collapsed-panel ears,
-   which are unchanged). A class modifier ONLY: the element tree is identical in
+   so in Live they behave as panel-sized popovers, opened from the panels' OWN
+   ears (`.panelExpandBtn` / `.panelExpandBtnRight` / `.rightPanelCollapseTab`) —
+   the single affordance, since the viewport bar's duplicate Settings/Controls
+   toggles were removed. A class modifier ONLY: the element tree is identical in
    every mode, which is the invariant that keeps the worker alive across a
-   Simulator ⇄ Live switch. */
+   Simulator ⇄ Live switch.
+
+   `--live-*-inset` is WRITTEN BY `SimulatorView` (a ResizeObserver over
+   whatever occupies each rail: the open panel, else the closed panel's ear) and
+   READ here + by `LiveViewportBar.module.css`, which is a different CSS module
+   — a custom property inherits through the DOM, so the value crosses the module
+   boundary the element tree already crosses. The declarations below are the
+   fallback for the frame before the effect runs. */
 .liveOverlayPanels {
   position: relative;
+  --live-left-inset: 0px;
+  --live-right-inset: 0px;
+}
+
+/* The Settings ear rides the floating panel's OUTER edge (it is at `left: 0`
+   everywhere else, which in Live is *under* the panel it closes), and sits above
+   the panels' own stacking level so the panel's box-shadow cannot veil it. */
+.liveOverlayPanels .panelExpandBtn {
+  left: var(--live-left-inset);
+  z-index: 13;
 }
 
 .liveOverlayPanels > .sidePanel,
@@ -621,6 +639,18 @@
   align-items: center;
   gap: var(--space-2);
   z-index: 5;
+}
+
+/* In LIVE the floating panels cover the ends of the top strip, and the Live
+   viewport bar steps in from the right by `--live-right-inset` to stay clear of
+   them — so the viewer row centres on the VISIBLE canvas rather than on the full
+   (partly covered) box, or the two run into each other. ⚠ With BOTH overlay
+   panels open on an already-halved pane the strip is ~520 px for two ~220 px
+   pills, so they can still touch; that is the crowding the planned
+   Output-Mapping bar relocation resolves properly. */
+.liveOverlayPanels .viewerBarRow {
+  left: calc(50% + (var(--live-left-inset) - var(--live-right-inset)) / 2);
+  top: calc(var(--space-4) + var(--live-viewer-row-shift, 0px));
 }
 
 .viewerBar {
