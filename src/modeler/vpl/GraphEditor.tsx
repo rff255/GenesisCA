@@ -31,7 +31,14 @@ import { applyImportPlan, planImport, planNeedsDialog } from '../../model/macroI
 import type { ImportPlan, ImportRow } from '../../model/macroImportPlan';
 import { MacroExportDialog } from '../../components/MacroExportDialog';
 import { MacroImportDialog } from '../../components/MacroImportDialog';
+import { getLiveShown } from '../../live/liveState';
 import { getNodeDef, getAllNodeDefs } from './nodes/registry';
+
+/** Graph → model write-back debounce. The long value is the LIVE stretch: see
+ *  `scheduleSync` for why it is scoped to "a pointer is held in the editor" and
+ *  not to node drags (which sync once, at release). */
+const SYNC_DEBOUNCE_MS = 100;
+const SYNC_DEBOUNCE_HELD_MS = 400;
 import { parseHandleId, handleId } from './types';
 import type { PortDef, NodeTypeDef } from './types';
 import { MODEL_ELEMENT_DRAG_MIME, RELATED_NODES, payloadElementId, relatedEntriesForPayload, computeCompatibleHandlesForDrag, findNearestCompatibleHandle } from './modelElementDrag';
@@ -1088,8 +1095,24 @@ export function GraphEditorInner() {
     return () => window.removeEventListener('popstate', onPop);
   }, []);
 
+  // LIVE (Phase 3) — the write-back DEBOUNCE STRETCH.
+  //
+  // In Live every write-back reaches the running worker (model → recompile), so
+  // an edit that ticks continuously recompiles continuously. ⚠ The gesture that
+  // does that is NOT a node drag: `needsSync` (below) fires on `remove`,
+  // position **drag-END**, `dimensions` and `replace`, so a position drag syncs
+  // exactly ONCE, at release. What actually storms is a HELD INLINE WIDGET (a
+  // number field / slider inside a node) and a COMMENT/GROUP RESIZE, whose
+  // `dimensions` changes tick every frame. So the stretch is scoped to "a
+  // pointer is down inside the graph editor", not to dragging.
+  //
+  // Gated on Live: the Modeler tab's feel is unchanged (nothing downstream of a
+  // write-back is running there).
+  const graphPointerDownRef = useRef(false);
   const scheduleSync = useCallback(() => {
     if (syncTimer.current) clearTimeout(syncTimer.current);
+    const delay = getLiveShown() && graphPointerDownRef.current
+      ? SYNC_DEBOUNCE_HELD_MS : SYNC_DEBOUNCE_MS;
     syncTimer.current = setTimeout(() => {
       const scopeId = currentScopeRef.current[currentScopeRef.current.length - 1];
       const gn = toGraphNodes(nodesRef.current);
@@ -1104,8 +1127,36 @@ export function GraphEditorInner() {
       } else {
         updateMacro(scopeId, { nodes: gn, edges: ge });
       }
-    }, 100);
+    }, delay);
   }, [setGraph, setAgentGraph, setOverseerGraph, updateMacro]);
+
+  // The pointer-held signal the stretch above reads, plus the COLLAPSE on
+  // release: a pending write-back armed at 400 ms is re-armed at the normal
+  // 100 ms the moment the gesture ends, so letting go of a slider applies
+  // promptly instead of after the long window. Listeners are on `document`
+  // (capture) because a widget can capture the pointer and the `pointerup` then
+  // never reaches the wrapper; the DOWN is scoped to the editor wrapper so a
+  // press in the simulator pane does not count as a graph gesture.
+  useEffect(() => {
+    const onDown = (e: PointerEvent) => {
+      const w = editorWrapperRef.current;
+      if (!w || !(e.target instanceof globalThis.Node) || !w.contains(e.target)) return;
+      graphPointerDownRef.current = true;
+    };
+    const onUp = () => {
+      if (!graphPointerDownRef.current) return;
+      graphPointerDownRef.current = false;
+      if (syncTimer.current) scheduleSync();   // re-arm at the short debounce
+    };
+    document.addEventListener('pointerdown', onDown, true);
+    document.addEventListener('pointerup', onUp, true);
+    document.addEventListener('pointercancel', onUp, true);
+    return () => {
+      document.removeEventListener('pointerdown', onDown, true);
+      document.removeEventListener('pointerup', onUp, true);
+      document.removeEventListener('pointercancel', onUp, true);
+    };
+  }, [scheduleSync]);
 
   // Bond-Graph Agents: flush any pending debounced write-back SYNCHRONOUSLY,
   // routed to the CURRENT active graph. Called before swapping the Cells/Agents

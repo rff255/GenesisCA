@@ -343,6 +343,48 @@ The brainstorm framed this as fixing a compile storm during **node drags**. It i
   `needsFullInit` trigger — `:8955`) and **Particle Life 3D**.
 - `node scripts/parity-agent-wasm.mjs` green (nothing should touch it; run it to prove so).
 
+## 3.7 Phase 3 — AS BUILT, and where it deviates from §3.1–3.6 (2026-09-07)
+
+Phase 3 shipped. `tsc -p tsconfig.app.json --noEmit`, `npm run build`,
+`check-compile-identity --compare` (**31 models, all surfaces unchanged**) and `parity-agent-wasm.mjs`
+are green; `git diff --stat` touches **no file** under `src/modeler/vpl/compiler/**` or
+`src/modeler/vpl/nodes/**`, and `sim.worker.ts` has **no diff at all**. Reference documentation:
+[`docs/areas/simulator-ui.md`](areas/simulator-ui.md) § *LIVE mode — the edit→rule PIPELINE*,
+[`docs/areas/modeler-ui.md`](areas/modeler-ui.md) (the debounce stretch) and
+[`docs/areas/simulation-engine.md`](areas/simulation-engine.md) (the withheld-message contract).
+
+| § | Planned | As built | Why |
+|---|---|---|---|
+| 3.1.1 | `ruleState` written directly at each compile arm | Two helpers, **`reportRuleCompile` / `appendRuleCompile`**, are the ONLY writers, and every graph-compile arm (init + soft, cell + agent) routes through them | One sink means the "banner outside Live, chip inside Live" rule cannot drift between the four arms. `reportRuleCompile` additionally **refuses to overwrite `pending` / `rebuild` with "Synced"** — a compile can be triggered from OUTSIDE the model effect (Apply dimensions / an image import → `initWorkerWithDimensions` → `compileModel`) while a deferral is outstanding, and reporting "synced" there would claim the worker has a model it does not have. |
+| 3.1 | Suppress the banner "in Live for graph-compile errors only" | **The two render sites are untouched.** In Live the graph-compile arms simply never write `compileError` (they clear it), so the banner keeps rendering exactly the 12 non-compile sources | Less code, and the suppression cannot be forgotten at a render site. Verified both ways: a malformed `.gcapreset` dropped in Live still raises the banner; switching to the Simulator tab with a broken graph raises it there. |
+| 3.1.5 | The chip's tooltip says *"N nodes need attention"*, clicking it selects/zooms the first | The tooltip carries the **compiler message**; the chip click toggles the rebuild prompt back open | The compiler message is the actionable text (the node badges already point at the nodes), and "select the first offending node" is not a one-liner from `SimulatorView` — deferred as §3.1.5 allows. |
+| 3.2 | `Ctrl+Enter` "must stand down when a field / menu / modal has focus" | Stands down only for **`TEXTAREA` and `contentEditable`** (plus the capture-review modal) | A `<select>` KEEPS FOCUS after the user picks an option, and picking an option in a node is the commonest way to make the edit you then want to apply — standing down there makes the shortcut do nothing exactly when it is most wanted (reproduced during verification). `Ctrl+Enter` has no native meaning in a `<select>` or a single-line `<input>`, so nothing is stolen. |
+| 3.3.3 | "`prevModelRef.current = model` at the top may stay" | It stays, and `appliedModelRef` is the baseline for `needsFullInit` — **and also for `snapJustChanged` and the `updateIndicators` comparison** in the same effect | Both of those asked "what did the previous RENDER hold" when the honest question is "what does the WORKER have". Left on `prev`, a withheld run would drop an indicator edit the worker never received. |
+| 3.3.6 | The deferred state clears on model load / leaving Live / manual Recompile | **Model load and manual Recompile force an APPLY** (they adopt the current model as the baseline); **leaving Live flushes** (`appliedModelRef.current !== model` ⇒ re-run with `live` already false) | Clearing without applying would silently lose the change — the same Trap-C class the prompt exists to prevent. Flushing on exit is also what makes the Simulator tab's red banner appear for a graph broken in Live. |
+| — | *(not in the plan)* | An **`applyNonce`** in the model effect's dep list + a one-shot `liveApplyForceRef` | The effect only runs on `[model, compileModel]`, so an Apply with an unchanged model would not re-run it. One bump = one apply, which is what makes "N structural edits cost ONE reset" observable. |
+| — | *(not in the plan)* | **`liveShown` published through `liveState.ts`** by `App` | `GraphEditor` needs it for the debounce stretch and sits in another React tree; threading a prop `App → ModelerView → GraphEditorInner → GraphEditor` for a flag read inside a native `pointerdown` listener buys nothing over the project's established cross-tree seam. `SimulatorView` still uses its own `live` PROP. |
+| 3.4 | Stretch "while a pointer is down on the graph canvas", listeners on the editor wrapper | `pointerdown` is scoped to the wrapper, but **`pointerup` / `pointercancel` are on `document` (capture)** | A widget can capture the pointer, after which the release never reaches the wrapper and the flag would latch on. |
+
+**Observed during verification, NOT fixed here (out of Phase 3 scope):**
+
+- **The agent compilers are LENIENT about unset config.** Clearing a `Get Self Attribute` /
+  `Get Model Attribute` / `Table Lookup` / `Set Attribute` selection in an AGENT graph produces **no
+  compile error** — it emits an undefined identifier and fails at RUNTIME (`[agents] behaviour run
+  failed: r__undef is not defined`), which surfaces through the worker's pushed `error` message on the
+  red banner. The last-good-rule gate keys on the COMPILE result, as specified, so those cases post the
+  recompile normally. Deleting the **Behaviour Step** node is a real agent compile error and was used for
+  the Trap-E verification. Worth a look as a separate node-validation item.
+- `Esc` and `Backspace` still reach `handleReset` from anywhere (the pre-existing defect Phase 4 fixes) —
+  it had to be avoided during verification.
+
+**What Phase 4 inherits.** `liveState.ts` now carries `liveShown` (already published by `App`) and the
+`LiveRuleStatus` type; `liveFocus` / `liveGraphDragging` are still to come. The chip and the
+apply-policy switch sit on the LEFT of the Live viewport bar, before the Settings / Controls / Layout
+buttons, so a focus ring or further bar controls have room. Nothing in Phase 3 touches the keyboard
+except the new capture-phase `Ctrl+Enter`, which is registered only while `live` is true and stands down
+for `TEXTAREA` / `contentEditable` / the capture-review modal — Phase 4's stand-down set should be
+applied to it too if it grows (the quick-add and connection-drop menus own `Enter`, not `Ctrl+Enter`).
+
 ---
 
 # Phase 4 — Input ownership and guards

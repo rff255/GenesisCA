@@ -6,10 +6,39 @@
  *  `subscribe` returning an unsubscribe, equality-guarded setter that notifies)
  *  so `memo`'d consumers can read it through `useSyncExternalStore`.
  *
- *  Phase 2 publishes exactly one flag. Phase 4 adds `liveFocus`
- *  (`'graph' | 'viewport'` — the keyboard owner) and `liveGraphDragging` (the
- *  skip-blit guard) here.
+ *  Phase 2 published one flag; Phase 3 added `liveShown`. Phase 4 adds
+ *  `liveFocus` (`'graph' | 'viewport'` — the keyboard owner) and
+ *  `liveGraphDragging` (the skip-blit guard) here.
  */
+
+/** True while the Live workspace is the active mode.
+ *
+ *  `SimulatorView` gets this as its `live` PROP (one source of truth for the
+ *  view that owns the pipeline), but the GRAPH side needs it too and sits in a
+ *  different React tree: `GraphEditor` stretches its write-back debounce while a
+ *  pointer is held on the canvas, and ONLY in Live — the Modeler tab's feel must
+ *  be unchanged. Threading a prop from `App` through `ModelerView` →
+ *  `GraphEditorInner` → `GraphEditor` for a flag read inside a native
+ *  `pointerdown` listener buys nothing over the project's established cross-tree
+ *  seam, so this is it. Published by `App` (the one place that knows the mode).
+ */
+let liveShownGlobal = false;
+const shownListeners = new Set<() => void>();
+
+export function getLiveShown(): boolean {
+  return liveShownGlobal;
+}
+
+export function subscribeLiveShown(fn: () => void): () => void {
+  shownListeners.add(fn);
+  return () => { shownListeners.delete(fn); };
+}
+
+export function setLiveShown(val: boolean): void {
+  if (liveShownGlobal === val) return;
+  liveShownGlobal = val;
+  shownListeners.forEach(fn => fn());
+}
 
 /** True while a capture RECORDING is in progress.
  *
@@ -42,6 +71,21 @@ export function setLiveLayoutLocked(val: boolean): void {
   liveLayoutLockedGlobal = val;
   layoutLockListeners.forEach(fn => fn());
 }
+
+/** LIVE (Phase 3) — what the transport chip says about the RUNNING rule.
+ *
+ *  - `ok`      the worker is running exactly this model's rule.
+ *  - `stale`   the graph does not compile, so the PREVIOUS rule is still
+ *              running: the `recompile` post is withheld on the main thread
+ *              (the worker nulls its `stepFn` on any compile it is handed, so
+ *              "keep the last good rule" means never sending the message).
+ *  - `pending` apply policy is "On demand" and edits are waiting for Ctrl+Enter.
+ *  - `rebuild` a STRUCTURAL edit is deferred — applying it re-seeds the board.
+ *
+ *  Declared here rather than in `SimulatorView` because `LiveViewportBar`
+ *  renders it and importing a type out of an 18 kloc component is worse.
+ */
+export type LiveRuleStatus = 'ok' | 'stale' | 'pending' | 'rebuild';
 
 /** The reason shown on every layout control while the lock is on. */
 export const LIVE_LAYOUT_LOCK_REASON =

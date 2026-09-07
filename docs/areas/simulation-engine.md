@@ -22,6 +22,25 @@
 - Interruptible step batches (the high-G/F responsiveness fix — branch `updates`)
 - Grid Init Event (global procedural seeding — all 3 targets)
 - Skip Isolated Empty Cells (opt-in large-grid optimization — branch `sim_agent_fixes`)
+- LIVE mode adds NO worker message (2026-09-07)
+
+---
+
+## LIVE mode adds NO worker message (2026-09-07)
+
+**Live** (the split workspace — see [`simulator-ui.md`](simulator-ui.md)) is layout, mounting and input
+ownership. It introduces **no new worker message, changes no message shape, and `sim.worker.ts` has no
+diff**; four existing present-only messages (`refreshDisplay`, `setGridCamera` + `refreshGridDisplay`,
+`setAgentCamera` + `refreshAgentDisplay`, and the `attach*Canvas` re-attach) simply fire on a new trigger.
+
+⚠ **The one thing to know from this side is the LAST-GOOD-RULE contract.** `compileFns` does
+`stepFn = stepCode ? eval(stepCode) : null` (and the same for `agentBehaviourFn`), so **any `recompile`
+the worker receives replaces the running rule — including with nothing, when the compile failed.** That
+is deliberate and unchanged. Live keeps the previous rule by **never sending the message**: the main
+thread's model effect returns before `postMessage({type:'recompile'})` when the graph does not compile.
+So if you ever make the worker tolerant of an empty `stepCode`, or add a recovery path here, know that
+the feature relying on this behaviour lives on the *other* side of the boundary and expects a withheld
+message to be a no-op — which it is, by construction.
 
 ---
 

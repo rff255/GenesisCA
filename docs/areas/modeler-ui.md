@@ -467,6 +467,25 @@ is documented in [`simulator-ui.md`](simulator-ui.md) § *LIVE mode*. What the M
   (`scheduleSync` routes macro scopes to `updateMacro`), and `graphState.ts`'s `savedCurrentScope`
   already survives every remount. The breadcrumb costs the graph pane's own vertical budget — in a split
   (unlike an overlay) that is not a special case.
+- **The write-back DEBOUNCE STRETCHES to 400 ms while a pointer is held in the editor (Phase 3).**
+  `scheduleSync`'s timer is `SYNC_DEBOUNCE_MS` (100) normally and `SYNC_DEBOUNCE_HELD_MS` (400) when
+  `getLiveShown() && graphPointerDownRef.current` — because in Live every write-back reaches the running
+  worker, so an edit that ticks continuously recompiles continuously.
+  - ⚠ **The gesture is NOT a node drag, and scoping it to dragging would target the wrong thing.**
+    `needsSync` fires on `remove`, position **drag-END**, `dimensions` and `replace`, so a node position
+    drag syncs exactly ONCE, at release. What actually storms is a **held inline widget** (a number field
+    / slider inside a node) and a **comment / group resize**, whose `dimensions` changes tick every frame.
+  - The pointer-held flag comes from `pointerdown` / `pointerup` / `pointercancel` listeners on
+    **`document`** (capture): a widget can capture the pointer, and then the `pointerup` never reaches
+    the editor wrapper. The DOWN is scoped to `editorWrapperRef` so a press in the simulator pane does
+    not count. On release a pending timer is **re-armed at the short debounce**, so letting go of a
+    slider applies promptly instead of waiting out the long window (measured: 270 ms released / 568 ms
+    held / 359 ms when released 50 ms after the edit).
+  - Gated on `liveShown` — the Modeler tab's feel is unchanged, and nothing downstream of a write-back is
+    running there.
+  - ⚠ **Do not undo the 092a8c7 graph-equality guard** while touching this: a `dimensions`-only
+    write-back that is deep-equal returns the same state ref, which is what stops React Flow's mount-time
+    measurement from triggering a soft recompile. Live depends on it.
 - **Keyboard ownership is NOT yet resolved (Phase 4).** Today `SimulatorView`'s main keyboard handler is
   not visibility-gated and `GraphEditor`'s `Ctrl+C/V/X` is double-bound against it in the same phase on
   the same target, so in Live both surfaces receive those keys. Both are **pre-existing** defects (`Esc`

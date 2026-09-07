@@ -53,6 +53,92 @@
 
 .btn svg { flex-shrink: 0; }
 
+.btnPrimary {
+  color: var(--color-accent);
+  border-color: var(--color-accent);
+}
+
+/* --- Transport chip (Phase 3) ------------------------------------------ */
+/* The one place that says what the WORKER is running relative to the graph.
+   Colour carries the meaning, so each state also spells its label out — never
+   the dot alone. */
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: var(--space-2) var(--space-4);
+  background: transparent;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  color: var(--color-text-tertiary);
+  font-size: var(--font-2xs);
+  font-weight: 600;
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.chipDot { font-size: 9px; line-height: 1; }
+
+.chipOk { color: var(--color-text-tertiary); }
+.chipOk .chipDot { color: var(--color-success); }
+
+.chipStale {
+  color: var(--color-warning);
+  border-color: var(--color-warning);
+  background: var(--color-overlay-hover-weak);
+}
+
+.chipPending {
+  color: var(--color-accent);
+  border-color: var(--color-accent);
+  background: var(--color-accent-soft);
+}
+
+.chipRebuild {
+  color: var(--color-warning);
+  border-color: var(--color-warning);
+  background: var(--color-overlay-hover-weak);
+}
+
+/* --- Apply-policy segmented switch -------------------------------------- */
+
+.segment {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+}
+
+.segBtn {
+  padding: var(--space-1) var(--space-3);
+  background: transparent;
+  border: none;
+  border-radius: calc(var(--radius-md) - 2px);
+  color: var(--color-text-muted);
+  font-size: var(--font-3xs);
+  font-weight: 600;
+  line-height: 1.6;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.segBtn:hover { color: var(--color-text-primary); }
+
+.segBtnActive {
+  color: var(--color-accent);
+  background: var(--color-accent-soft);
+}
+
+.sep {
+  width: 1px;
+  align-self: stretch;
+  margin: 0 var(--space-1);
+  background: var(--color-border);
+}
+
 /* --- Layout menu ------------------------------------------------------- */
 
 .menuWrap {
