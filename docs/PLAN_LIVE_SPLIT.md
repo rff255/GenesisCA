@@ -43,7 +43,7 @@ Modeler   ·   Simulator   ·   ◐ Live
 | **3** | **Pipeline** — last-good-rule, apply policy, structural-rebuild prompt, debounce stretch | Editing while it runs is safe |
 | **4** | **Input + guards** — keyboard ownership, focus ring, `Enter`/`Esc`/`F`, Overseer exclusion, FPS cap, skip-blit | Live is predictable, and two pre-existing keyboard bugs are fixed |
 | **5** | **Docs + verification sweep** | Every doc layer in sync; the full gate run |
-| **6** | **Stretch** — Document Picture-in-Picture pop-out, behind a feasibility spike | Ships or is documented as deferred |
+| **6** | **Stretch** — Document Picture-in-Picture pop-out, behind a feasibility spike | **DEFERRED (2026-09-07)** — the spike ran: the canvases pass, the input layer does not. Findings in [§ 6.4](#64-phase-6--the-spike-as-run-the-measurements-and-why-this-is-deferred-2026-09-07); no `src/**` change |
 
 Phases are executed by **separate sessions**. Each one starts by re-reading the impact map and this
 plan's phase section, and ends green on `npx tsc -b` + `npm run build`.
@@ -746,9 +746,28 @@ next line loses the space in JSX — the three occurrences inside the NEW Live c
 
 ---
 
-# Phase 6 — Stretch: pop the Live viewport out to an OS window (Document PiP)
+# Phase 6 — FUTURE PHASE: pop the Live viewport out to an OS window (Document PiP)
 
 **Feasibility-gated. This phase may end in a written deferral, and that is an acceptable outcome.**
+
+> ## ⛔ STATUS (2026-09-07): the spike RAN, and the phase is DEFERRED. **No `src/**` change was made.**
+>
+> The spike's own question — *do the four display surfaces keep presenting after being moved into the
+> PiP document, and return cleanly?* — is now answered, in a real Chrome, on a real GPU: **YES, on all
+> four, with no context loss, no attach storm and a clean return.** That is not the reason for the
+> deferral.
+>
+> The spike found a **different** blocker the protocol did not ask about: **a Document PiP window is a
+> separate `Window` and `Document`, and it does not propagate events to its opener.** `SimulatorView`
+> registers **36** listeners on the opener's `window` / `document`, including every key the Phase-4
+> contract depends on. Measured with real trusted input inside the PiP window: **`Enter` does not
+> play/pause, `Space` does not step, a drag on the board does nothing.** Only the wheel survives,
+> because its listener is on the container element, which travels with the DOM.
+>
+> §6.1's gate is *"all six pass ⇒ build; any of them flaky ⇒ defer"*, and a viewport whose keyboard and
+> drag input are dead is flaky by any reading. **Read [§ 6.4](#64-phase-6--the-spike-as-run-the-measurements-and-why-this-is-deferred-2026-09-07)
+> before attempting this phase again** — it is a measurement, not an opinion, and it names the work
+> §6.2 does not scope.
 
 ## 6.1 The spike (do this first, in isolation, before any product code)
 
@@ -797,6 +816,120 @@ The spike protocol above, re-run against the shipped implementation, plus:
 `npx tsc -b`, `npm run build`, `check-compile-identity --compare` (still all surfaces unchanged), and a
 pass on a machine **without** Document PiP support (or with the flag off) proving the button is absent and
 nothing else changed.
+
+## 6.4 Phase 6 — the spike AS RUN, the measurements, and why this is DEFERRED (2026-09-07)
+
+**Outcome: DEFERRED. `src/**` was not touched; this section is the only change the phase made.**
+Everything below was measured, not reasoned about. Re-read it before the next attempt.
+
+### How the spike was driven (the harness this repo's browser tool cannot do)
+
+The in-app preview browser **cannot open any second window at all**, so the spike could not be run
+through it:
+
+| Probe (in the preview browser, `http://localhost:51730`, top-level, not an iframe) | Result |
+|---|---|
+| `'documentPictureInPicture' in window` | `true`, `DocumentPictureInPicture` |
+| `requestWindow()` with **no** user activation | `NotAllowedError: … requires user activation` (so the API is live and enforcing) |
+| `requestWindow()` after a **real trusted click** on an injected button | **`InvalidStateError: Internal error: no window`** — reproduced twice |
+| `window.open('', '_blank', 'popup,…')` after the same trusted click | **`null`** |
+| an external Chrome to borrow (`list_connected_browsers`) | `[]` |
+
+So the spike was run against a **real local Chrome** (`chrome.exe --remote-debugging-port`, headful, a
+throwaway profile) driven over CDP from Node 22's built-in `WebSocket` — `Runtime.evaluate` with
+`userGesture: true` supplies the activation token, and `Input.dispatchKeyEvent` /
+`dispatchMouseEvent` on a session attached to the **PiP window's own target** supplies real trusted
+input inside it. There, `requestWindow({width:900,height:640})` returns a live window
+(Chrome clamps/remembers the size: it came back **1384×830**). The throwaway scripts are not in the
+repo. **Anyone re-running this needs that setup; the preview browser is not enough.**
+
+### The six protocol steps — per-surface results
+
+Each run: load the model → Play → pop out (clone the opener's `<style>`/`<link>` set, `adoptNode` the
+`.canvasArea` into the PiP body) → sample every 5 s → resize the PiP window → move back → close.
+"hash" is a 160×160 downsample of the canvas (`drawImage` reads a *transferred* placeholder too, which
+is what makes the worker-presented surfaces measurable at all).
+
+| # | Surface / model | Result |
+|---|---|---|
+| 4 | **Plain 2D blit** — Game of Life (WebGPU grid) | **PASS.** Backing store followed the PiP box (964×769 → **1412×830**), gen **247 → 378 → 503 → 635** while out, a different hash at **every** sample, **0** console errors, **0** `attach*`. |
+| 1 | **2D agents, GPU-resident direct render** — Particle Life | **PASS.** gen **91 → 290** while out, hash changing at every sample; **3 `attachAgentCanvas`** for the pop-out (a genuine display resize), **1** for the PiP resize; clean return, same worker, **0** errors. |
+| — | **worker-presented `OffscreenCanvas` placeholder** — Particle Life **3D** (`agentSphereLayerRef`) | **PASS — the one §6.1 called "the hard one".** The transferred canvas resized to **1412×830** *inside the PiP document* and kept receiving presents: 4 distinct hashes over 20 s while gen ran **72 → 239**. Returned to 964×769 still presenting. **0** errors. |
+| 3 | **WebGL2 `gl3d`** — Life3D, Particle Life 3D, Accretor | **PASS. No context loss:** `isContextLost() === false` at every sample, in the PiP document and after the return. It re-renders there too — a 3D view change driven from the opener repainted it (hash changed) in every 3D run. |
+| 2 | **Voxel free mode** — Accretor (300³) | **PASS, with a caveat about the model, not the mechanism.** The run had already hit its own edge-stop (gen pinned at **155**, transport back to *Play*) before the pop-out, so per-step presents could not be sampled; the camera-change probe proved the transferred voxel canvas is live in the PiP document (hash `2830614240` → `3201863552`), and the pop-out itself cost **2 `attachVoxelCanvas`**. **Life3D's** apparently frozen voxel hash is likewise the MODEL: a control run that never leaves the main document holds the identical hash from gen 34 to gen 433. **Pick an unambiguously moving voxel model next time.** |
+| 5 | **Close → return** | **PASS on every canvas** in all four models: back to the opener's box, still presenting, `window.__simWorker` the same object, **0** re-init. `pagehide` **does** fire on the PiP window, so §6.2's restore hook is available. |
+| 6 | **Resize the PiP window** | **PASS, inside the ≤ 2 budget: 1 attach per gesture** (`attachAgentCanvas` on both Particle Life models, `attachVoxelCanvas` on Life3D), backing stores exactly matching the new box. |
+
+**§6.1's risk table needs one correction.** In **2D** neither worker-presented canvas is in the DOM:
+the WebGPU grid's direct-render canvas ([SimulatorView.tsx:8170](../src/simulator/SimulatorView.tsx),
+`:8190`) and the 2D agent direct-render canvas (`:5958`) are **detached blit sources**, so document
+adoption cannot reach them. The only DOM-resident transferred placeholders are the **3D** ones —
+the agent sphere layer (`:5931`) and the voxel layer (`:6191`).
+
+### ⛔ What actually blocks the phase: the PiP window is a SEPARATE EVENT TARGET TREE
+
+Real trusted input dispatched **inside** the PiP window, with the simulation paused so nothing moves
+on its own:
+
+| Gesture (real, in the PiP window) | Observed |
+|---|---|
+| `Enter` (Live's one GLOBAL key — play/pause) | keydown on the **PiP** document ×1, on the **opener's** document **×0**. Transport stayed *Play*. **Dead.** |
+| `Space` (step, viewport focus) | gen **0 → 0**. **Dead.** |
+| left drag on the board (paint / brush / pan) | `mousedown` reaches the container (it travelled) ×2 — but `mousemove`/`mouseup` on the opener's `window` **×0**, and the canvas did not change. **Dead.** |
+| middle drag | changed the view once and settled (not latched), but is not a working pan |
+| **wheel zoom** | **WORKS** — and it is the only one, because that listener is on the container ELEMENT, which travels with the adopted DOM |
+
+The cause is structural and it is the whole of `SimulatorView`'s input layer:
+**36 listeners are registered on the OPENER's `window` / `document`** (grep
+`window\.addEventListener\|document\.addEventListener` in that file), and a separate window does not
+propagate to its opener. Eight of the 36 are app-internal `genesis-*` CustomEvents and are rightly
+opener-scoped; the rest are real input, and every one of these is load-bearing for a popped-out viewport:
+
+- `document keydown` ×5 — the **main transport / Live handler** (`:14102`), Phase 3's **`Ctrl+Enter` apply**
+  (`:9584`), three overlay dismissers (`:2606`, `:2688`, `:3793`)
+- `window keydown/keyup` ×6 — **`F`** (`:15623`), the agent shift-hover sync (`:11179-11180`), the 3D shift
+  sync (`:10510-10511`), autoscroll (`:13371`)
+- `window pointermove/pointerup` (`:10513-10514`) — **the 3D ORBIT's release**: `pointerdown` is on the GL
+  canvas (travels), the release is not (does not)
+- `window mousemove/mouseup` (`:13369-13370`) — **the 2D pan / brush drag**
+- `window blur` (`:11181`) — the shift-latch guard
+- `document mousemove/mouseup` ×3 (`:15695`, `:17284`, `:18034`) — the panel splitters
+- `window resize` ×2 (`:9590`, `:15549`) — the opener's resize, not the PiP window's
+
+And two shared predicates answer for the **wrong document**: `overlayOwnsKeyboard()`
+([liveKeyboard.ts](../src/live/liveKeyboard.ts)) queries `document` for `[role="dialog"], [role="menu"]`,
+and every typing-target check reads `document.activeElement` — with focus in the PiP window the opener's
+`activeElement` is stale, so the modal / menu stand-down and the "is the user typing" test both lie.
+
+**Verdict.** Making the pop-out honest means a **document-parameterised input layer** — every one of those
+36 registrations bound to the right event root, both predicates taking a document, `window.devicePixelRatio`
+read per-window (4 sites: `:5640`, `:5923`, `:6181`, `:6345` — a PiP window can sit on a monitor with a
+different DPR), plus the `liveFocus` source for the PiP pane the Phase-4 handoff already flagged. Each of
+those listeners carries a Phase-4 documented contract that would then have to be re-verified across the
+keyboard × pointer × 2D/3D matrix. That is a phase of its own, not the "button + adopt + `pagehide` +
+`simLayoutApi` + copy the custom properties" of §6.2 — and shipping without it would put a viewport on the
+user's second monitor that they cannot pan, paint, orbit, step or pause, which is exactly the
+*"an enabled control must do something"* failure the doctrine forbids, at the scale of a whole pane.
+
+### Three more corrections §6.2 needs before it is re-attempted
+
+1. **"Copy every CSS custom property" is not enough.** The PiP document inherits **no stylesheet at all**,
+   and this app is CSS Modules: **33 `<style>` nodes** in the dev server (one per module), a single `<link>`
+   in a production build. Clone the whole set, **and** the `<html>` / `<body>` class names — the theme lives
+   there. (The spike did exactly this and the viewport bar rendered correctly.)
+2. **`ResizeObserver loop completed with undelivered notifications`** appears while the observed
+   `.canvasArea` lives in the PiP document, and **floods** (8+ in 2 s) once that document is torn down with
+   the element still inside it. So the restore must move the element back **before** the PiP document goes
+   away — `pagehide` fires, but the RO also needs re-targeting. "0 console errors" is not free here.
+3. **The pop-out itself is a display resize** and costs **2–3 `attach*Canvas`**, above the splitter's ≤ 2.
+   Fine, but measure it rather than assume the splitter's number carries over.
+
+### What is NOT in doubt any more
+
+Do not re-litigate the canvases. Cross-document adoption of a 2D display canvas, the `mix-blend-mode`
+cursor overlays, a live WebGL2 context and a worker-presented `OffscreenCanvas` placeholder is
+**measured-good in a real Document PiP window, in and back, with the same worker and no re-init.** The
+next attempt starts at the input layer.
 
 ---
 
