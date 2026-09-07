@@ -1,0 +1,680 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>GenesisCA — Live mode (split workspace) · illustrated plan</title>
+<style>
+  :root{
+    --bg:#0c0d10; --panel:#16181d; --elev:#1c1f26; --border:#2a2e37;
+    --text:#d8dae0; --muted:#8a8f9a; --accent:#e8a13a; --rec:#e05050; --ok:#5bc98a;
+    --cyan:#4cc9f0; --flow:#66bb6a; --violet:#7e57c2; --blue:#4c8bf0;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;padding:32px 28px 72px;background:var(--bg);color:var(--text);
+       font-family:system-ui,-apple-system,"Segoe UI",sans-serif;font-size:14px;line-height:1.55}
+  .wrap{max-width:1150px;margin:0 auto}
+  h1{font-size:23px;margin:0 0 6px;letter-spacing:.2px}
+  h2{font-size:16px;margin:44px 0 4px;color:var(--accent);letter-spacing:.3px}
+  h2 .tag{font-size:11px;color:var(--muted);font-weight:400;letter-spacing:.4px;margin-left:8px}
+  h3{font-size:12px;margin:20px 0 6px;color:var(--muted);text-transform:uppercase;letter-spacing:.7px;font-weight:600}
+  p{margin:8px 0} .lead{color:var(--muted);max-width:90ch}
+  ul{margin:6px 0 6px 18px;padding:0} li{margin:3px 0}
+  .cap{font-size:12px;color:var(--muted);margin:10px 0 0} .cap b{color:var(--text);font-weight:600}
+  .note{font-size:12.5px;color:var(--muted);border-left:2px solid var(--border);padding-left:11px;margin:14px 0}
+  .note.warn{border-left-color:var(--accent)}
+  .note.bad{border-left-color:var(--rec)}
+  .note b{color:var(--text)}
+  .kbd{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:11px;background:#12141a;border:1px solid var(--border);
+       border-radius:3px;padding:0 5px;color:#eaeaea;white-space:nowrap}
+  code{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px;color:#c9d1d9}
+  .pill{display:inline-block;font-size:10.5px;padding:1px 8px;border-radius:9px;border:1px solid var(--border);color:var(--muted);margin-left:6px;vertical-align:middle}
+  .pill.rec{color:var(--ok);border-color:#26402f}
+  .pill.warnp{color:var(--accent);border-color:#4a3a1e}
+  .pill.badp{color:var(--rec);border-color:#4a2020}
+
+  /* ── mock app frame ── */
+  .app{position:relative;height:430px;border:1px solid var(--border);border-radius:9px;overflow:hidden;background:#0a0b0e;margin:12px 0 4px;font-size:11px}
+  .app.short{height:300px}
+  .nav{position:absolute;inset:0 0 auto 0;height:34px;background:var(--panel);border-bottom:1px solid var(--border);display:flex;align-items:center;padding:0 10px;gap:8px;z-index:30}
+  .nav .logo{width:14px;height:14px;border-radius:3px;background:linear-gradient(135deg,#e8a13a,#4cc9f0)}
+  .nav .t{font-weight:600;color:#eaeaea}
+  .nav .modes{margin-left:auto;margin-right:auto;display:flex;gap:2px}
+  .nav .m{padding:3px 9px;border-radius:5px;color:var(--muted);border:1px solid transparent}
+  .nav .m.on{color:#eaeaea;background:#22262e;border-color:#33383f}
+  .nav .m.live{color:var(--accent);border-color:#4a3a1e}
+  .nav .m.disabled{color:#4b4f57;border-color:transparent;text-decoration:line-through}
+  .nav .right{display:flex;gap:6px;color:var(--muted)}
+  .ears{position:absolute;left:0;top:34px;bottom:0;width:30px;display:flex;flex-direction:column;justify-content:center;gap:5px;padding:0 4px;z-index:20}
+  .ear{height:22px;border-radius:6px;background:var(--panel);border:1px solid #33383f;color:var(--muted);display:flex;align-items:center;justify-content:center;font-size:10px}
+  .ear.on{color:var(--accent);border-color:#5a4320;background:#241d12}
+  .area{position:absolute;top:34px;bottom:0;left:30px;right:0;display:flex}
+
+  /* panes */
+  .pane{position:relative;overflow:hidden;min-width:0;min-height:0}
+  .graphPane{flex:1 1 0;background:var(--bg);background-image:radial-gradient(#242830 1px,transparent 1px);background-size:18px 18px}
+  .simPane{flex:1 1 0;background:#0a0b0e}
+  .simPane canvas{width:100%;height:100%;display:block;image-rendering:pixelated}
+  .divider{width:6px;flex:0 0 6px;background:#1e2229;cursor:col-resize;display:flex;align-items:center;justify-content:center;z-index:16}
+  .divider i{width:2px;height:30px;border-radius:2px;background:#454b56}
+  .area.bottom{flex-direction:column}
+  .area.bottom .divider{width:auto;height:6px;flex:0 0 6px;cursor:row-resize}
+  .area.bottom .divider i{width:30px;height:2px}
+  .area.swap{flex-direction:row-reverse}
+  .area.bottom.swap{flex-direction:column-reverse}
+  .area.collapsed .simPane{display:none}
+  .area.collapsed .divider{display:none}
+  .restoreEar{position:absolute;right:0;top:8px;z-index:18;background:var(--elev);border:1px solid var(--border);border-right:none;
+              border-radius:6px 0 0 6px;color:var(--muted);padding:5px 3px;font-size:10px;display:none}
+  .area.collapsed .restoreEar{display:block}
+
+  /* graph content */
+  .edges{position:absolute;inset:0;pointer-events:none}
+  .node{position:absolute;width:150px;background:var(--elev);border:1px solid #2f343d;border-radius:6px;box-shadow:0 3px 10px #0008;overflow:hidden}
+  .node .hd{padding:3px 8px;font-weight:600;font-size:10.5px;color:#fff;display:flex;align-items:center;justify-content:space-between}
+  .node .bd{padding:5px 8px;color:var(--muted);font-size:10px;line-height:1.4}
+  .node.evt .hd{background:#ffffff;color:#1e2a3a}
+  .node.data .hd{background:#1565c0}
+  .node.math .hd{background:#6a1b9a}
+  .node.logic .hd{background:#00838f}
+  .node.out .hd{background:#c62828}
+  .port{position:absolute;width:8px;height:8px;border-radius:50%;background:var(--cyan);border:1px solid #0a0b0e}
+  .port.f{border-radius:0;clip-path:polygon(0 0,100% 50%,0 100%);background:var(--flow);width:9px;height:9px}
+  .port.l{left:-5px} .port.r{right:-5px}
+  .badge{position:absolute;top:-6px;right:-6px;width:14px;height:14px;border-radius:50%;background:var(--accent);color:#000;font-size:9px;font-weight:700;display:flex;align-items:center;justify-content:center}
+  .pills{position:absolute;top:8px;left:50%;transform:translateX(-50%);display:flex;gap:2px;background:var(--panel);border:1px solid var(--border);border-radius:8px;padding:2px;z-index:15}
+  .pills span{padding:2px 8px;border-radius:6px;color:var(--muted)} .pills span.on{color:#eaeaea;background:#22262e}
+  .pills i{display:inline-block;width:6px;height:6px;border-radius:50%;margin-right:5px;vertical-align:middle}
+
+  /* viewport bar + transport */
+  .vpbar{position:absolute;top:0;left:0;right:0;height:23px;background:#111318e6;border-bottom:1px solid var(--border);
+         display:flex;align-items:center;gap:7px;padding:0 7px;color:var(--muted);font-size:10px;z-index:15}
+  .vpbar b{color:#eaeaea;font-weight:600}
+  .vpbar .sp{margin-left:auto;display:flex;gap:4px;align-items:center}
+  .ico{min-width:16px;height:16px;padding:0 3px;border:1px solid var(--border);border-radius:3px;display:flex;align-items:center;justify-content:center;color:var(--muted);background:#12141a}
+  .ico.on{color:var(--accent);border-color:#4a3a1e}
+  .ico.dis{color:#41454c;border-color:#222630}
+  .seg{display:flex;border:1px solid var(--border);border-radius:4px;overflow:hidden}
+  .seg span{padding:1px 6px;color:var(--muted);background:#12141a}
+  .seg span.on{color:#eaeaea;background:#262b34}
+  .transport{position:absolute;bottom:9px;left:50%;transform:translateX(-50%);display:flex;gap:3px;align-items:center;background:var(--panel);
+             border:1px solid var(--border);border-radius:9px;padding:4px 6px;box-shadow:0 4px 18px #000a;z-index:15}
+  .tb{min-width:24px;height:22px;padding:0 6px;border:1px solid var(--border);border-radius:5px;display:flex;align-items:center;justify-content:center;color:var(--text);font-size:10.5px;background:#12141a;white-space:nowrap}
+  .tb.play{color:var(--ok);border-color:#26402f;font-size:12px;min-width:30px}
+  .tb.muted{color:var(--muted)}
+  .chip{border-radius:5px;padding:0 7px;height:22px;display:inline-flex;align-items:center;gap:5px;font-size:10.5px;border:1px solid var(--border);background:#12141a;white-space:nowrap}
+  .chip.ok{color:var(--ok);border-color:#26402f}
+  .chip.stale{color:var(--accent);border-color:#4a3a1e}
+  .chip.pending{color:var(--blue);border-color:#1e3352}
+  .chip.rebuild{color:var(--rec);border-color:#4a2020}
+  .chip .dot{width:7px;height:7px;border-radius:50%;background:currentColor;flex:0 0 7px}
+  .stats{position:absolute;right:9px;bottom:9px;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:10px;color:#8f98a6;text-align:right;line-height:1.5;z-index:15}
+  .focusring{position:absolute;inset:0;pointer-events:none;border:1.5px solid transparent;border-radius:2px}
+  .focused .focusring{border-color:var(--accent)}
+
+  /* controls strip under a mockup */
+  .ctl{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin:10px 0 0;font-size:11.5px;color:var(--muted)}
+  .ctl button{font:inherit;font-size:11.5px;background:#12141a;color:var(--text);border:1px solid var(--border);border-radius:5px;padding:3px 9px;cursor:pointer}
+  .ctl button:hover{border-color:#454b56}
+  .ctl button.on{color:#000;background:var(--accent);border-color:var(--accent);font-weight:600}
+  .ctl .sep{width:1px;height:16px;background:var(--border);margin:0 4px}
+
+  table{border-collapse:collapse;width:100%;font-size:12.5px;margin:10px 0}
+  th,td{border:1px solid var(--border);padding:6px 9px;text-align:left;vertical-align:top}
+  th{background:var(--panel);color:var(--muted);font-weight:600;font-size:11px;text-transform:uppercase;letter-spacing:.5px}
+  td.good{color:var(--ok)} td.bad{color:var(--rec)} td.mid{color:var(--accent)}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+  .grid3{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}
+  .box{background:var(--panel);border:1px solid var(--border);border-radius:8px;padding:11px 13px;font-size:12.5px}
+  .box h4{margin:0 0 6px;font-size:12px;color:#eaeaea}
+  .box.warnbox{border-color:#4a3a1e}
+  .box.badbox{border-color:#4a2020}
+  .flow{display:flex;align-items:stretch;gap:6px;flex-wrap:wrap;margin:12px 0}
+  .step{background:var(--panel);border:1px solid var(--border);border-radius:7px;padding:7px 10px;font-size:11.5px;min-width:118px;position:relative}
+  .step small{display:block;color:var(--muted);font-size:10.5px;margin-top:2px}
+  .step.exists{border-color:#26402f} .step.exists::before{content:"exists";position:absolute;top:-8px;right:8px;font-size:9px;color:var(--ok);background:var(--bg);padding:0 4px}
+  .step.new{border-color:#4a3a1e} .step.new::before{content:"new";position:absolute;top:-8px;right:8px;font-size:9px;color:var(--accent);background:var(--bg);padding:0 4px}
+  .step.stop{border-color:#4a2020} .step.stop::before{content:"blocked";position:absolute;top:-8px;right:8px;font-size:9px;color:var(--rec);background:var(--bg);padding:0 4px}
+  .arrow{align-self:center;color:var(--muted)}
+  .phases{display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin:12px 0}
+  .ph{background:var(--panel);border:1px solid var(--border);border-radius:8px;padding:9px 11px;font-size:11.5px}
+  .ph .n{font-size:10px;color:var(--accent);letter-spacing:.6px;text-transform:uppercase;font-weight:700}
+  .ph h5{margin:2px 0 5px;font-size:12.5px;color:#eaeaea}
+  .ph ul{margin:0 0 0 15px} .ph li{color:var(--muted);font-size:11px}
+  svg text{font-family:system-ui,-apple-system,"Segoe UI",sans-serif}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>Live mode — the rule graph and the running simulation, side by side</h1>
+<p class="lead">GenesisCA already has both halves: a node editor, and a simulator that <em>soft-recompiles on every graph edit while keeping the grid</em>. What it does not have is <b>seeing the run while the graph is on screen</b>. This plan builds that as <b>Option B — a split workspace</b>: two opaque, fully interactive panes and a draggable splitter. No transparency, no modifier games, no pointer arbitration. The overlay (Option A) and the in-page floating window (Option C) are dropped. Design authority: <code>docs/IMPACT_MAP_LIVE_SPLIT.md</code>; written plan: <code>docs/PLAN_LIVE_SPLIT.md</code>.</p>
+<p class="cap">The boards in every mockup below are a <b>real Game of Life running in this page</b>, so the layouts can be judged with something moving in them.</p>
+
+<div class="note warn"><b>Zero compiler impact.</b> Live is layout, mounting and input ownership. Nothing under <code>src/modeler/vpl/compiler/**</code> or <code>src/modeler/vpl/nodes/**</code> changes, no schema field, no worker message. The claim is proved, not asserted: <code>check-compile-identity --compare</code> must report <b>31 models, all surfaces unchanged</b> at the end of every phase.</p></div>
+
+<!-- ══════════════════════════════════════════════════════════ -->
+<h2>1 · Before → after <span class="tag">what the user sees</span></h2>
+
+<h3>Before — two mutually exclusive modes</h3>
+<div class="grid2">
+  <div>
+    <div class="app short" id="beforeA">
+      <div class="nav"><div class="logo"></div><span class="t">GenesisCA</span>
+        <div class="modes"><span class="m on">⬚ Modeler</span><span class="m">▷ Simulator</span></div>
+        <div class="right"><span>?</span></div></div>
+      <div class="ears"><div class="ear">i</div><div class="ear on">⚙</div><div class="ear">≡</div><div class="ear">⊞</div></div>
+      <div class="area">
+        <div class="pane graphPane" id="beforeGraph"></div>
+      </div>
+      <div class="pills"><span class="on"><i style="background:var(--cyan)"></i>Cells</span><span><i style="background:var(--violet)"></i>Agents</span></div>
+    </div>
+    <p class="cap"><b>Modeler.</b> The simulation is still mounted behind <code>display:none</code> — and <em>auto-paused</em>. You cannot see the edit land.</p>
+  </div>
+  <div>
+    <div class="app short" id="beforeB">
+      <div class="nav"><div class="logo"></div><span class="t">GenesisCA</span>
+        <div class="modes"><span class="m">⬚ Modeler</span><span class="m on">▷ Simulator</span></div>
+        <div class="right"><span>?</span></div></div>
+      <div class="ears"><div class="ear on">⚙</div></div>
+      <div class="area">
+        <div class="pane simPane"><canvas id="lifeBefore"></canvas></div>
+      </div>
+      <div class="transport"><span class="tb muted">FPS 60</span><span class="tb play">▮▮</span><span class="tb">⏭</span><span class="tb">■</span></div>
+      <div class="stats">Gen 1 284 · 60 fps<br>alive 2 011</div>
+    </div>
+    <p class="cap"><b>Simulator.</b> The rules are one tab away. Every A/B of a rule change is a round trip.</p>
+  </div>
+</div>
+
+<h3>After — one mode, both surfaces, live</h3>
+<div class="app" id="liveApp">
+  <div class="nav"><div class="logo"></div><span class="t">GenesisCA</span><span style="color:var(--muted)">File ▾ &nbsp; Library</span>
+    <div class="modes"><span class="m">⬚ Modeler</span><span class="m">▷ Simulator</span><span class="m live on" style="background:#241d12">◐ Live</span></div>
+    <div class="right"><span>?</span><span>⌨</span><span>◑</span></div></div>
+  <div class="ears"><div class="ear">i</div><div class="ear on">⚙</div><div class="ear">≡</div><div class="ear">⊞</div><div class="ear">⇄</div></div>
+  <div class="area" id="liveArea">
+    <div class="pane graphPane focused" id="liveGraph">
+      <div class="focusring"></div>
+      <div class="pills"><span class="on"><i style="background:var(--cyan)"></i>Cells</span><span><i style="background:var(--violet)"></i>Agents</span></div>
+    </div>
+    <div class="divider" id="liveDivider"><i></i></div>
+    <div class="pane simPane" id="liveSim">
+      <canvas id="lifeLive"></canvas>
+      <div class="focusring"></div>
+      <div class="vpbar">
+        <b>Game of Life</b><span>default-viz ▾</span>
+        <div class="sp">
+          <span class="seg" title="apply policy"><span class="on">Auto</span><span>On demand</span></span>
+          <span class="ico" title="brush">✎</span>
+          <span class="ico" title="indicators">📈</span>
+          <span class="ico on" id="mnuRight" title="dock right">▥</span>
+          <span class="ico" id="mnuBottom" title="dock bottom">▤</span>
+          <span class="ico" id="mnuSwap" title="swap sides">⇄</span>
+          <span class="ico" id="mnuCollapse" title="collapse viewport">⤡</span>
+        </div>
+      </div>
+      <div class="transport">
+        <span class="tb muted">FPS 30</span><span class="tb muted">G/F 1</span>
+        <span class="tb play">▮▮</span><span class="tb">⏭</span><span class="tb">■</span>
+        <span class="chip ok" id="liveChip"><i class="dot"></i>synced</span>
+      </div>
+      <div class="stats">Gen 1 284 · 30 fps<br>alive 2 011<br>⚙ WebGPU</div>
+    </div>
+    <div class="restoreEar" id="liveRestore">◐</div>
+  </div>
+</div>
+<div class="ctl">
+  <span>Layout:</span>
+  <button class="on" data-layout="right">Dock right</button>
+  <button data-layout="bottom">Dock bottom</button>
+  <span class="sep"></span>
+  <button id="btnSwap">Swap sides</button>
+  <button id="btnCollapse">Collapse viewport</button>
+  <button id="btnHalf">Snap 50 % (double-click the splitter)</button>
+  <span class="sep"></span>
+  <span>Focus:</span>
+  <button class="on" data-focus="graph">Graph</button>
+  <button data-focus="viewport">Viewport</button>
+</div>
+<p class="cap"><b>Try it:</b> the layout buttons drive the real mockup — dock right / dock bottom / swap sides / collapse — and <b>the splitter drags</b>. The amber inset ring marks which surface owns the keyboard.</p>
+
+<div class="grid2" style="margin-top:16px">
+  <div class="box"><h4>What is on screen that is new</h4>
+    <ul>
+      <li><b>A third mode button</b> — <span style="color:var(--accent)">◐ Live</span>. Greyed with a reason while an Overseer experiment runs.</li>
+      <li><b>A viewport bar</b> along the top of the simulation pane: model name · viewer picker · apply-policy switch · brush and indicators <em>popovers</em> · the layout menu.</li>
+      <li><b>A transport chip</b> on the simulator's own transport bar — the four states in §4.</li>
+      <li><b>A splitter</b>, draggable, double-click to 50 %, position persisted.</li>
+      <li><b>A focus ring</b> — a 1 px accent inset on whichever pane owns the keyboard.</li>
+    </ul></div>
+  <div class="box"><h4>What is deliberately unchanged</h4>
+    <ul>
+      <li>The graph pane <b>is</b> the Modeler: same ear tabs, same panels, same graph pills, same macro breadcrumb.</li>
+      <li>The viewport <b>is</b> the Simulator: same canvas stack, same transport bar, same brush, same capture cluster.</li>
+      <li>The Modeler and Simulator tabs behave <b>exactly as today</b> — except two keyboard bugs that Phase 4 fixes (§5).</li>
+      <li>The simulator's own side panels are only <em>collapsed by default</em> in Live; their ears are still there.</li>
+    </ul></div>
+</div>
+
+<!-- ══════════════════════════════════════════════════════════ -->
+<h2>2 · The layout menu <span class="tag">four actions, all pure CSS</span></h2>
+<p class="lead">Dock right, dock bottom, swap sides and collapse are <code>flex-direction</code> and a flex fraction on one container. <b>No element moves in the React tree</b> — which is exactly why they are cheap, and exactly why they are safe (see §3).</p>
+
+<div class="grid3">
+  <div class="box"><h4>▥ Dock right / ▤ Dock bottom</h4>
+    <svg viewBox="0 0 220 96" width="100%" height="96" aria-label="dock right and dock bottom diagrams">
+      <rect x="2" y="2" width="102" height="92" rx="5" fill="#101216" stroke="#2a2e37"/>
+      <rect x="8" y="8" width="49" height="80" rx="3" fill="#16181d" stroke="#2f343d"/>
+      <rect x="60" y="8" width="2" height="80" rx="1" fill="#454b56"/>
+      <rect x="65" y="8" width="32" height="80" rx="3" fill="#0a0b0e" stroke="#2f343d"/>
+      <text x="32" y="52" fill="#8a8f9a" font-size="9" text-anchor="middle">graph</text>
+      <text x="81" y="52" fill="#8a8f9a" font-size="9" text-anchor="middle">sim</text>
+      <text x="53" y="103" fill="#8a8f9a" font-size="8" text-anchor="middle"></text>
+      <rect x="116" y="2" width="102" height="92" rx="5" fill="#101216" stroke="#2a2e37"/>
+      <rect x="122" y="8" width="90" height="46" rx="3" fill="#16181d" stroke="#2f343d"/>
+      <rect x="122" y="57" width="90" height="2" rx="1" fill="#454b56"/>
+      <rect x="122" y="62" width="90" height="26" rx="3" fill="#0a0b0e" stroke="#2f343d"/>
+      <text x="167" y="34" fill="#8a8f9a" font-size="9" text-anchor="middle">graph</text>
+      <text x="167" y="78" fill="#8a8f9a" font-size="9" text-anchor="middle">sim</text>
+    </svg>
+    <p style="margin:6px 0 0;color:var(--muted);font-size:11.5px"><code>flex-direction: row</code> ⇄ <code>column</code> on <code>&lt;main&gt;</code>.</p>
+  </div>
+  <div class="box"><h4>⇄ Swap sides</h4>
+    <svg viewBox="0 0 220 96" width="100%" height="96" aria-label="swap sides diagram">
+      <rect x="2" y="2" width="94" height="92" rx="5" fill="#101216" stroke="#2a2e37"/>
+      <rect x="8" y="8" width="45" height="80" rx="3" fill="#16181d" stroke="#2f343d"/>
+      <rect x="58" y="8" width="31" height="80" rx="3" fill="#0a0b0e" stroke="#2f343d"/>
+      <text x="30" y="52" fill="#8a8f9a" font-size="9" text-anchor="middle">graph</text>
+      <text x="73" y="52" fill="#8a8f9a" font-size="9" text-anchor="middle">sim</text>
+      <path d="M104 44 h14 M104 52 h14" stroke="#e8a13a" stroke-width="1.4" fill="none"/>
+      <path d="M114 40 l5 4 -5 4" stroke="#e8a13a" stroke-width="1.4" fill="none"/>
+      <path d="M108 48 l-5 4 5 4" stroke="#e8a13a" stroke-width="1.4" fill="none"/>
+      <rect x="124" y="2" width="94" height="92" rx="5" fill="#101216" stroke="#2a2e37"/>
+      <rect x="130" y="8" width="31" height="80" rx="3" fill="#0a0b0e" stroke="#2f343d"/>
+      <rect x="166" y="8" width="45" height="80" rx="3" fill="#16181d" stroke="#2f343d"/>
+      <text x="145" y="52" fill="#8a8f9a" font-size="9" text-anchor="middle">sim</text>
+      <text x="188" y="52" fill="#8a8f9a" font-size="9" text-anchor="middle">graph</text>
+    </svg>
+    <p style="margin:6px 0 0;color:var(--muted);font-size:11.5px"><code>row-reverse</code>. The splitter stays between them by construction.</p>
+  </div>
+  <div class="box"><h4>⤡ Collapse viewport</h4>
+    <svg viewBox="0 0 220 96" width="100%" height="96" aria-label="collapse viewport diagram">
+      <rect x="2" y="2" width="94" height="92" rx="5" fill="#101216" stroke="#2a2e37"/>
+      <rect x="8" y="8" width="45" height="80" rx="3" fill="#16181d" stroke="#2f343d"/>
+      <rect x="58" y="8" width="31" height="80" rx="3" fill="#0a0b0e" stroke="#2f343d"/>
+      <path d="M104 48 h14" stroke="#e8a13a" stroke-width="1.4" fill="none"/>
+      <path d="M114 44 l5 4 -5 4" stroke="#e8a13a" stroke-width="1.4" fill="none"/>
+      <rect x="124" y="2" width="94" height="92" rx="5" fill="#101216" stroke="#2a2e37"/>
+      <rect x="130" y="8" width="76" height="80" rx="3" fill="#16181d" stroke="#2f343d"/>
+      <rect x="206" y="14" width="6" height="18" rx="2" fill="#1c1f26" stroke="#2f343d"/>
+      <text x="168" y="52" fill="#8a8f9a" font-size="9" text-anchor="middle">graph (full width)</text>
+      <text x="209" y="42" fill="#e8a13a" font-size="7" text-anchor="middle">◐</text>
+    </svg>
+    <p style="margin:6px 0 0;color:var(--muted);font-size:11.5px">The <b>splitter is hidden</b> (nothing to divide — the structurally-impossible rule) and a restore ear takes its place. The sim keeps running.</p>
+  </div>
+</div>
+
+<div class="note"><b>Persistence — and a correction.</b> The brainstorm said the splitter would persist “like the panel widths do today”. It cannot: <b>panel widths do not persist</b> — both <code>PanelShell</code> and the simulator's own handle mutate inline <code>style.width</code> and the element is unmounted on close (“re-opening starts from the CSS default”, in the code's own comment). So Live gets its own store: a module global with localStorage write-through under <code>genesisca_live_layout</code> — the <code>genesisca_graph_view_settings</code> pattern — holding <code>dock · swapped · split (a 0–1 FRACTION, not pixels) · viewportCollapsed · applyPolicy · simPanelsCollapsed</code>. A fraction survives a window resize and a dock flip; pixels would not.</div>
+
+<!-- ══════════════════════════════════════════════════════════ -->
+<h2>3 · The one thing that must not go wrong <span class="tag">mounting</span><span class="pill badp">highest risk</span></h2>
+<p class="lead"><code>SimulatorView</code> owns the Web Worker, the WASM memory, the WebGPU device, the agent SoA snapshot and the grid state. React reconciles by <b>position in the element tree</b> — so if Live renders it inside a pane wrapper that does not exist in Simulator mode, React unmounts and remounts it, and generation 12 000 becomes generation 0.</p>
+
+<div class="grid2">
+  <div class="box badbox"><h4>✗ The obvious shape — destroys the run</h4>
+    <svg viewBox="0 0 300 150" width="100%" height="150" aria-label="wrong mounting tree">
+      <text x="6" y="14" fill="#8a8f9a" font-size="10">mode = "simulator"</text>
+      <rect x="6" y="20" width="130" height="20" rx="4" fill="#16181d" stroke="#2f343d"/><text x="14" y="34" fill="#d8dae0" font-size="10">&lt;main&gt;</text>
+      <rect x="20" y="46" width="116" height="20" rx="4" fill="#16181d" stroke="#2f343d"/><text x="28" y="60" fill="#d8dae0" font-size="10">&lt;div contents&gt;</text>
+      <rect x="34" y="72" width="102" height="20" rx="4" fill="#1c2a1f" stroke="#26402f"/><text x="42" y="86" fill="#5bc98a" font-size="10">SimulatorView</text>
+      <path d="M150 66 h20" stroke="#e05050" stroke-width="1.4"/><path d="M166 62 l5 4 -5 4" stroke="#e05050" stroke-width="1.4" fill="none"/>
+      <text x="176" y="14" fill="#8a8f9a" font-size="10">mode = "live"</text>
+      <rect x="176" y="20" width="118" height="20" rx="4" fill="#16181d" stroke="#2f343d"/><text x="184" y="34" fill="#d8dae0" font-size="10">&lt;main&gt;</text>
+      <rect x="190" y="46" width="104" height="20" rx="4" fill="#2a1b1b" stroke="#4a2020"/><text x="198" y="60" fill="#e05050" font-size="10">&lt;div pane&gt; NEW</text>
+      <rect x="204" y="72" width="90" height="20" rx="4" fill="#2a1b1b" stroke="#4a2020"/><text x="212" y="86" fill="#e05050" font-size="10">SimulatorView</text>
+      <text x="176" y="112" fill="#e05050" font-size="10">different element at that slot</text>
+      <text x="176" y="126" fill="#e05050" font-size="10">→ unmount + remount</text>
+      <text x="176" y="140" fill="#e05050" font-size="10">→ worker terminated, Gen 0</text>
+    </svg>
+  </div>
+  <div class="box" style="border-color:#26402f"><h4>✓ The rule: identical tree, different CSS</h4>
+    <svg viewBox="0 0 300 150" width="100%" height="150" aria-label="correct mounting tree">
+      <text x="6" y="14" fill="#8a8f9a" font-size="10">mode = "simulator"</text>
+      <rect x="6" y="20" width="130" height="20" rx="4" fill="#16181d" stroke="#2f343d"/><text x="14" y="34" fill="#d8dae0" font-size="10">&lt;main .content&gt;</text>
+      <rect x="20" y="46" width="116" height="20" rx="4" fill="#16181d" stroke="#2f343d"/><text x="28" y="60" fill="#8a8f9a" font-size="10">.pane (contents)</text>
+      <rect x="34" y="72" width="102" height="20" rx="4" fill="#1c2a1f" stroke="#26402f"/><text x="42" y="86" fill="#5bc98a" font-size="10">SimulatorView</text>
+      <path d="M150 66 h20" stroke="#5bc98a" stroke-width="1.4"/><path d="M166 62 l5 4 -5 4" stroke="#5bc98a" stroke-width="1.4" fill="none"/>
+      <text x="176" y="14" fill="#8a8f9a" font-size="10">mode = "live"</text>
+      <rect x="176" y="20" width="118" height="20" rx="4" fill="#16181d" stroke="#2f343d"/><text x="184" y="34" fill="#d8dae0" font-size="10">&lt;main .content.live&gt;</text>
+      <rect x="190" y="46" width="104" height="20" rx="4" fill="#241d12" stroke="#4a3a1e"/><text x="198" y="60" fill="#e8a13a" font-size="10">.pane (flex item)</text>
+      <rect x="204" y="72" width="90" height="20" rx="4" fill="#1c2a1f" stroke="#26402f"/><text x="212" y="86" fill="#5bc98a" font-size="10">SimulatorView</text>
+      <text x="176" y="112" fill="#5bc98a" font-size="10">same slot, same element type</text>
+      <text x="176" y="126" fill="#5bc98a" font-size="10">only className changed</text>
+      <text x="176" y="140" fill="#5bc98a" font-size="10">→ no remount, worker survives</text>
+    </svg>
+  </div>
+</div>
+<p class="cap">The <em>Modeler</em> wrapper is new and must therefore be added <b>in every mode</b> (<code>display:contents</code> outside Live, so today's Modeler is byte-identical) — introducing it only in Live would remount React Flow on every Modeler↔Live switch. And <code>visible</code> splits into two questions: <b>“shown”</b> (a real, non-zero box — true in Simulator <em>and</em> Live; it gates the draw loop, the re-present messages and the 0×0 <code>drawImage</code> crash guard) and <b>“active tab”</b> (owns the keyboard by default — true only in Simulator; it is the <em>only</em> thing the auto-pause may key off).</p>
+
+<div class="note bad"><b>The proof is a measurement, not a look.</b> Play Game of Life to generation ≥ 500 in the Simulator, switch to Live, and assert the counter keeps climbing <em>and</em> the worker object identity is unchanged. A remount shows as Gen 0.</div>
+
+<!-- ══════════════════════════════════════════════════════════ -->
+<h2>4 · The edit → running-rule pipeline, and the transport chip</h2>
+
+<div class="flow">
+  <div class="step exists">Graph edit<small>React Flow state</small></div><span class="arrow">→</span>
+  <div class="step exists">100 ms debounce<small><code>scheduleSync</code> → SET_GRAPH</small></div><span class="arrow">→</span>
+  <div class="step exists">model change<small><code>useEffect([model])</code></small></div><span class="arrow">→</span>
+  <div class="step new">gate<small>compiled clean? structural? policy?</small></div><span class="arrow">→</span>
+  <div class="step exists">soft recompile<small>JS / WASM / WGSL, grid kept</small></div><span class="arrow">→</span>
+  <div class="step exists">worker steps on<small>never paused by the edit</small></div>
+</div>
+
+<div class="note bad"><b>Why “keep the last good rule” is a gate and not a recovery.</b> The worker's recompile handler does <code>stepFn = stepCode ? eval(stepCode) : null</code>, and the main thread's guarded compile returns an <em>empty</em> step on a throw. So a half-wired graph today does not merely show an error — it <b>replaces the running rule with nothing</b>. The fix is therefore to <b>withhold the <code>recompile</code> message</b> when the compile failed: a message the worker never receives cannot change what it is running. That keeps <code>sim.worker.ts</code> completely untouched.</div>
+
+<h3>The four chip states</h3>
+<div class="grid2" style="grid-template-columns:1fr 1fr;gap:14px">
+  <div class="box"><h4><span class="chip ok"><i class="dot"></i>synced</span></h4>
+    <p style="margin:6px 0 0;color:var(--muted)">The last edit compiled and is running. Auto policy, clean graph. Nothing to do.</p></div>
+  <div class="box warnbox"><h4><span class="chip stale"><i class="dot"></i>stale</span></h4>
+    <p style="margin:6px 0 0;color:var(--muted)">The graph does not compile. The <b>previous</b> rule is still running; amber <span class="kbd">!</span> badges mark the offending nodes. <b>No red banner</b> — that stays the Simulator tab's surface. Tooltip: “3 nodes need attention”.</p></div>
+  <div class="box"><h4><span class="chip pending"><i class="dot"></i>pending · <span class="kbd">Ctrl+Enter</span></span></h4>
+    <p style="margin:6px 0 0;color:var(--muted)">On-demand policy: edits are in the model but not yet in the engine. For slow compiles (big WGSL shaders, large agent graphs) and for multi-node edits that must land atomically.</p></div>
+  <div class="box badbox"><h4><span class="chip rebuild"><i class="dot"></i>rebuild needed</span> <span class="tb" style="height:19px">Apply</span> <span class="tb muted" style="height:19px">Later</span></h4>
+    <p style="margin:6px 0 0;color:var(--muted)">A structural edit (new attribute, grid dims, a capability profile) needs a full reinit, which <b>re-seeds the board</b>. The prompt names what comes back — the saved board, or a fresh seed from the Init Events. <b>N structural edits cost one reset.</b></p></div>
+</div>
+<div class="ctl">
+  <span>Preview a chip state on the mockup above:</span>
+  <button class="on" data-chip="ok">synced</button>
+  <button data-chip="stale">stale</button>
+  <button data-chip="pending">pending</button>
+  <button data-chip="rebuild">rebuild needed</button>
+</div>
+
+<div class="note warn"><b>Two traps hide in this one feature.</b> (1) <code>setCompileError</code> is <em>not</em> a compile-error channel — it is the simulator's general error surface, and only 6 of its 18 call sites are graph compiles; the rest are failed CSV / GeoTIFF / GeoJSON / preset imports and worker-pushed errors. A blanket “no red banner in Live” would silently swallow a failed GIS import. (2) The rebuild prompt must <b>not</b> advance the model effect's <code>prevModelRef</code>, which is assigned unconditionally at the top of the effect — otherwise the next edit compares against the already-changed baseline, <code>needsFullInit</code> comes back false, and the deferred rebuild is lost while the worker keeps running the old memory layout. A separate <code>appliedModelRef</code> (the last model actually pushed) is the fix, and “N edits, one reset” falls out of it for free.</div>
+
+<h3>Apply policy</h3>
+<div class="grid2">
+  <div class="box"><h4>Auto (~100 ms)</h4><p style="margin:6px 0 0;color:var(--muted)">Today's behaviour: the existing 100 ms sync debounce feeds the model, the model effect applies. Blender's feel. The default.</p></div>
+  <div class="box"><h4>On demand</h4><p style="margin:6px 0 0;color:var(--muted)">The <em>model→worker</em> step is held, not the graph sync — so undo, save, and the Modeler's own panels stay live while the engine waits. <span class="kbd">Ctrl+Enter</span> applies.</p></div>
+</div>
+<p class="cap"><b>A correction to the brainstorm.</b> It proposed stretching the debounce to ~400 ms “while the pointer is down”, framed as fixing a compile storm during node drags. A node <em>position</em> drag never syncs mid-drag — the sync predicate fires on remove, drag-<b>end</b>, dimensions and replace only. What actually storms is a <b>held inline widget inside a node</b> and a <b>comment/group resize</b>. The stretch is still worth having; it just targets a different gesture than the brainstorm assumed.</p>
+
+<!-- ══════════════════════════════════════════════════════════ -->
+<h2>5 · Who owns the keyboard <span class="tag">and two bugs that already exist</span></h2>
+
+<div class="note bad"><b>Fifteen global keyboard listeners are live at once</b>, because <code>SimulatorView</code> is always mounted — even in the Modeler. Two of them misbehave <b>today</b>, with or without Live:
+<ul style="margin-top:6px">
+<li><b><span class="kbd">Esc</span> in the Modeler resets the running simulation.</b> The simulator's main key handler has a field check and a capture-modal check, but <b>no visibility gate</b>, and nothing upstream stops <span class="kbd">Esc</span>. (<span class="kbd">Backspace</span> shares the same arm.)</li>
+<li><b><span class="kbd">Ctrl+C/V/X</span> is bound twice</b> — the graph clipboard and the cell/agent clipboard, both bubble-phase on <code>document</code>, neither stopping propagation. In Live a <span class="kbd">Ctrl+V</span> meant for the node graph would also paste a cell region into the grid.</li>
+</ul>
+Phase 4 fixes both. They are corrections, not new-feature scaffolding, and they are testable without Live.</div>
+
+<table>
+<tr><th>Key</th><th>Modeler today</th><th>Simulator today</th><th>Live</th></tr>
+<tr><td><span class="kbd">Space</span></td><td>quick-add menu at cursor</td><td>step one generation</td><td class="mid">the <b>focused surface</b> — the focus ring says which</td></tr>
+<tr><td><span class="kbd">Enter</span></td><td>—</td><td>play / pause</td><td class="good"><b>always play / pause</b> — unless a field, menu or dialog has focus. The one deliberate global: it is the reason Live exists.</td></tr>
+<tr><td><span class="kbd">Ctrl+Enter</span></td><td>—</td><td>—</td><td class="good"><b>apply now</b> (on-demand policy). New; unbound today.</td></tr>
+<tr><td><span class="kbd">Esc</span></td><td>closes a menu / the right panel</td><td class="bad">reset</td><td class="good">closes a menu if one is open, else <b>nothing</b>. <b>Never resets.</b> Reset stays a button.</td></tr>
+<tr><td><span class="kbd">Backspace</span></td><td>—</td><td class="bad">reset (same arm)</td><td class="good">same as <span class="kbd">Esc</span> — easy to fix one and leave the other</td></tr>
+<tr><td><span class="kbd">Ctrl+Z</span> / <span class="kbd">Shift+Z</span> / <span class="kbd">Y</span></td><td>graph undo / redo</td><td>—</td><td>graph undo (the run is not undoable)</td></tr>
+<tr><td><span class="kbd">Ctrl+C</span> / <span class="kbd">V</span> / <span class="kbd">X</span></td><td>nodes</td><td>cells / agents</td><td class="mid"><b>focused surface only</b> — the double binding is resolved here</td></tr>
+<tr><td><span class="kbd">Ctrl+D</span></td><td>duplicate nodes</td><td>—</td><td>graph</td></tr>
+<tr><td><span class="kbd">Ctrl+F</span></td><td>search nodes</td><td>—</td><td>graph</td></tr>
+<tr><td><span class="kbd">F</span></td><td>collapse the modeler panels</td><td>collapse the simulator panels + bars</td><td class="good"><b>collapses both</b> — one dispatch of the existing <code>genesis-toggle-canvas-fullscreen</code> event, which both views already listen for</td></tr>
+<tr><td>digits <span class="kbd">1</span>–<span class="kbd">9</span></td><td>—</td><td>3D view angles (Blender numpad)</td><td class="mid">viewport-focused only — they must do nothing while typing in the graph</td></tr>
+<tr><td><span class="kbd">?</span></td><td colspan="2">cheat sheet</td><td>unchanged</td></tr>
+</table>
+<p class="cap">The focus owner is a module global with pub/sub (the pattern the editor already uses for the active graph kind), set on pointer-down <em>and</em> pointer-enter inside each pane — so hovering a pane is enough to type into it — and rendered as a 1 px accent inset ring. <b>A field check is not enough for “a menu has focus”</b>: the stand-down set has to include the quick-add and connection-drop menus (which own <span class="kbd">Enter</span> themselves) and every modal.</p>
+
+<!-- ══════════════════════════════════════════════════════════ -->
+<h2>6 · Guards, and the things that must not be touched</h2>
+<div class="grid3">
+  <div class="box"><h4>Overseer ⇄ Live</h4>
+    <p style="margin:6px 0 0;color:var(--muted)">Every model change <b>aborts a running experiment</b> — and in Live every graph edit is a model change. So:
+    <br>· <b>Live → Overseer:</b> the Experiments tab is <b>hidden</b> (structurally impossible from that panel) and the tab selection is coerced back to Controls.
+    <br>· <b>Overseer → Live:</b> the Live nav button is <b>greyed with the reason</b> — Abort is visible in the panel, so the working state <em>is</em> reachable.</p></div>
+  <div class="box"><h4>Performance</h4>
+    <p style="margin:6px 0 0;color:var(--muted)">· <b>FPS cap 30</b> as the Live <em>default</em> — the popover stays live and the previous value is restored on exit. A default, never a clamp.
+    <br>· <b>Skip the blit, not the step</b>, while a node is being dragged: guard the per-<code>stepped</code> draw, keep the worker's cadence, the recording capture and the generation counter.
+    <br>· The Live viewport is <em>smaller</em> than the Simulator tab's, so per-frame blit cost goes down, not up.</p></div>
+  <div class="box"><h4>The splitter's hidden cost</h4>
+    <p style="margin:6px 0 0;color:var(--muted)">A transferred <code>OffscreenCanvas</code> has <b>fixed dimensions</b>, so tracking a drag exactly means one worker pipeline rebuild per frame — <b>measured at 26 attach messages over a 30-move drag</b> before the existing 140 ms settle window fixed it to 2. The Live splitter sits <em>outside</em> <code>SimulatorView</code>, so it must call that machinery through a registered seam. Relying on the <code>ResizeObserver</code> catch-all alone reintroduces both the stretched-stale-bitmap bug and the attach storm.</p></div>
+</div>
+
+<div class="grid2" style="margin-top:14px">
+  <div class="box"><h4>2D and 3D are one pane, three differences</h4>
+    <ul>
+      <li><b>2D</b>: the composited display canvas plus two cursor-overlay canvases (one <code>mix-blend-mode: difference</code>). A splitter drag blits scaled so the picture stays right-sized.</li>
+      <li><b>3D</b>: a worker-presented sphere <em>or</em> voxel canvas underneath, the WebGL2 canvas on top with a transparent clear. Both lower layers are <code>width/height: 100%</code>, so CSS stretches them during a drag.</li>
+      <li>Entering Live <b>re-sends the camera</b> before asking for a re-present — a refresh without it would present the old view.</li>
+      <li>A narrow, short pane puts the 3D gizmo, the axis labels and the 3D View panel in competition for space. Verify on Life3D and Accretor, not by reasoning.</li>
+    </ul></div>
+  <div class="box"><h4>Capture and recording stay</h4>
+    <ul>
+      <li>They are not structurally impossible in Live, so hiding them would violate the doctrine. The “simulation” capture scope renders the whole world at a fit framing on the main thread — <b>independent of zoom, pan and pane size</b>.</li>
+      <li>The real interlock: the “current view” scope <b>locks the output frame size on the first captured frame</b>. So while recording, the <b>layout controls</b> (splitter, dock, swap, collapse) are <b>greyed with the reason</b> — the mirror of the existing “capture settings are locked while recording” rule.</li>
+      <li>The FPS-cap default is not applied while recording (the recording's frame rate derives from it).</li>
+    </ul></div>
+</div>
+
+<!-- ══════════════════════════════════════════════════════════ -->
+<h2>7 · Phases <span class="tag">one session each</span></h2>
+<div class="phases">
+  <div class="ph"><div class="n">Phase 2</div><h5>Foundation</h5>
+    <ul><li>Live mode + nav</li><li>dual mount (the §3 rule)</li><li>split layout + splitter</li><li>layout menu + persistence</li><li>viewport bar + panel policy</li></ul></div>
+  <div class="ph"><div class="n">Phase 3</div><h5>Pipeline</h5>
+    <ul><li>last-good-rule</li><li>Auto / On-demand + <span class="kbd">Ctrl+Enter</span></li><li>structural rebuild prompt</li><li>debounce stretch</li></ul></div>
+  <div class="ph"><div class="n">Phase 4</div><h5>Input + guards</h5>
+    <ul><li>focus ownership + ring</li><li><span class="kbd">Enter</span>/<span class="kbd">Esc</span>/<span class="kbd">F</span> rules</li><li>the two bug fixes</li><li>Overseer exclusion, both ways</li><li>FPS 30, skip-blit</li></ul></div>
+  <div class="ph"><div class="n">Phase 5</div><h5>Docs + sweep</h5>
+    <ul><li>7 area docs + structure</li><li>Help, README, shortcuts</li><li><code>tsc -b</code>, <code>build</code></li><li>compile-identity: unchanged</li><li>2D · 3D · agents UI pass</li></ul></div>
+  <div class="ph"><div class="n">Phase 6</div><h5>Stretch</h5>
+    <ul><li>Document PiP pop-out</li><li><b>feasibility spike first</b></li><li>4 canvas surfaces to prove</li><li>fragile ⇒ defer + document</li></ul></div>
+</div>
+
+<h3>Phase 6's gate, in one picture</h3>
+<div class="flow">
+  <div class="step exists">2D display canvas<small>plain Canvas2D</small></div>
+  <div class="step exists">cursor overlays<small>blend-mode difference</small></div>
+  <div class="step new">WebGL2 canvas<small>context loss on adoption?</small></div>
+  <div class="step stop">worker-transferred<br>OffscreenCanvas<small>does it keep presenting?</small></div>
+  <span class="arrow">→</span>
+  <div class="step new">all four survive<br>a move + a close<small>then build. Otherwise: defer, and write down the measurement.</small></div>
+</div>
+<p class="cap">Chromium-only is acceptable — WebGPU already requires it. What is <em>not</em> acceptable is shipping a pop-out that silently freezes the agent or voxel layer, so the spike runs on a throwaway branch with no product code, against Particle Life, Accretor, Life3D and Game of Life, and must also prove a clean return when the window closes.</p>
+
+<div class="note" style="margin-top:26px"><b>Companion documents.</b> <code>docs/IMPACT_MAP_LIVE_SPLIT.md</code> — the subsystem-by-subsystem analysis with <code>file:line</code> evidence for every claim here, the top five traps, the brainstorm assumptions that turned out wrong, and the twelve decisions taken. <code>docs/PLAN_LIVE_SPLIT.md</code> — the phase-by-phase execution order, the exact files, the UI-doctrine disposition of every new control, and the verification recipe per phase. Origin: <code>docs/BRAINSTORM_SEE_THROUGH_CANVAS.md</code> + <code>.html</code>.</div>
+
+</div>
+
+<script>
+// ── a small Game of Life so the mockups have something moving in them ──
+function startLife(canvas, cols, rows, fps){
+  if(!canvas) return;
+  const ctx=canvas.getContext('2d');
+  let W=0,H=0,cw=0,ch=0;
+  function fit(){
+    const dpr=Math.min(2,window.devicePixelRatio||1);
+    const w=Math.floor(canvas.clientWidth*dpr), h=Math.floor(canvas.clientHeight*dpr);
+    if(w<=0||h<=0) return false;
+    if(w!==W||h!==H){ W=w;H=h; canvas.width=W; canvas.height=H; cw=W/cols; ch=H/rows; }
+    return true;
+  }
+  let a=new Uint8Array(cols*rows), b=new Uint8Array(cols*rows);
+  for(let i=0;i<a.length;i++) a[i]=Math.random()<0.32?1:0;
+  function step(){
+    for(let r=0;r<rows;r++)for(let c=0;c<cols;c++){
+      let n=0;
+      for(let dr=-1;dr<=1;dr++)for(let dc=-1;dc<=1;dc++){
+        if(!dr&&!dc)continue;
+        n+=a[((r+dr+rows)%rows)*cols+((c+dc+cols)%cols)];
+      }
+      const i=r*cols+c; b[i]=(n===3||(a[i]&&n===2))?1:0;
+    }
+    const t=a;a=b;b=t;
+  }
+  function draw(){
+    if(!fit()) return;
+    ctx.fillStyle='#0b0c10'; ctx.fillRect(0,0,W,H);
+    ctx.fillStyle='#4cc9f0';
+    for(let r=0;r<rows;r++)for(let c=0;c<cols;c++) if(a[r*cols+c]) ctx.fillRect(c*cw,r*ch,Math.ceil(cw)-1,Math.ceil(ch)-1);
+  }
+  let last=0, gen=0;
+  function tick(t){
+    if(t-last>1000/fps){ last=t; step(); draw(); if(++gen%400===0){ for(let i=0;i<a.length;i++) if(Math.random()<0.02) a[i]=1; } }
+    requestAnimationFrame(tick);
+  }
+  draw(); requestAnimationFrame(tick);
+}
+startLife(document.getElementById('lifeBefore'),72,48,10);
+startLife(document.getElementById('lifeLive'),64,64,10);
+
+// ── a fake rule graph ──
+const NODES=[
+  {id:'step',cls:'evt',x:30,y:50,hd:'Generation Step',bd:'per cell',outs:['f']},
+  {id:'get',cls:'data',x:30,y:140,hd:'Get Neighbors Attribute',bd:'alive · moore',outs:['v']},
+  {id:'agg',cls:'math',x:215,y:140,hd:'Aggregate',bd:'Sum',ins:['v'],outs:['v']},
+  {id:'cmp',cls:'logic',x:395,y:100,hd:'Logical Expression',bd:'n == 3 OR (alive AND n == 2)',ins:['v','v'],outs:['v']},
+  {id:'set',cls:'out',x:585,y:50,hd:'Set Attribute',bd:'alive ← value',ins:['f','v'],outs:['f'],badge:true},
+  {id:'self',cls:'data',x:215,y:228,hd:'Get Self Attribute',bd:'alive',outs:['v']},
+];
+const EDGES=[['step',0,'set',0,'f'],['get',0,'agg',0,'v'],['agg',0,'cmp',0,'v'],['self',0,'cmp',1,'v'],['cmp',0,'set',1,'v']];
+function buildGraph(el, scale, ox, oy, withBadge){
+  if(!el) return;
+  const svg=document.createElementNS('http://www.w3.org/2000/svg','svg');
+  svg.setAttribute('class','edges'); svg.setAttribute('width','100%'); svg.setAttribute('height','100%');
+  el.appendChild(svg);
+  const pos={};
+  NODES.forEach(n=>{
+    const d=document.createElement('div'); d.className='node '+n.cls;
+    d.style.left=(ox+n.x*scale)+'px'; d.style.top=(oy+n.y*scale)+'px'; d.style.width=(150*scale)+'px';
+    d.innerHTML='<div class="hd">'+n.hd+'</div><div class="bd">'+n.bd+'</div>'+((n.badge&&withBadge)?'<div class="badge">!</div>':'');
+    (n.ins||[]).forEach((k,i)=>{const p=document.createElement('div');p.className='port l '+(k==='f'?'f':'');p.style.top=(22+i*16)*scale+'px';d.appendChild(p);pos[n.id+':in'+i]=[ox+n.x*scale,oy+(n.y+26+i*16)*scale];});
+    (n.outs||[]).forEach((k,i)=>{const p=document.createElement('div');p.className='port r '+(k==='f'?'f':'');p.style.top=(22+i*16)*scale+'px';d.appendChild(p);pos[n.id+':out'+i]=[ox+(n.x+150)*scale,oy+(n.y+26+i*16)*scale];});
+    el.appendChild(d);
+  });
+  EDGES.forEach(function(e){
+    const a=e[0],ai=e[1],b=e[2],bi=e[3],k=e[4];
+    const s=pos[a+':out'+ai], t=pos[b+':in'+bi];
+    if(!s||!t) return;
+    const dx=Math.max(40,(t[0]-s[0])/2);
+    const p=document.createElementNS('http://www.w3.org/2000/svg','path');
+    p.setAttribute('d','M'+s[0]+','+s[1]+' C'+(s[0]+dx)+','+s[1]+' '+(t[0]-dx)+','+t[1]+' '+t[0]+','+t[1]);
+    p.setAttribute('fill','none');
+    p.setAttribute('stroke',k==='f'?'#66bb6a':'#4cc9f0'); p.setAttribute('stroke-width','2'); svg.appendChild(p);
+  });
+}
+buildGraph(document.getElementById('beforeGraph'),0.62,16,26,false);
+buildGraph(document.getElementById('liveGraph'),0.66,14,40,true);
+
+// ── the Live mockup's layout controls ──
+const area=document.getElementById('liveArea');
+const graphPane=document.getElementById('liveGraph');
+const simPane=document.getElementById('liveSim');
+const divider=document.getElementById('liveDivider');
+const chip=document.getElementById('liveChip');
+let split=0.55, dock='right', swapped=false, collapsed=false;
+
+function applySplit(){
+  // Collapsed: the graph is the ONLY flex item, so it must carry a grow factor
+  // of 1 — a sum of flex factors below 1 takes only that FRACTION of the free
+  // space (CSS flexbox spec), which would leave a dead gap where the viewport was.
+  graphPane.style.flex = (collapsed ? 1 : split)+' 1 0%';
+  simPane.style.flex = (1-split)+' 1 0%';
+}
+function applyLayout(){
+  area.classList.toggle('bottom', dock==='bottom');
+  area.classList.toggle('swap', swapped);
+  area.classList.toggle('collapsed', collapsed);
+  divider.style.cursor = dock==='bottom' ? 'row-resize' : 'col-resize';
+  document.getElementById('mnuRight').classList.toggle('on', dock==='right');
+  document.getElementById('mnuBottom').classList.toggle('on', dock==='bottom');
+  document.getElementById('mnuSwap').classList.toggle('on', swapped);
+  document.getElementById('mnuCollapse').classList.toggle('on', collapsed);
+  applySplit();
+}
+applyLayout();
+
+document.querySelectorAll('[data-layout]').forEach(function(btn){
+  btn.addEventListener('click',function(){
+    dock=btn.getAttribute('data-layout');
+    document.querySelectorAll('[data-layout]').forEach(function(b){ b.classList.toggle('on', b===btn); });
+    collapsed=false; applyLayout();
+  });
+});
+function toggleSwap(){ swapped=!swapped; collapsed=false; applyLayout(); }
+function toggleCollapse(){ collapsed=!collapsed; applyLayout(); }
+document.getElementById('btnSwap').addEventListener('click',toggleSwap);
+document.getElementById('btnCollapse').addEventListener('click',toggleCollapse);
+document.getElementById('mnuSwap').addEventListener('click',toggleSwap);
+document.getElementById('mnuCollapse').addEventListener('click',toggleCollapse);
+document.getElementById('liveRestore').addEventListener('click',toggleCollapse);
+document.getElementById('mnuRight').addEventListener('click',function(){
+  dock='right'; collapsed=false;
+  document.querySelectorAll('[data-layout]').forEach(function(b){ b.classList.toggle('on', b.getAttribute('data-layout')==='right'); });
+  applyLayout();
+});
+document.getElementById('mnuBottom').addEventListener('click',function(){
+  dock='bottom'; collapsed=false;
+  document.querySelectorAll('[data-layout]').forEach(function(b){ b.classList.toggle('on', b.getAttribute('data-layout')==='bottom'); });
+  applyLayout();
+});
+function snapHalf(){ split=0.5; applySplit(); }
+document.getElementById('btnHalf').addEventListener('click',snapHalf);
+divider.addEventListener('dblclick',snapHalf);
+
+// the splitter really drags (fraction-based, clamped — exactly the plan's rule)
+divider.addEventListener('pointerdown',function(e){
+  e.preventDefault();
+  const rect=area.getBoundingClientRect();
+  function move(ev){
+    let f = dock==='bottom' ? (ev.clientY-rect.top)/rect.height : (ev.clientX-rect.left)/rect.width;
+    if(swapped) f = 1-f;
+    split = Math.max(0.15, Math.min(0.85, f));
+    applySplit();
+  }
+  function up(){ window.removeEventListener('pointermove',move); window.removeEventListener('pointerup',up); }
+  window.addEventListener('pointermove',move); window.addEventListener('pointerup',up);
+});
+
+// focus ring
+document.querySelectorAll('[data-focus]').forEach(function(btn){
+  btn.addEventListener('click',function(){
+    const which=btn.getAttribute('data-focus');
+    document.querySelectorAll('[data-focus]').forEach(function(b){ b.classList.toggle('on', b===btn); });
+    graphPane.classList.toggle('focused', which==='graph');
+    simPane.classList.toggle('focused', which==='viewport');
+  });
+});
+graphPane.addEventListener('pointerenter',function(){
+  graphPane.classList.add('focused'); simPane.classList.remove('focused');
+  document.querySelectorAll('[data-focus]').forEach(function(b){ b.classList.toggle('on', b.getAttribute('data-focus')==='graph'); });
+});
+simPane.addEventListener('pointerenter',function(){
+  simPane.classList.add('focused'); graphPane.classList.remove('focused');
+  document.querySelectorAll('[data-focus]').forEach(function(b){ b.classList.toggle('on', b.getAttribute('data-focus')==='viewport'); });
+});
+
+// chip states
+const CHIP={
+  ok:      {cls:'ok',      html:'<i class="dot"></i>synced'},
+  stale:   {cls:'stale',   html:'<i class="dot"></i>stale &middot; last good rule running'},
+  pending: {cls:'pending', html:'<i class="dot"></i>pending &middot; Ctrl+Enter'},
+  rebuild: {cls:'rebuild', html:'<i class="dot"></i>rebuild needed &middot; board will re-seed'}
+};
+document.querySelectorAll('[data-chip]').forEach(function(btn){
+  btn.addEventListener('click',function(){
+    const k=btn.getAttribute('data-chip'), s=CHIP[k];
+    document.querySelectorAll('[data-chip]').forEach(function(b){ b.classList.toggle('on', b===btn); });
+    chip.className='chip '+s.cls;
+    chip.innerHTML=s.html;
+    // the amber ! badge belongs to the stale state
+    const badge=document.querySelector('#liveGraph .badge');
+    if(badge) badge.style.display = (k==='stale') ? 'flex' : 'none';
+  });
+});
+(function(){ const badge=document.querySelector('#liveGraph .badge'); if(badge) badge.style.display='none'; })();
+</script>
+</body>
+</html>
