@@ -4233,6 +4233,26 @@ let webgpuRuntime: WebGPURuntime | null = null;
 // Without this, an old in-flight init can race the new one and clobber
 // `webgpuRuntime` with a now-orphaned runtime ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â racy and hard to repro.
 let webgpuInitSeq = 0;
+/** The `webgpuInitSeq` of the ASYNC grid-runtime build that is currently in
+ *  flight, or 0 when none is. Set the moment `startWebGPUInit` commits to the
+ *  teardown+rebuild path (after it has already nulled `webgpuRuntime`), cleared
+ *  by every exit of that promise — including the seq-mismatch bails, which
+ *  clear it only when a NEWER init has not already claimed the slot.
+ *
+ *  ⚠ IT EXISTS SO NO STATUS ECHO CAN REPORT A REBUILDING RUNTIME AS A DEAD ONE.
+ *  Between the teardown and the rebuild `webgpuRuntime` is null, and a status
+ *  message built from `webgpuRuntime?.stepReady ?? false` is then a transient
+ *  LIE: the main thread reads `ready:false` as "WebGPU died", releases the
+ *  direct-render canvas and falls the grid blit back to the CPU `colours`
+ *  mirror — which direct render deliberately leaves stale — so the board FLASHES
+ *  a frame that can be thousands of generations old. See
+ *  `webgpuGridRebuildInFlight()`. */
+let webgpuInitPendingSeq = 0;
+/** Is a grid WebGPU runtime being rebuilt right now (torn down, not yet
+ *  replaced)? The rebuild's own completion — `startWebGPUInit`'s `.then`
+ *  (ready:true) or `.catch` (ready:false) — is the ONE authority on the new
+ *  runtime's readiness, so no other sender may narrate this window. */
+function webgpuGridRebuildInFlight(): boolean { return webgpuInitPendingSeq !== 0; }
 // Set true in every startWebGPUInit failure branch, cleared when a fresh init
 // begins or the runtime is created. Only consulted when `nbrTableDropped` is
 // true: it lets the runStep CPU guard distinguish a transient init window (the
@@ -4298,6 +4318,10 @@ function startWebGPUInit(
   // Bump the sequence FIRST so any in-flight init's `.then` callback sees a
   // mismatch and bails instead of writing to webgpuRuntime.
   const mySeq = ++webgpuInitSeq;
+  // ...and invalidates any previous rebuild window: every path below either
+  // re-opens it (the async teardown+rebuild) or resolves synchronously (cache
+  // hit / a failure that really does leave no runtime).
+  webgpuInitPendingSeq = 0;
   // A fresh attempt clears any prior failure latch (see webgpuGridFailed).
   webgpuGridFailed = false;
   if (shaderError) {
@@ -4342,6 +4366,11 @@ function startWebGPUInit(
   // The promise is intentionally not awaited here ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â init runs in the background
   // and runStep() falls through to JS/WASM until `webgpuRuntime.stepReady` is
   // true. Step 7 (Save/Load State) introduces the await path.
+  // From here to this promise's every exit the runtime is TORN DOWN BUT ALIVE in
+  // intent — mark the window so no status echo can call it dead (the flash bug;
+  // see webgpuInitPendingSeq).
+  webgpuInitPendingSeq = mySeq;
+  const endRebuildWindow = (): void => { if (webgpuInitPendingSeq === mySeq) webgpuInitPendingSeq = 0; };
   void createWebGPURuntime({ shaderCode, entryPoints, layout, canvas: salvagedCanvas })
     .then(async rt => {
       // A newer init started while we were awaiting ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â the orphaned `rt`
@@ -4414,7 +4443,11 @@ function startWebGPUInit(
       const msg = (e instanceof Error) ? e.message : String(e);
       postFallback('[webgpu] init failed: ' + msg);
       self.postMessage({ type: 'useWebGPUStatus', enabled: useWebGPU, ready: false, directRender: false });
-    });
+    })
+    // Closes the rebuild window on EVERY exit — the two seq-mismatch bails and
+    // the two early `return`s included — and always AFTER the authoritative
+    // status has gone out, so the suppression can never outlive the rebuild.
+    .finally(endRebuildWindow);
 }
 
 /** Mirror of the compiler's sanitiseExportName: drop everything except
@@ -8382,7 +8415,21 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
         // Mutual exclusion: WebGPU wins.
         useWasm = false;
       }
-      self.postMessage({ type: 'useWebGPUStatus', enabled: useWebGPU, ready: webgpuRuntime?.stepReady ?? false, directRender: webgpuRuntime?.directRender ?? false, voxelRender: webgpuRuntime?.voxelRender ?? false });
+      // ⚠ NEVER NARRATE A RUNTIME THAT IS MID-REBUILD (the "the board blinks an
+      // older state while compiling" bug, 2026-09-07). The main thread posts
+      // `setUseWebGPU` immediately BEHIND every `recompile`, and by the time it
+      // is processed a teardown recompile has already nulled `webgpuRuntime`
+      // for an async rebuild — so this echo, built from `webgpuRuntime?.
+      // stepReady ?? false`, reported ready:false for a runtime that was very
+      // much alive. The main thread reads ready:false as "WebGPU died",
+      // releases the direct-render canvas and blits the CPU `colours` mirror
+      // that direct render deliberately leaves stale: measured, a PAUSED Game
+      // of Life at generation 3716 flashed its generation-423 board. The
+      // rebuild's own completion posts the truth a few ms later, so the correct
+      // thing to say here is NOTHING.
+      if (!(useWebGPU && webgpuGridRebuildInFlight())) {
+        self.postMessage({ type: 'useWebGPUStatus', enabled: useWebGPU, ready: webgpuRuntime?.stepReady ?? false, directRender: webgpuRuntime?.directRender ?? false, voxelRender: webgpuRuntime?.voxelRender ?? false });
+      }
       break;
     }
 

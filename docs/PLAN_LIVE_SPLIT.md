@@ -926,6 +926,72 @@ geometry never reflows.
 
 ---
 
+# The recompile FLASH — AS BUILT (2026-09-07, post-ship feedback round 3)
+
+**The report:** *"when I make a change in the graph, the CA grid on the simulator blinks an older board
+state while compiling before going back to the state it was… almost like showing some temporary grid
+state of sorts."* The sibling of `32090b0`: that fix made the STATE survive a teardown recompile; this
+one makes the PICTURE survive it. One worker-side change, no main-thread diff, no emit change.
+
+**Root cause.** `SimulatorView` posts `setUseWebGPU { enabled: true }` immediately behind every
+`recompile` ([SimulatorView.tsx:9496](src/simulator/SimulatorView.tsx)); the worker's handler echoes
+`useWebGPUStatus { ready: webgpuRuntime?.stepReady ?? false, … }`
+([sim.worker.ts:8385](src/simulator/engine/sim.worker.ts)) — but a teardown recompile has already run
+`startWebGPUInit` and nulled `webgpuRuntime` for an **async** rebuild, so the echo said `ready:false`
+about a live runtime. The main thread's `ready === false` branch
+([SimulatorView.tsx:8211](src/simulator/SimulatorView.tsx)) means *WebGPU died*: it clears
+`directRenderActiveRef`, nulls the transferred `srcCanvasRef` and drops the voxel canvases — after which
+`draw()` blits the CPU `colorsRef` mirror, which direct render deliberately never refreshes. The flash
+is therefore **the board as of the last colours ship, i.e. model load**.
+
+**The fix.** `webgpuInitPendingSeq` / `webgpuGridRebuildInFlight()` mark the teardown→rebuild window
+(opened where `startWebGPUInit` commits to the async path, closed by `.finally` on every exit, and
+invalidated up front by any fresh init so a cache hit or a synchronous failure never leaves it open).
+`setUseWebGPU` skips its echo while `useWebGPU && webgpuGridRebuildInFlight()` — the rebuild's own
+`.then`/`.catch` is the one authority on the new runtime's readiness. Everything else — the `32090b0`
+drain, the Phase 1/2 fresh-canvas handshake, the structural-Apply reset, JS/WASM and agents-only models
+— posts and behaves exactly as before.
+
+**Measured, A/B across `git stash`, Game of Life on WebGPU in Live, paused so the race is deterministic
+(hash = FNV over a 64×64 downsample of the blit source, `hash/litBlocks`):**
+
+| | pre-fix | post-fix |
+|---|---|---|
+| board before the edit | `1388023632/7` | `3546589626/13` |
+| during the rebuild | **`3264298910/19`** ← a different board | `3546589626/13` (held) |
+| after | `1388023632/7` | `3546589626/13`, then the new rule runs |
+| `useWebGPUStatus ready:false` in the window | 1 | 0 |
+| colour payloads shipped in the window | 0 | 0 |
+
+`3264298910/19` came back **byte-identical in a second run at an unrelated generation** (161 vs 292),
+which is what proves it is the load-time mirror rather than a recent frame; an earlier paused run
+restored the generation-**423** board at generation **3716**. **Playing**, the flash is a race the
+worker's own CPU-window `stepped` usually wins (13 ms measured), which is why it reads as a blink.
+
+**Verified post-fix, 0 console errors throughout:** 2D GoL paused *and* playing (0 rewinds across 598
+instrumented blits, board frozen at gen 206 through a 173 ms rebuild then continuing under the new
+rule); the **Simulator tab** (Modeler edit → return: board hash unchanged, `refreshDisplay` still posted,
+so direct render survived); **Life3D** 3D voxel (canvas content bit-identical across the attach swap, no
+DOM canvas torn out, no canvas leak — and a Reset proves the display is live with 61 distinct frames);
+**Particle Life** agents-only (598 blits / 273 distinct / 0 rewinds, and the echo still posts `ready:false`
+there exactly as before, since `enableWebGPU` is false for a grid-less model); **On demand** (both edits
+held, 0 recompiles, then exactly ONE on Apply, no flash, chip → Synced); **structural Apply** still
+re-seeds visibly (Boundary torus→constant: `⟳ Rebuild needed` → Apply → gen 0, board re-seeded).
+
+**Adjacent transient found and deliberately NOT fixed here** (A/B-confirmed identical on both sides of
+the change, so pre-existing): under the **E2 grid+agents composite** (Chemotaxis) a recompile rebuilds
+the AGENT runtime, and while `agentCompositeActive` is false `draw()` blits one or two **grid-only**
+CPU frames and then the freshly attached composite canvas while it is still **black** (`…/0 lit`) — 1
+black frame post-fix, 3 pre-fix. Different owner (`agentRenderStatus`), different symptom (blank and
+agentless, not stale). The `draw()` composite branch already has the right idea for the RESIZE path
+("keep blitting the OLD, still worker-presented composite until the ack commits the fresh one"); the
+rebuild path wants the same treatment.
+
+**Gates:** `tsc -p tsconfig.app.json --noEmit` clean · `check-compile-identity --compare` **31 models,
+all surfaces unchanged** · `parity-agent-wasm` ✓ · `verify-agent-render` ✓.
+
+---
+
 # Phase 6 — FUTURE PHASE: pop the Live viewport out to an OS window (Document PiP)
 
 **Feasibility-gated. This phase may end in a written deferral, and that is an acceptable outcome.**

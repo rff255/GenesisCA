@@ -24,6 +24,7 @@
 - Skip Isolated Empty Cells (opt-in large-grid optimization — branch `sim_agent_fixes`)
 - LIVE mode adds NO worker message (2026-09-07)
 - ⚠ A `recompile` THAT REBUILDS A GPU RUNTIME MUST READ THE GPU DOWN FIRST (2026-09-07)
+- ⚠ ...AND NOTHING MAY REPORT THAT REBUILD AS A DEATH (2026-09-07)
 
 ---
 
@@ -69,6 +70,55 @@ leaves the board exactly as it was.
   against the SAME `wasmMemory` the worker owns, so the grid state never leaves the module's memory.
 - The `setUseWasm` / `setUseWebGPU` handlers already drained GPU→CPU before tearing the runtime down;
   `recompile` was the one teardown path that did not.
+
+---
+
+## ⚠ ...AND NOTHING MAY REPORT THAT REBUILD AS A DEATH (2026-09-07)
+
+**THE INVARIANT: between the teardown and the rebuild, the ONLY sender allowed to describe the grid
+runtime is the rebuild itself** — `startWebGPUInit`'s `.then` (`ready:true`) or its `.catch`
+(`ready:false`). `webgpuInitPendingSeq` marks that window and `webgpuGridRebuildInFlight()` reads it;
+`.finally(endRebuildWindow)` closes it on every exit of the promise, including the two seq-mismatch
+bails, and a fresh `startWebGPUInit` invalidates it up front (so a cache hit or a synchronous failure
+never leaves it open).
+
+This is the SECOND defect of the same window, and it is the DISPLAY half of the pair above: the state
+was already right, but the picture was not. **The user-reported symptom (2026-09-07): "when I make a
+change in the graph, the CA grid blinks an older board state while compiling before going back to the
+state it was."**
+
+- **The mechanism, end to end.** `SimulatorView` posts `setUseWebGPU { enabled: true }` immediately
+  BEHIND every `recompile` (it re-asserts the model's engine flags, which the recompile message does not
+  carry). By the time the worker processes it, a teardown recompile has already run `startWebGPUInit`
+  and set `webgpuRuntime = null` for an async rebuild — so the handler's echo, built from
+  `webgpuRuntime?.stepReady ?? false`, said **`ready:false, directRender:false`** about a runtime that
+  was very much alive. The main thread reads `ready === false` as *WebGPU died*: it clears
+  `directRenderActiveRef`, drops `pendingDirectRenderCanvas`, nulls the transferred `srcCanvasRef` and
+  removes the voxel canvases from the DOM. `draw()` then rebuilds `srcCanvas` from `colorsRef` — **the
+  CPU colours mirror that direct render deliberately never refreshes** (`sendColors` ships no `colors`
+  while `gridDisplayOwnedByGpu()`), i.e. the board as of the last time colours were shipped, usually
+  model load.
+- **Measured, Game of Life on WebGPU, paused so the race is deterministic:** the flash frame hashed
+  `3264298910/19` at generation 292 AND, in a separate run, at generation 161 — the same bytes at two
+  unrelated generations, because it is the load-time mirror, not a recent frame. An earlier paused run
+  showed the generation-423 board restored at generation **3716**. Playing, the flash is a RACE the
+  worker's own CPU-window `stepped` usually wins (measured 13 ms), which is why it reads as a *blink*
+  rather than a stuck frame, and why it is worst when paused, at a low FPS cap or on a big grid.
+- **After the fix the last presented frame simply HOLDS.** The salvaged OffscreenCanvas is not
+  invalidated by the device swap — the rebuilt runtime presents into it (`dispatchColorPassAndPresent`)
+  before the fresh-canvas Phase 1/2 handshake swaps it out — so across a ~170 ms rebuild the blit
+  source keeps its exact pre-edit hash and then continues under the NEW rule. Verified paused and
+  playing in 2D, on the 3D voxel path (the DOM canvas is no longer torn out: content bit-identical
+  across the swap), on the Simulator tab (Modeler edit → return), and under both apply policies.
+- **The guard is narrowly `useWebGPU && webgpuGridRebuildInFlight()`.** An agents-only model
+  (`gridCellsEnabled` false ⇒ `enableWebGPU` false) and every JS/WASM model post the echo byte-for-byte
+  as before, and a genuine failure still reports `ready:false` from the `.catch` / `postFallback` paths.
+- **The adjacent transient this did NOT cover** (pre-existing, A/B-confirmed on both sides of the fix):
+  under the **E2 grid+agents composite** (Chemotaxis) a recompile rebuilds the AGENT runtime, and while
+  `agentCompositeActive` is false `draw()` blits one or two grid-only CPU frames and the freshly
+  attached composite canvas is BLACK for a frame or three before its first present. Different owner
+  (`agentRenderStatus`, not `useWebGPUStatus`), different symptom (blank/agentless, not stale) — see
+  [`agent-render.md`](agent-render.md).
 
 ---
 
