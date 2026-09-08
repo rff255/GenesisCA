@@ -711,5 +711,18 @@ A **2D grid+agents model with a WebGPU GRID + a WebGPU AGENT target** presents B
 
 **Verified live** (real worker + GPU, occluded pane → protocol/structural evidence): Particle Life (A2) — a viewport resize triggers `attachAgentCanvas` → `ack:true`, and an arc-spy shows ~7 arcs total across the gap (cursor ring) instead of the ~1800/frame a stale CPU-overlay fallback would draw; Accretor (L1 voxel, 300³ WebGPU) — resize → `attachVoxelCanvas` → `ack:true`, the voxel layer ends at exactly 1 canvas (commit removed the old), and `stepped` still ships NO colours (stayed in free mode — no spurious readback). Zero console/GPU errors. tsc + `verify-agent-render` + `verify-render-uniform-layouts` green.
 
+**⚠ RULE 1 COVERS THE RESIZE RE-ATTACH, NOT THE RUNTIME-REBUILD RE-ATTACH — and the E2 composite still
+blinks there** (measured 2026-09-07, A/B-confirmed pre-existing on both sides of the recompile-flash
+fix). A soft `recompile` rebuilds the agent WebGPU runtime, `agentRuntimeReady` resets
+`agentRenderActive`/`agentCompositeActive` (correctly — the render pipeline is genuinely gone), and for
+the ~60 ms until `agentRenderStatus{active:true}` commits, `draw()` takes the CPU branch. On
+**Chemotaxis** that is one or two **grid-only** frames from `colorsRef` (no agents) followed by the
+freshly attached composite canvas while it is still **black** — measured 1 black frame after the flash
+fix, 3 before it. It is a BLANK/agentless transient, not a stale-board one (its owner is
+`agentRenderStatus`, not `useWebGPUStatus` — see the grid-side rule in
+[`simulator-ui.md`](simulator-ui.md) § compile-target chip and
+[`simulation-engine.md`](simulation-engine.md)). The fix shape is Rule 1's: keep blitting the OLD,
+still-worker-presented composite until the ack commits the fresh one, exactly as the resize path does.
+
 ---
 
