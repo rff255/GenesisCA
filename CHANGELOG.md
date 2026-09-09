@@ -7,6 +7,137 @@ https://github.com/rff255/GenesisCA/releases
 The version at the top of `package.json` is the single source of truth; each
 entry below is cut when that version is tagged (see `.github/workflows/release.yml`).
 
+## [1.33.0] - 2026-09-09
+
+Headlined by **Live mode** — a third top-level mode that mounts the graph editor
+and the full simulator viewport side by side, so a model is edited while it
+plays — plus a rebuilt **Properties panel** (four sub-tabs; impossible controls
+hidden, inert ones greyed with the reason), a batch of graph-editing gestures
+(wire splice, Dissolve Node, Morph Into, macro-boundary drags), two global
+periodic event roots, and two engine fixes for WebGPU-grid recompiles that
+rewound or flashed the board. Additive throughout — all 31 shipped models stay
+byte-identical on every compile surface.
+
+### Live mode — edit while it plays
+- A **Live** tab beside Modeler and Simulator: graph editor and simulator
+  viewport in one split workspace with a draggable splitter (dock right /
+  bottom, swap sides, collapse with a restore ear, double-click snaps to 50%),
+  the layout persisted per browser. A mode switch never restarts the run — the
+  simulator keeps its worker, WASM/WebGPU and grid state across every tab round
+  trip.
+- **Last-good-rule semantics**: an edit that fails to compile keeps the
+  previous rule running; the offending node keeps its amber badge and a
+  four-state transport chip (Synced / Stale / Pending / Rebuild needed) says
+  where the running rule stands. A structural edit mid-run becomes one
+  "Rebuild needed — Apply / Later" prompt, so N edits cost a single reset.
+- **Apply policy** Auto vs On-demand, with Ctrl+Enter to apply on demand.
+- **Focus follows the pointer**: the keyboard goes to the pane under the cursor
+  (a 1 px accent ring shows which, and it blurs the losing pane's DOM focus so it
+  never lies). Space is quick-add on the graph and step on the viewport,
+  Ctrl+C/V/X routes by owner, Ctrl+Z/Y/D stay graph-owned, Enter is global
+  play/pause that stands down while a dialog or menu is open, and Esc/Backspace
+  never reset the board in Live.
+- Live caps the viewport at 30 FPS while the graph is open; Overseer and Live
+  are mutually exclusive. Help gains a Live section and a Live shortcuts table.
+- Post-ship rounds: the viewport bar's duplicate Settings/Controls toggles are
+  gone (the panel ears are the single affordance and now ride the panel edge),
+  and the Auto/On-demand control shrinks to one button with a popover.
+- Two pre-existing keyboard defects fixed on the way: the simulator's
+  document-level Space/Enter/Esc handler had no visibility gate (Esc on the
+  Modeler tab reset the hidden running sim, Enter stepped it), and Ctrl+C/V/X
+  was bound twice.
+- The Document Picture-in-Picture pop-out was spiked: rendering proven on every
+  display surface, deferred because a PiP window propagates no input to its
+  opener.
+
+### Engine — WebGPU-grid recompiles
+- A recompile that tears the WebGPU grid runtime down no longer **rewinds the
+  board** to the last CPU sync — the fresh GPU buffers were re-seeded from a
+  stale CPU mirror (a gen-20 board restored at gen 59). The worker now drains
+  the GPU state before the rebuild; a cache-hit recompile (node move, comment
+  edit) pays nothing. This reproduced on the Simulator tab too — Live merely
+  made it constant.
+- A WebGPU-grid rebuild no longer **flashes the load-time board**: the worker's
+  readiness echo answered "not ready" mid-rebuild, the main thread read that as
+  WebGPU dying and repainted from the never-refreshed CPU colour mirror. The
+  display now holds the last presented frame through the ~170 ms rebuild.
+
+### Modeler — Properties and panels
+- **Properties** is restructured into four sub-tabs — Setup / Execution /
+  Agents / Diagnostics — with Indicators + End Conditions on their own left-bar
+  tab. Layers/Extensions are toggle cards naming what they unlock, every binary
+  choice is a segmented control, Debug JS and tuning knobs sit under Advanced
+  reveals, every explanation is a tooltip; impossible controls are hidden and
+  one-setting-away controls greyed with the reason (≈3200 px → ≈1000 px per tab
+  on Game of Life).
+- The Grid section becomes an ungated **Space** section — dimensions and
+  boundary are the agent world's too, so agents-only models can finally size
+  their world. Each agent capability row owns its tuning knobs, revealed only
+  while that capability is on; the false "Use bonding physics" master card is
+  replaced by an Adhesion checkbox beside Collision.
+- The Palette reports how many nodes the current setup hides and links to the
+  tab that changes it.
+- Model-element rows read as draggable **objects** — bordered rows with a
+  leading drag rail on genuinely draggable items.
+- Fixed: opening the Modeler on a freshly loaded model no longer marks it dirty
+  (React Flow's mount-time measurement triggered a no-op graph write-back).
+
+### Graph editing
+- **Hold a wire to splice** a node into it — the add-node menu opens
+  source-filtered and auto-wires the input and, when compatible, the output.
+- The node context menu gains **Dissolve Node** (splice a node out, rewiring
+  compatible source→consumer pairs) and a curated **Morph Into** submenu
+  (Math / Compare / Logic ↔ the formula nodes, in place, keeping id, config and
+  wires).
+- A collapsed Vector Op shows its op and collapsed formula nodes show their
+  formula; Expression is renamed **Math Expression**; formula nodes default to
+  two inputs.
+- **Macros**: Create Macro emits one exposed port per distinct source port (not
+  per external edge); a selection can be dragged **across a macro boundary** by
+  a header grip and the topology re-adjusts itself; macro ports merge per
+  connected component (and expandMacros no longer drops outer feeders); the
+  scope grip renders on collapsed nodes; the linked-copies badge counts every
+  graph store.
+- Vectors flow through Value Switch and into a vector Set Attribute — one
+  composite-type resolver for validation, suggestions and the lowering; vector
+  Local Variables are documented and their badges carry the dimensionality.
+
+### Events & agents
+- Two new **global periodic event roots**: **Grid Periodic Event** (cells —
+  substrate writes, indicators, stop events) and **Population Periodic Event**
+  (agents; it can spawn). The per-agent Periodic Step is renamed **Agent
+  Periodic Step**. All three compile targets.
+- An unwired Agent id on the by-id readers (Get Attribute / Position / Radius)
+  now means **self**, per the optional-id convention; Apply Force To Agent
+  badges an unwired id instead of silently doing nothing.
+- Torus-correct neighbour queries are pinned by a seam harness (71 checks) plus
+  a parity value-invariant.
+- Optional agent seeding — **Seed Pattern = None**.
+
+### Simulator
+- The **Output Mapping viewer** moves off the canvas into the transport bar: the
+  current view's name with a hover popup listing the Cells and Agents groups; it
+  stays a plain readout when there is only one mapping per layer.
+- Play and Pause merge into **one toggle button**, width-pinned so the bar never
+  shifts.
+- **Sprites**: per-asset **Colorize** (agent-colour tint on every render path),
+  a free-crop dialog for image / GIF / sequence imports, and a per-asset size
+  mode (radius-relative or absolute).
+- **Agent brush**: Edit / Add / Manual rows on one layout, an Add radius row,
+  Density as a packing-fraction slider, Spacing renamed Drag step, and the
+  cursor-mode icon below the footprint.
+- A faint minimap contour; a canvas click closes the detail panel.
+- Fixes: capture pauses the sim the moment Stop starts the encode and renders
+  agent sprites in simulation-scope captures; a cancelled Save As keeps no
+  metadata edits; Ctrl+S opens Save; a presets-drop warning; the standalone
+  export gains a presets opt-out.
+
+### Investigations (docs only)
+- Write-ups for HashLife / Golly versus the shipped active set, lattice movers
+  (mass-conserving movement on a parallel grid), social-network graph I/O and
+  neural / Neural-CA modes, and the see-through-canvas brainstorm that became
+  Live mode.
+
 ## [1.32.0] - 2026-08-29
 
 Headlined by **Explicit Controls** — a macro author promotes chosen internal
