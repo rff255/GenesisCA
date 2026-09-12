@@ -2,7 +2,7 @@
 
 > Area doc for **GenesisCA**. Drawing agents: the worker-side GPU direct render (A1/A2/A1.5/C/D/E2), the UI-sync policy, sprites on all three targets, 3D billboards, residency and the active window. Read before touching agentWebgpuRuntime.ts render paths or drawAgentsOverlay.
 >
-> **Also read** — a change here usually reaches [`agent-engine.md`](agent-engine.md) · [`simulator-ui.md`](simulator-ui.md) · [`grid-3d.md`](grid-3d.md) · [`agent-brush-ui.md`](agent-brush-ui.md) · [`engines-and-targets.md`](engines-and-targets.md).
+> **Also read** — a change here usually reaches [`agent-engine.md`](agent-engine.md) · [`simulator-ui.md`](simulator-ui.md) · [`grid-3d.md`](grid-3d.md) · [`agent-brush-ui.md`](agent-brush-ui.md) · [`engines-and-targets.md`](engines-and-targets.md) · [`rule-trace.md`](rule-trace.md).
 > Keep following those onward until a pass turns up nothing new; the reading is not done at the first
 > doc that answers your question. See *Read to CLOSURE, not to the first hit* in `../../CLAUDE.md`.
 >
@@ -24,6 +24,7 @@
 - Why a BONDED model can never be GPU-resident (the two agent GPU paths)
 - Direct agent render — GPU-side, free-when-idle (A1 + A2 + A1.5 + C + D; branch `optimize`)
 - Direct-render resize re-attach: keep the OLD canvas until the ack commits (the panel-resize frozen-frame fix, 2026-07-27)
+- RULE TRACE — a traced agent is a state-reading term (2026-09-12) → [`rule-trace.md`](rule-trace.md)
 
 ---
 
@@ -726,3 +727,35 @@ still-worker-presented composite until the ack commits the fresh one, exactly as
 
 ---
 
+
+---
+
+## RULE TRACE — a traced agent is a state-reading term (2026-09-12)
+
+**Rule Trace** re-evaluates one agent's behaviour against the CPU store every frame, which makes a traced
+agent a **state-reading feature exactly like an open inspector**. The feature is documented in
+[`rule-trace.md`](rule-trace.md); three things land in this area.
+
+**The UI-sync want-set.** The traced agent joins the want-terms `setAgentUiSync` resolves, so the
+snapshot keeps flowing for the mark and the Values tab after the popover is closed. ⚠ It arrives as a
+**separate `agentStateIds` list**, NOT as an addition to `agentInspectIds`: that list also drives the
+**white inspect rings** (2D and 3D), and the traced agent has its own magenta mark — merging the two
+would draw both on one agent and blur the very distinction the mark exists to make. The target joins the
+**data** terms only (the ~3 Hz `getAgentState` poll and the want-set), never the ring terms.
+
+**Residency.** `agentResidentEligible()` gains a runtime term: it is **false while the every-generation
+cadence is armed and anything is traced**, for either target kind. A resident batch is ONE submit
+covering many generations with a single readback per frame (FP-2), so it structurally cannot host a
+per-generation hook — for an *agent* target the CPU store is stale for all but the last generation of a
+slice, and for a *cell* target the resident branch runs the grid's generations in a block **after** the
+agent batch, so breaking between them would leave the two layers at different generations. ⚠ **Sampled
+tracing (the default) keeps residency**; only a breakpoint session drops to the per-generation path.
+Every trace under GPU residency goes through the existing `ensureAgentStoreFresh()` one-shot and **never
+clears `agentStoreStale` itself**.
+
+**The mark.** The 2D traced-agent mark is a **dashed** ring one step outside the inspect ring — dashed
+because the solid rings are already spoken for (cyan hover, white inspect, amber follow). In 3D it is
+`gl3d.setTraceAgent({ x, y, z, radius } | null)`, published **every frame including `null`**, on its own
+slot so the inspect ring / cube paths stay byte-untouched. ⚠ The 3D renderer cannot read CSS, so its
+magenta literals name the `--color-trace` token in their comments rather than reading it — a token change
+has to be mirrored there by hand.

@@ -2,7 +2,7 @@
 
 > Area doc for **GenesisCA**. The two-pass JS compiler and the analyses every target consumes: value sinking, accessor CSE, the async read-after-write hazard, the multi-attribute-slot and periodic-event lowerings, rule cadence, and parameterized input mappings. Read before touching `src/modeler/vpl/compiler/*.ts`.
 >
-> **Also read** — a change here usually reaches [`compiler-wasm.md`](compiler-wasm.md) · [`compiler-webgpu.md`](compiler-webgpu.md) · [`agent-compilers.md`](agent-compilers.md) · [`value-types.md`](value-types.md) · [`cell-features.md`](cell-features.md) · [`grid-3d.md`](grid-3d.md) · [`testing-harnesses.md`](testing-harnesses.md).
+> **Also read** — a change here usually reaches [`compiler-wasm.md`](compiler-wasm.md) · [`compiler-webgpu.md`](compiler-webgpu.md) · [`agent-compilers.md`](agent-compilers.md) · [`value-types.md`](value-types.md) · [`cell-features.md`](cell-features.md) · [`grid-3d.md`](grid-3d.md) · [`testing-harnesses.md`](testing-harnesses.md) · [`rule-trace.md`](rule-trace.md).
 > Keep following those onward until a pass turns up nothing new; the reading is not done at the first
 > doc that answers your question. See *Read to CLOSURE, not to the first hit* in `../../CLAUDE.md`.
 >
@@ -68,6 +68,7 @@
   - ⚠ RESIDENCY IS A CORRECTNESS TERM
   - The enumeration sweep (the documented agent-root list, plus the cell-root sites)
   - Verification
+- The TRACE BUILD — `compileGraph(…, { trace: true })` (2026-09-12) → [`rule-trace.md`](rule-trace.md)
 
 ---
 
@@ -662,3 +663,37 @@ A GPU-resident batch encodes N generations into ONE submit with **no CPU touch p
 
 ### Verification
 [scripts/test-global-periodic.mjs](scripts/test-global-periodic.mjs) — the editor surface + the rename, the cadence clamp, then the claims that matter: the compiled grid fn RUN with the worker's exact buffer discipline over views into a **REAL instantiated WASM module's memory**, after which the **WASM `step` reads the periodic's write** (the shared-bytes claim the whole architecture rests on); the compiled agent fn RUN through the shared `buildAgentAbiArgs('init', …)` against a REAL `createAgentStore` with a replica of the grow-only closures (exact positions, per-newborn attribute writes through the handle, bounded by `maxAgents` with no wrap, the leak sweep); the ABI-reuse claim compared against `buildAgentInitParams`; the residency blocker; and the hot-path no-op. **Negative-controlled by SOURCE MUTATION — 5 mutations, 5 caught**: emit the raw generation as `stepIndex`, emit constants instead of the LIVE grid dims, ignore the `periodicParams` clamp, compile the population root against the LOOP ABI, and drop the residency blocker.
+
+---
+
+## The TRACE BUILD — `compileGraph(…, { trace: true })` (2026-09-12)
+
+`compileGraph` / `compileAgentGraph` take an additive `opts: CompileOptions` whose only member today is
+`trace`. With it, the compiler emits the **trace build** that Rule Trace re-evaluates one element with:
+per-node `_tr.v(id, port, value)` records, per-flow-node `_tr.f(id)` / `_tr.o(id, port)` records, a
+**single-element body** (`const idx = _traceIdx`), accessor-CSE skipped and aggregate fusion disabled.
+Everything else — sinking, loop-invariance, volatile hoisting, the async hazard, every lowering pass —
+runs **unchanged**. The full contract is in [`rule-trace.md`](rule-trace.md); four things concern anyone
+editing this layer:
+
+- ⚠ **With `opts` absent, NOTHING changes.** Every trace line is behind the flag and the helpers return
+  `''`. The proof is `check-compile-identity` — 31 models, every surface unchanged — and **the six trace
+  surfaces are on that list too**, so an emit change to the trace build is caught the same way.
+- ⚠ **A record is APPENDED to the node's own code and never hoisted.** A record above a `const` in the
+  same block touches it in its temporal dead zone, where even `typeof` throws.
+- ⚠ **Every lowering pass returns an additive `origin` map** (`TraceOriginMap`), folded in pass order
+  into the `TraceOriginTable` that maps a lowered id back to the user node, port, composite component and
+  macro path. Eleven passes carry one today. **No id is ever renamed to make this work** — a rename moves
+  emitted bytes on every target and can flip accessor-CSE's *lexicographically smallest id* canonical
+  pick. ⚠ **A new lowering pass that forgets its `origin` map does not break the build**; it makes a node
+  stop lighting up, which nobody notices — so `scripts/test-rule-trace.mjs` § A fails on any lowered id
+  that resolves to nothing.
+- ⚠ **The bulk `w.set(r)` copy becomes a SINGLE-ELEMENT copy in trace mode, not nothing.** Dropping it
+  outright traced `updateAttribute`'s read-modify-write wrong (caught on Extended Wireworld): an
+  attribute the rule does not write must still be there to read.
+
+The trace **root keys** (`step`, `init`, `gridInit`, `gridPeriodic:<id>`, …) have exactly ONE definition,
+in `src/modeler/vpl/compiler/traceOrigin.ts`, **because the compiler is the side that writes them** into
+`CompileResult.trace.paramNames`; `src/simulator/engine/traceProtocol.ts` re-exports the lot. ⚠ A key
+built under one spelling and prefix-filtered under another fails **silently** — the periodic root simply
+never pairs with its code and that trace goes missing with no error anywhere.

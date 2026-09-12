@@ -2,7 +2,7 @@
 
 > Area doc for **GenesisCA**. Macro defs, boundary nodes, expansion, reference export/import, explicit controls, moving a selection across a boundary, linked vs independent copies.
 >
-> **Also read** — a change here usually reaches [`compiler-core.md`](compiler-core.md) · [`modeler-ui.md`](modeler-ui.md) · [`io-and-formats.md`](io-and-formats.md).
+> **Also read** — a change here usually reaches [`compiler-core.md`](compiler-core.md) · [`modeler-ui.md`](modeler-ui.md) · [`io-and-formats.md`](io-and-formats.md) · [`rule-trace.md`](rule-trace.md).
 > Keep following those onward until a pass turns up nothing new; the reading is not done at the first
 > doc that answers your question. See *Read to CLOSURE, not to the first hit* in `../../CLAUDE.md`.
 >
@@ -16,6 +16,7 @@
 **Contents**
 
 - Macro System (Implemented)
+- INSTANCE ids vs DEF ids — the two spaces Rule Trace has to keep apart (2026-09-12)
 
 ---
 
@@ -283,3 +284,38 @@ Every control whose target names a DEPARTING node is removed, for **both** nodeI
 
 ---
 
+
+---
+
+## INSTANCE ids vs DEF ids — the two spaces Rule Trace has to keep apart (2026-09-12)
+
+`expandMacros` prefixes an inner node as `m<instanceId>_<innerId>`, nested by recursion — so a compiled
+id's macro path names **macro INSTANCE node ids**. The graph editor's scope stack names **macro DEF
+ids**, because entering a macro edits the shared definition rather than one instance of it. Both are
+correct, and everything that maps a compiled thing onto the canvas has to convert between them.
+
+**Rule Trace** is the first feature that does this per frame, and the conversion rule is worth knowing
+here because anything else that maps compiled ids back to the editor will need the same one (the full
+account is in [`rule-trace.md`](rule-trace.md)):
+
+- the **visibility** test — *is this record inside the scope I am looking at?* — must run in **DEF**
+  space, or nothing inside any macro ever lights;
+- the **answer** — *which node id do I light?* — must stay in **INSTANCE** space, because a def id names
+  no node on the canvas.
+
+One prefix rule (`originInScope`) covers both: at the root scope a record inside a macro rolls up to the
+**instance node**; inside that instance the inner node answers for itself; one level deeper it rolls up
+to the **nested instance node**, never the whole remaining path. That is what makes *"a macro instance
+lights when anything inside it ran"* and *"entering the instance shows the inner path"* one rule rather
+than two, and it is why the same macro instanced twice keeps its two traces apart — the paths differ in
+their first element.
+
+⚠ **The consequence for breakpoints is deliberate and user-visible.** A breakpoint is keyed by the
+editor's **DEF** path, the only path a def-scoped editor can honestly express, so **a mark set inside a
+macro arms in every instance of that def** — and, symmetrically, inside a def the records of *every*
+instance light, because they are the same nodes. An instance-scoped mark would need the editor to gain an
+instance-scoped scope stack first.
+
+⚠ A macro instance's **output wire** carries the inner `macroOutput` bridge source's record, **one level
+deep** only. And the editor's scope stack carries a leading `'root'` sentinel that names no def — filter
+it before comparing paths.

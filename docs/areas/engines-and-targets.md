@@ -2,7 +2,15 @@
 
 > Area doc for **GenesisCA**. The Auto/WASM/WebGPU selector, resolveEngines, the compatibility readout, the generation-pipeline panel, fast-path diagnostics, the Exact|Statistical contract, geometry taint. Read when a model runs on an unexpected target or a gate rejects something.
 >
-> **Also read** — a change here usually reaches [`compiler-core.md`](compiler-core.md) · [`agent-compilers.md`](agent-compilers.md) · [`agent-render.md`](agent-render.md) · [`simulation-engine.md`](simulation-engine.md).
+> **Also read** — a change here usually reaches [`compiler-core.md`](compiler-core.md) · [`agent-compilers.md`](agent-compilers.md) · [`agent-render.md`](agent-render.md) · [`simulation-engine.md`](simulation-engine.md) · [`rule-trace.md`](rule-trace.md).
+>
+> ⚠ **Rule Trace is target-INDEPENDENT and has no verdict here.** The trace is a re-evaluation of one
+> element's rule by a trace build of the JS reference compile, run in the worker beside the engines
+> rather than inside them, so it reads identically on JS, WASM and WebGPU and neither resolves nor
+> rejects a target. The one engine-dependent consequence is a **cost**, not a verdict: under the WebGPU
+> grid target and under GPU-resident agents each trace goes through the existing readback one-shots, and
+> an armed breakpoint session (the every-generation cadence) drops GPU-resident agents to the
+> per-generation path. See [`rule-trace.md`](rule-trace.md).
 > Keep following those onward until a pass turns up nothing new; the reading is not done at the first
 > doc that answers your question. See *Read to CLOSURE, not to the first hit* in `../../CLAUDE.md`.
 >

@@ -1,12 +1,12 @@
 # Verification harnesses (`scripts/*.mjs`)
 
-> Area doc for **GenesisCA**. The project's regression net: 67 Node harnesses that run the SHIPPED
->
-> **Also read** — a change here usually reaches [`compiler-core.md`](compiler-core.md) · [`agent-compilers.md`](agent-compilers.md) · [`agent-engine.md`](agent-engine.md).
-> Keep following those onward until a pass turns up nothing new; the reading is not done at the first
-> doc that answers your question. See *Read to CLOSURE, not to the first hit* in `../../CLAUDE.md`.
+> Area doc for **GenesisCA**. The project's regression net: 68 Node harnesses that run the SHIPPED
 > modules (esbuild-bundled where needed) rather than re-implementations. Generated from the script
 > headers on 2026-09-06 — regenerate rather than hand-editing when scripts are added.
+>
+> **Also read** — a change here usually reaches [`compiler-core.md`](compiler-core.md) · [`agent-compilers.md`](agent-compilers.md) · [`agent-engine.md`](agent-engine.md) · [`rule-trace.md`](rule-trace.md).
+> Keep following those onward until a pass turns up nothing new; the reading is not done at the first
+> doc that answers your question. See *Read to CLOSURE, not to the first hit* in `../../CLAUDE.md`.
 >
 > **House style, and it is why these are trustworthy:** a harness asserts VALUES, not "it compiled";
 > every claim is NEGATIVE-CONTROLLED (usually by a deliberate source mutation that must make it fail);
@@ -96,6 +96,7 @@ Run one with `node scripts/<name>.mjs`. Several take flags (`--wasm`, `--mutate`
 | `test-positional-collision.mjs` | Behaviour test for the HARD positional collision (resolvePositionalCollisions): |
 | `test-rgba-colors.mjs` | RGBA colours — the regression standard for alpha through the colour-producer chain. |
 | `test-rule-cadence.mjs` | L2 — RULE CADENCE: `Get Generation` (universal) + `Periodic Step` (agents). |
+| `test-rule-trace.mjs` | RULE TRACE (§ A–K) — the trace build, the origin table, the sandbox, the editor maths and the Values rows, every claim negative-controlled. See [`rule-trace.md`](rule-trace.md). |
 | `test-sprite-crop.mjs` | Sprite CROP + COLORIZE verification — the pure rules the decoder, the dialog and |
 | `test-sprite-sheet.mjs` | Sprite-sheet GRIDDING verification — the pure geometry + frame-selection rules |
 | `test-torus-neighbours.mjs` | TORUS SEAM regression test for the agent NEIGHBOUR QUERY (Get Nearby Agents / |
@@ -119,9 +120,12 @@ Run one with `node scripts/<name>.mjs`. Several take flags (`--wasm`, `--mutate`
 ## The two that gate almost everything
 
 - **`check-compile-identity.mjs`** — hashes every shipped model's emitted output on every surface
-  (JS step / grid-init / WASM bytes / WGSL / agent behaviour / agent division / agent init / overseer).
-  `--capture` a baseline, `--compare` after. **A new emitted surface MUST be added to its list** — a
-  surface it does not hash is a surface with no regression net at all.
+  (JS step / grid-init / WASM bytes / WGSL / agent behaviour / agent division / agent init / overseer,
+  **plus the six Rule Trace surfaces**). `--capture` a baseline, `--compare` after. **A new emitted
+  surface MUST be added to its list** — a surface it does not hash is a surface with no regression net at
+  all. ⚠ The trace surfaces are what makes the trace build a *regressible* emit rather than a second
+  compiler nobody watches; they carry their own baseline, so a change to the normal emit and a change to
+  the trace emit are reported separately.
 - **`parity-agent-wasm.mjs`** — JS↔WASM bit-parity over every agent sample plus permanent synthetics.
   Parity is a MIRROR test: it passes when both targets are equally wrong, so entries carry a VALUE
   `invariant(store)` that recomputes the expected answer independently.

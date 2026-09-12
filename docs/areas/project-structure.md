@@ -86,7 +86,8 @@ genesis-ca/
 │   │       │   └── colorScalePresets.ts # Named palettes (Viridis/Magma/Rainbow/…) for Color Scale + Linked mappings
 │   │       ├── widgets/              # Shared inline editors (InlineWidgets.tsx, GradientStopsEditor.tsx, CategoricalPaletteEditor.tsx, ExpressionFormula.tsx)
 │   │       └── compiler/
-│   │           ├── compile.ts        # Two-pass compiler (hoisted values + flow)
+│   │           ├── compile.ts        # Two-pass compiler (hoisted values + flow). Also THE TRACE BUILD (`opts.trace`) — per-node value records, per-flow-node execution records, a single-element body, CSE + fusion off; absent ⇒ byte-identical to the pre-trace compiler
+│   │           ├── traceOrigin.ts    # Rule Trace: the ORIGIN table (lowered id → user node / port / composite component / macro path) folded from the ADDITIVE `origin` map each lowering pass returns (no id is ever renamed) + `resolveTraceOrigin` + THE ONE definition of the trace ROOT KEYS (re-exported by traceProtocol.ts) + `CompileOptions`
 │   │           ├── macroExpand.ts    # Shared expandMacros — flattens macro instances (all 3 targets)
 │   │           ├── danglingRefs.ts   # Pre-compile gate: a NON-EMPTY config id naming a model element the model lacks (a cross-model paste / macro import) returns a NAMED compile error instead of emitting `_undef` (cell + agent graphs)
 │   │           ├── volatileHoist.ts  # Shared analyzer: LCA emit-scope for getVariable-derived values
@@ -117,6 +118,7 @@ genesis-ca/
 │   ├── simulator/
 │   │   ├── SimulatorView.tsx         # Canvas rendering, zoom/pan, brush tool
 │   │   ├── simLayoutState.ts         # The `simLayoutApi` seam ({scheduleLayoutDraw, drawNow}) SimulatorView registers on mount — how the Live splitter, which lives outside its React tree, re-sizes the canvases without hitting the ResizeObserver-only path
+│   │   ├── simTransportState.ts      # The `simTransportApi` seam (stepGeneration / play / pause / stopTrace — the transport bar's OWN handlers, never copies) + the published `playing` mirror the Trace panel's one Resume/Pause button reads. Born with Rule Trace: `App` binds `]` / `[` and cannot reach a closure inside SimulatorView
 │   │   ├── ExperimentsPanel.tsx      # Overseer: the "Overseer Experiments" right-panel TAB (Run/Abort, Journal, Series table, CSV/JSON export) — one of the shared right panel's tabs (Controls | Overseer Experiments)
 │   │   ├── spriteRegistry.ts         # Agent sprites: main-thread ImageDecoder→ImageBitmap[] cache (decode side)
 │   │   ├── csvImport.ts              # CSV import core (pure): RFC-4180 parser, delimiter/header detection, per-attr-type decode, agent column auto-map, grid value block
@@ -137,7 +139,18 @@ genesis-ca/
 │   │       ├── graphMetrics.ts       # GRA P6: graph-global metrics over the agent population (N/E/degree stats/histogram/components) — shared by the worker AND verify-graph-rewrite.mjs
 │   │       ├── overseerRuntime.ts    # Overseer: main-thread experiment runtime (drives the worker via reqId-correlated messages; Journal + Series stores)
 │   │       ├── sceneWireframe.ts     # The ONE 3D bounds/floor-grid/origin-axes line geometry + SCENE_MSAA_SAMPLES (the shared draw state) — used by the worker's voxel AND agent-sphere free-mode line passes and by gl3d
-│   │       └── sim.worker.ts         # Web Worker — owns grid (3D: total=W*H*D), runs steps
+│   │       ├── traceProtocol.ts      # Rule Trace: the WORKER PROTOCOL — `TraceTarget`, `TraceCodes`, `traceCodesFromCompile` (the one index pairing of a periodic root's code to its `gridPeriodic:<id>` key), the `setTrace` / `requestTrace` / `clearTrace` messages and the `trace` / `traceBreak` / `traceTargetLost` / `traceCompileErrors` replies. DOM-free; compiler imports are `import type` only
+│   │       ├── traceRunner.ts        # Rule Trace: the write-recording SANDBOX — every argument wrapped BY KIND (typed array → shadow proxy, identity-aliased; object → shallow copy; function → recording stub; `_rngState` → a private per-(element, generation) stream), methods DENY-by-default (`TraceSandboxEscape`), the event log + the read-back `writes`. DOM-free (the worker AND scripts/test-rule-trace.mjs import it)
+│   │       └── sim.worker.ts         # Web Worker — owns grid (3D: total=W*H*D), runs steps. Also the RULE TRACE root registry, the three cadences, the breakpoint break path and `traceNbrRow`
+│   ├── trace/                        # RULE TRACE — trace one cell's / one agent's rule through the graph, live (Live mode only)
+│   │   ├── traceState.ts             # The trace STORE (main thread): the timeline ring of 40 + the session snapshot, on TWO notification channels (per-trace vs per-session, so the chip never re-renders per frame) + the memoised selectors every surface derives from. Pure state — it posts no worker message and compiles nothing
+│   │   ├── traceOrigin.ts            # `originInScope` — THE ONE prefix rule mapping a resolved origin onto the editor's open macro scope (at root a record inside a macro lights the INSTANCE node; inside it, the inner node). DOM-free
+│   │   ├── traceGraphMap.ts          # The EDITOR-side graph maths, DOM-free: edge/reroute origins (a value lights every segment and every dot with no per-trace path walk), value cones, the macro DEF index, the macro output map, the root id
+│   │   ├── traceValues.ts            # The DOM-free half of the Trace panel: raw `writes` → the rows the Values tab shows (attributes, orientation, colour, glyph, neighbour writes, indicators, forces, requests, bond lanes, field deposits) + `formatNumber` / `formatNI` shared with the tooltip. NOTHING the trace wrote may be invisible — the `claimed` set is the enforcement
+│   │   ├── TracePanel.tsx            # The bottom drawer of the graph pane: transport, timeline strip, Values / Steps / Breakpoints. `role="region"` (never dialog/menu), no button keeps focus on a mouse press, prefs under `genesisca_trace_panel`
+│   │   ├── TracePanel.module.css
+│   │   ├── TraceTooltip.tsx          # The hover surface: what this node / this wire carried, decoded by port type. Portalled to document.body, `position: fixed`, `pointer-events: none`, NO role
+│   │   └── TraceTooltip.module.css
 │   ├── dev/
 │   │   └── compileHarness.ts        # DEV-only cross-target compile harness (byte-identity checks)
 │   ├── help/
@@ -186,6 +199,7 @@ genesis-ca/
 │   ├── test-sprite-sheet.mjs         # Sprite-sheet gridding: geometry, back-compat vs an independent legacy transcription, the selection, the decode signature
 │   ├── test-sprite-crop.mjs          # Sprite CROP + COLORIZE: the rect rules by value, the per-frame sequence clamp, the fold, the decode signature (crop yes / colorize no), the multiply + 5-bit quantisation bound, the decoder ordering pins
 │   ├── verify-handle-remeasure.mjs   # VPL editor: the port-signature remeasure is keyed on HANDLE ids (kind_category_portId), so a value ⇄ flow category flip re-measures (--self-test = negative control)
+│   ├── test-rule-trace.mjs           # RULE TRACE, § A-K: origin coverage over every library model · a traced cell's writes == the real step · the recorded branch == the one the data selects · the sandbox is a reader (buffers hash-identical) · a traced agent's force == the real behaviour's · the runner (cap, escape, private RNG, shadow reads) · scope mapping · the editor graph maths · the Values rows · the P7b findings — every claim negative-controlled
 │   └── verify-3d-depth-precision.mjs # 3D depth contract: agent radius spans >= 8 depth buckets at every zoom + the WebGPU near-clip margin (--old = negative control)
 ├── src-tauri/                        # Tauri v2 native-shell scaffold (Cargo.toml, tauri.conf.json, src/, icons/) — build needs Rust
 ├── docs/

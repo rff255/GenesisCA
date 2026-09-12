@@ -164,6 +164,7 @@ const sections = [
   { id: 'overseer', label: 'The Overseer (Experiments)' },
   { id: 'simulator', label: 'The Simulator' },
   { id: 'live', label: 'Live Mode (edit while it runs)' },
+  { id: 'trace', label: 'Trace a cell or an agent (Rule Trace)' },
   { id: 'shortcuts', label: 'Keyboard Shortcuts' },
   { id: 'fileformat', label: 'File Format' },
 ];
@@ -5196,6 +5197,149 @@ export function HelpView() {
         </section>
 
         {/* ============================================================ */}
+        <section id="help-trace" className={styles.section}>
+          <h2 className={styles.h2}>Trace a cell or an agent (Rule Trace)</h2>
+          <p className={styles.p}>
+            A generation of a 5000&times;5000 model runs twenty-five million times in
+            under a second, which is wonderful for the simulation and useless for
+            understanding it. <strong>Rule Trace</strong> picks the problem apart the other
+            way round: choose <em>one</em> cell or <em>one</em> agent, and watch{' '}
+            <strong>its</strong> rule execute through the graph &mdash; the path it took
+            lights up, hovering any node or wire shows the value it carried, and a panel
+            lists what the cell or agent is about to become.
+          </p>
+          <p className={styles.p}>
+            It works on <strong>every engine</strong>. The trace is a re-evaluation of the
+            rule for that one element, so it reads the same whether the model is running on
+            WebAssembly, WebGPU or the debug JavaScript engine, in 2D or 3D, on cells or on
+            agents. Nothing about your model has to change to be traceable.
+          </p>
+
+          <h3 className={styles.h3}>Starting a trace</h3>
+          <p className={styles.p}>
+            Rule Trace lives in <strong>Live</strong> mode, because it needs the graph and
+            the running simulation on screen together. Open an inspector the usual way &mdash;{' '}
+            <kbd className={styles.kbd}>Shift</kbd>+click a cell, or click an agent with
+            Inspect on &mdash; and press the <strong>Trace</strong> chip in its header
+            (beside Close, and beside Follow on an agent). Outside Live the chip is not
+            shown; there would be no graph for it to light.
+          </p>
+          <p className={styles.p}>
+            The traced element is marked <strong>on the board</strong> &mdash; a magenta
+            outline around the cell, a dashed magenta ring around the agent &mdash; and a
+            chip appears on the viewport bar reading{' '}
+            <strong>&#9673; Tracing cell (12, 34)</strong> or{' '}
+            <strong>&#9673; Tracing agent #57</strong>. That chip is how you stop tracing
+            once the inspector is closed: press its <strong>&#10005;</strong>. You can trace
+            one cell and one agent at the same time in a model that has both; pressing Trace
+            on another element of the same kind moves the target there.
+          </p>
+
+          <h3 className={styles.h3}>What lights up</h3>
+          <p className={styles.p}>
+            Every node your element actually executed <strong>glows</strong>, the flow wires
+            it took <strong>pulse</strong>, and the value wires it consumed light up.
+            Nodes it never reached are left exactly as they normally look &mdash; the trace{' '}
+            <em>adds</em> light, it never greys the rest of the graph, so the model stays as
+            readable as it was. Inside a macro, the instance lights at the top level and the
+            inner path lights when you open it.
+          </p>
+          <p className={styles.p}>
+            <strong>Hover anything</strong> to see its values: a node shows every port it
+            produced, a wire shows the value it carried. Values are shown the way you wrote
+            them &mdash; a binary attribute as true/false, a tag as its option name, a
+            neighbour as an offset like <strong>(-1, 0)</strong>, a vector as{' '}
+            <strong>(x, y, z)</strong>, a colour as its channels. A flow node also says how
+            many times it ran and which branch it took.
+          </p>
+
+          <h3 className={styles.h3}>The Trace panel</h3>
+          <p className={styles.p}>
+            A drawer opens along the bottom of the graph pane while something is being
+            traced. Drag its top edge to resize it, or collapse it to a strip; it remembers
+            both. It has three parts:
+          </p>
+          <ul className={styles.list}>
+            <li><strong>The transport</strong> &mdash; Resume / Pause and{' '}
+              <strong>Step generation</strong> (the same controls as the simulator&rsquo;s own,
+              so you never have to reach across to the other pane), plus{' '}
+              <strong>Step node</strong>, <strong>Back</strong> and{' '}
+              <strong>Whole trace</strong>, which move a <em>cursor</em> through the recorded
+              run. With a cursor set, only what has run <em>up to that point</em> is lit &mdash;
+              that is how you watch a rule unfold one node at a time.</li>
+            <li><strong>The timeline</strong> &mdash; one chip per recent trace:{' '}
+              <em>gen 412 &middot; Step</em>, <em>gen 412 &middot; Output Mapping</em>,{' '}
+              <em>gen 410 &middot; Brush</em>, <em>gen 33 &middot; Division</em>,{' '}
+              <em>Reset &middot; Init</em>. It follows the newest automatically; click an
+              older one to pin it and study it while the simulation keeps running.</li>
+            <li><strong>Three tabs</strong> &mdash; <strong>Values</strong> lists every
+              attribute as <em>current &rarr; next</em> with the changed rows accented,
+              followed by everything else the rule did (its colour, its orientation, writes
+              aimed at neighbours, indicator contributions, forces, division and bond
+              requests, field deposits). <strong>Steps</strong> lists the executed nodes in
+              order &mdash; click one to put the cursor there. <strong>Breakpoints</strong>{' '}
+              lists your marks, to disable, remove or clear.</li>
+          </ul>
+
+          <h3 className={styles.h3}>Breakpoints</h3>
+          <p className={styles.p}>
+            <strong>Right-click any node &rarr; Breakpoint.</strong> A red dot appears on it,
+            and when your traced element reaches that node the simulation{' '}
+            <strong>pauses before that generation is applied</strong> &mdash; so the board in
+            front of you is the state the rule was reading, not the result. The trace lands
+            with the cursor on the node, and the viewport chip says{' '}
+            <strong>&#9208; paused at &hellip;</strong>. Press Play (or{' '}
+            <kbd className={styles.kbd}>Enter</kbd>) to carry on; a breakpoint fires{' '}
+            <strong>once per generation</strong>, so a rule inside a loop stops once, not
+            once per iteration.
+          </p>
+          <p className={styles.p}>
+            Right-click the node again to remove the mark. A breakpoint set{' '}
+            <em>inside a macro</em> belongs to the macro&rsquo;s definition, so it applies to
+            every instance of that macro. Breakpoints last for the session &mdash; they are
+            not saved into the model file, and loading another model clears them.
+          </p>
+
+          <h3 className={styles.h3}>Two keys</h3>
+          <p className={styles.p}>
+            <kbd className={styles.kbd}>]</kbd> steps the cursor forward one node and{' '}
+            <kbd className={styles.kbd}>[</kbd> steps it back, from either pane. Press{' '}
+            <kbd className={styles.kbd}>]</kbd> past the last node and it advances{' '}
+            <strong>one generation</strong> and starts again at the top of the new trace
+            &mdash; so you can hold down one key and walk a rule forward through time.
+          </p>
+
+          <h3 className={styles.h3}>When the trace says &ldquo;approximate&rdquo;</h3>
+          <p className={styles.p}>
+            For an ordinary synchronous model the trace&rsquo;s &ldquo;next&rdquo; values{' '}
+            <em>are</em> what the engine is about to write, and you can check that for
+            yourself: the next trace&rsquo;s <em>current</em> column is the previous
+            trace&rsquo;s <em>next</em>. Some models cannot be predicted exactly, and in those
+            the panel shows an <strong>approximate</strong> badge that says which reason
+            applies:
+          </p>
+          <ul className={styles.list}>
+            <li><strong>Random draws are the trace&rsquo;s own.</strong> The trace has its own
+              random stream (stable, so re-tracing the same element at the same generation
+              gives the same answer), but the number it draws is not the one the engine
+              drew &mdash; the real draw depends on every other element that drew before it.</li>
+            <li><strong>Asynchronous updates are order-dependent.</strong> With asynchronous
+              cells or agents, neighbours may already have changed by the time your element&rsquo;s
+              real turn comes; the trace reads the state at the start of the generation.</li>
+            <li><strong>WebGPU computes in 32-bit.</strong> The trace computes in 64-bit, so
+              the last decimal places can differ.</li>
+            <li><strong>Shared totals.</strong> An indicator, or a field the agents deposit
+              into, is written by every element in the generation &mdash; the trace shows your
+              element&rsquo;s contribution, not the finished total.</li>
+          </ul>
+          <p className={styles.p}>
+            None of these stops the trace being the right tool for &ldquo;why did{' '}
+            <em>this</em> cell do <em>that</em>&rdquo;: the path, the branches and the
+            comparisons are exact in every case.
+          </p>
+        </section>
+
+        {/* ============================================================ */}
         <section id="help-shortcuts" className={styles.section}>
           <h2 className={styles.h2}>Keyboard Shortcuts</h2>
           <p className={styles.p}>
@@ -5283,6 +5427,8 @@ export function HelpView() {
               <tr><td><kbd className={styles.kbd}>Ctrl</kbd>+<kbd className={styles.kbd}>Z</kbd> / <kbd className={styles.kbd}>Y</kbd> / <kbd className={styles.kbd}>D</kbd></td><td>Undo / redo / duplicate &mdash; always the <strong>graph</strong>, from either pane (a run is not undoable, so there is nothing to arbitrate)</td></tr>
               <tr><td><kbd className={styles.kbd}>F</kbd></td><td>Collapses <strong>both</strong> panel sets at once (press again to restore both)</td></tr>
               <tr><td><kbd className={styles.kbd}>1</kbd>&hellip;<kbd className={styles.kbd}>9</kbd> (or numpad)</td><td>3D view angles &mdash; only with the <strong>simulation</strong> pane focused, so the digits stay free over the graph</td></tr>
+              <tr><td><kbd className={styles.kbd}>]</kbd></td><td><strong>Rule Trace</strong>: step the cursor forward one node. Past the last node it advances one generation and restarts at the top of the new trace (only while a cell or agent is being traced)</td></tr>
+              <tr><td><kbd className={styles.kbd}>[</kbd></td><td><strong>Rule Trace</strong>: step the cursor back one node</td></tr>
               <tr><td>Double-click the splitter</td><td>Snap the split back to 50/50</td></tr>
             </tbody>
           </table>

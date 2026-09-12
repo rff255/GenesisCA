@@ -2,7 +2,7 @@
 
 > Area doc for **GenesisCA**. React Flow graph editor, CaNode, panels, reroutes, the cross-tab clipboard, and the large "Key Patterns" catalogue of editor gotchas. Read before touching src/modeler/**.
 >
-> **Also read** — a change here usually reaches [`compiler-core.md`](compiler-core.md) · [`macros.md`](macros.md) · [`agent-nodes.md`](agent-nodes.md) · [`project-structure.md`](project-structure.md) · and, since **Live** mode puts this editor beside the running simulation in one workspace, [`simulator-ui.md`](simulator-ui.md).
+> **Also read** — a change here usually reaches [`compiler-core.md`](compiler-core.md) · [`macros.md`](macros.md) · [`agent-nodes.md`](agent-nodes.md) · [`project-structure.md`](project-structure.md) · [`rule-trace.md`](rule-trace.md) · and, since **Live** mode puts this editor beside the running simulation in one workspace, [`simulator-ui.md`](simulator-ui.md).
 > Keep following those onward until a pass turns up nothing new; the reading is not done at the first
 > doc that answers your question. See *Read to CLOSURE, not to the first hit* in `../../CLAUDE.md`.
 >
@@ -24,6 +24,7 @@
 - Cross-tab graph clipboard (copy/paste BETWEEN models — branch `updates`)
 - LIVE mode — the graph pane beside the running simulation (Phase 2, 2026-09-07)
 - LIVE mode — the graph pane’s INPUT OWNERSHIP (Phase 4, 2026-09-07)
+- RULE TRACE — what the editor owns (2026-09-12) → [`rule-trace.md`](rule-trace.md)
 
 ---
 
@@ -537,3 +538,56 @@ focus ring, the two pre-existing fixes and the perf guards — is in
   `pasteAgents`; `Ctrl+Z` undoes from either focus; `F` collapsed the graph area 444 → 764 px together
   with the simulator's bars and restored both exactly; the focus ring follows a real hover across the
   splitter. 0 console errors.
+
+---
+
+## RULE TRACE — what the editor owns (2026-09-12)
+
+**Rule Trace** lights the path one traced cell / agent took through the graph. The feature is documented
+in full in [`rule-trace.md`](rule-trace.md); four things belong to this area's Key Patterns catalogue.
+
+### ⚠ `data-trace` is an ATTRIBUTE, not a class — and this is the general rule, not a trace quirk
+
+The highlighter is ONE `subscribeTrace` subscriber that diffs three sets per trace and writes
+`data-trace` straight onto `.react-flow__node[data-id]` / `.react-flow__edge[data-id]`. **React Flow owns
+the `className` of those elements** — it rebuilds it from `cc([…, { selected, draggable, … }])` on every
+render — so a class added imperatively is silently wiped the next time any of those flags flips.
+Selecting a lit node would drop its glow until the next trace, and **while the simulation is PAUSED it
+would never come back**. React writes no unknown attribute, so `data-trace` survives every re-render.
+
+Tokens: `hit` · `hit current` · `dark` (written, deliberately unstyled — *the trace adds light, it never
+greys the graph*) on nodes; `flow` · `value` on edges. The lit-wire CSS needs `!important` because
+`toRFEdges` puts the wire colour in an **inline style** on the path.
+
+⚠ **The mount race.** Entering a macro is two passive effects in one flush: the highlighter (declared
+earlier, so it runs first and already sees the new `currentScope`) and the scope effect that calls
+`setNodes`. The marks are therefore computed correctly and written to elements that do not exist yet — a
+**bounded rAF re-apply (budget 3)** closes it, and covers a React Flow remount for free.
+
+### The breakpoint glyph and the menu item
+
+`CaNode` draws a red dot with a white ring, in both the collapsed and the expanded header, driven by
+`useSyncExternalStore` on the trace store's **SESSION** channel with a **primitive `0 | 1 | 2` snapshot**
+— the snapshot runs once per mounted node on every session notification, so it must compare equal for the
+~300 nodes whose own mark did not move. ⚠ **A trace never re-renders a node**; only setting, clearing or
+disabling a mark does.
+
+The node context menu's `Breakpoint` / `✓ Breakpoint` item is rendered **only in Live**, never on the
+Overseer graph, and never on comments / groups / reroutes / macro boundary nodes (doctrine **hide** — the
+trace cannot run there, and those nodes emit no code to stop at). ⚠ Breakpoints are keyed by the editor's
+**macro DEF** path, which is the only path a def-scoped editor can express — so a mark set inside a def
+arms in **every instance** of it.
+
+### The Trace panel drawer, and the tooltip
+
+`ModelerView` mounts `<TracePanel />` as a real flex sibling under `.graphArea`, below the editor slot, so
+the canvas shrinks and React Flow re-fits. Two conditions: `live` at the mount site, and the panel itself
+returns `null` while nothing is traced. ⚠ It carries `role="region"` — **never** `dialog` or `menu`,
+which `overlayOwnsKeyboard()` probes for and which would stand the global `Enter` / `Space` / `]` / `[`
+down for the whole debugging session.
+
+The hover tooltip follows the two standing rules here verbatim: **portalled to `document.body`** (a
+`position: fixed` element rendered inside React Flow's transformed viewport is positioned against the
+TRANSFORM) and **carrying no `role`** (a surface that opens on HOVER must never own the keyboard). It is
+also `pointer-events: none`, and it stands down for every node drag — the stand-down sits **before**
+`onNodeDragStart`'s group-only early return.

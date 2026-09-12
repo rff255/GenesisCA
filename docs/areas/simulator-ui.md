@@ -2,7 +2,7 @@
 
 > Area doc for **GenesisCA**. SimulatorView: rendering, the transport bar, capture (screenshot/recording), the cursor overlay, panel layout and resize.
 >
-> **Also read** — a change here usually reaches [`simulation-engine.md`](simulation-engine.md) · [`agent-render.md`](agent-render.md) · [`agent-brush-ui.md`](agent-brush-ui.md) · [`grid-3d.md`](grid-3d.md) · [`io-and-formats.md`](io-and-formats.md) · and, since **Live** mode puts this view beside the graph editor in one workspace, [`modeler-ui.md`](modeler-ui.md).
+> **Also read** — a change here usually reaches [`simulation-engine.md`](simulation-engine.md) · [`agent-render.md`](agent-render.md) · [`agent-brush-ui.md`](agent-brush-ui.md) · [`grid-3d.md`](grid-3d.md) · [`io-and-formats.md`](io-and-formats.md) · [`rule-trace.md`](rule-trace.md) · and, since **Live** mode puts this view beside the graph editor in one workspace, [`modeler-ui.md`](modeler-ui.md).
 > Keep following those onward until a pass turns up nothing new; the reading is not done at the first
 > doc that answers your question. See *Read to CLOSURE, not to the first hit* in `../../CLAUDE.md`.
 >
@@ -24,6 +24,7 @@
 - LIVE mode — the edit→rule PIPELINE (Phase 3, 2026-09-07)
 - LIVE mode — INPUT OWNERSHIP and the perf guards (Phase 4, 2026-09-07)
 - The VIEWER CONTROL — the Output-Mapping choice lives on the TRANSPORT bar (2026-09-07)
+- RULE TRACE — what this view owns (2026-09-12) → [`rule-trace.md`](rule-trace.md)
 
 ---
 
@@ -1071,3 +1072,37 @@ narrow pane it is clipped at both ends. The bar measures **~424 px** with the vi
 ~296 px), so the clipping threshold moves out by roughly the control's width. It only bites at the Live
 splitter's extreme (a 231 px minimum pane, where the bar was already clipped) — the default Live split on
 a laptop leaves an ~820 px pane.
+
+---
+
+## RULE TRACE — what this view owns (2026-09-12)
+
+**Rule Trace** — pick one cell or one agent in Live and watch its rule execute through the graph — is
+documented in full in [`rule-trace.md`](rule-trace.md). `SimulatorView` owns five pieces of it, and each
+one is a place an unrelated change here can silently break it:
+
+- **The target refs lead.** `traceCellTargetRef` / `traceAgentTargetRef` are read by the draw loop, the
+  worker message handler and `initWorkerWithDimensions` — outside React's render cycle — with the mirror
+  state and the trace store written in the same statement block (the `followAgentIdRef` /
+  `overseerRunning` discipline). ⚠ **Every `setTrace` post carries the COMPLETE intent, built from BOTH
+  refs**, never the one field that changed.
+- **The lifecycle across the model effect's arms.** Soft recompile → re-post `setTrace` **with fresh
+  codes** (the worker marks its trace fns stale on every `recompile`), *after* the recompile post so the
+  engine never waits on a second JS compile. Structural rebuild → keep the cell target iff it is still a
+  cell of the new grid, **always drop the agent target** (the population is re-seeded). Model load /
+  File › New → clear the session **and the breakpoints** (node ids recycle across models). Live exit →
+  clear the session, because a chip the user cannot see cannot be stopped.
+- **The inspect subscription merge.** The traced cell joins the `setInspectCells` post; the traced agent
+  joins a **deliberately separate** `agentStateIds` list feeding the ~3 Hz `getAgentState` poll and the
+  agent UI-sync want-set — ⚠ **not** `agentInspectIds`, which also draws the white inspect rings.
+- **The marks**: a 2D cell outline on the highlight layer (before the agents-only early return, once per
+  visible tile under the infinity canvas), a 2D dashed agent ring, and `gl3d.setTraceCell` /
+  `setTraceAgent` as **separate slots** so the inspect ring / cube paths stay byte-untouched.
+- **The Live-bar chip** (`traceLabel` / `tracePausedAt` / `traceLost` / `onStopTrace`), with the
+  transient lost notice rendered **outside** the chip's own condition, and the `simTransportApi` seam
+  (`src/simulator/simTransportState.ts`) that lets `App`'s `]` key reach the transport's own Step and the
+  Trace panel mirror `playing`.
+
+`traceBreak` pauses through the ordinary `playing` seam and posts `cancelStep` immediately rather than
+waiting a commit for `useEffect([playing])`. The two new keys `]` / `[` are bound **once, in `App`**,
+inside the Phase-4 stand-down discipline (§ *INPUT OWNERSHIP*) plus the capture-review modal.

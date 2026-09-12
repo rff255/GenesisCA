@@ -1,6 +1,11 @@
 # Plan — **Rule Trace** (trace one cell's / one agent's rule through the graph, live)
 
-> **Status: plan.** Design authority: [IMPACT_MAP_RULE_TRACE.md](IMPACT_MAP_RULE_TRACE.md) (traps by
+> **Status: DELIVERED** (as built: see [HANDOFF_RULE_TRACE.md](HANDOFF_RULE_TRACE.md) for the build
+> narrative, the measurements and the review findings; [`areas/rule-trace.md`](areas/rule-trace.md) is
+> the reference doc). The plan below is kept as written; where the build diverged from it, the
+> **[As built — deviations](#as-built--deviations)** section at the end says how and why.
+>
+> Design authority: [IMPACT_MAP_RULE_TRACE.md](IMPACT_MAP_RULE_TRACE.md) (traps by
 > number) · origin [BRAINSTORM_RULE_TRACE.md](BRAINSTORM_RULE_TRACE.md) (decisions D1–D10) · illustrated
 > companion [PLAN_RULE_TRACE.html](PLAN_RULE_TRACE.html) (the entry gesture, the lit graph, the cursor,
 > the panel, the breakpoint pause, the tooltip). Branch `debug-mode`, base `8c7f6d4`.
@@ -243,3 +248,24 @@ sandbox (a node emitting `.subarray`, a write to `_indicators`, `Create Agent` i
 (breakpoint + G/F 200 on WebGPU), the lifecycle (target across reinit / load / Live exit), 2D/3D, and
 the keyboard roles; reports findings ranked. A fix session closes every confirmed finding and re-runs
 all gates.
+
+---
+
+## As built — deviations
+
+Ten places where the shipped feature differs from the plan above. Each is deliberate; the reasoning is
+in [HANDOFF_RULE_TRACE.md](HANDOFF_RULE_TRACE.md) § 3 and the invariant it creates is in
+[`areas/rule-trace.md`](areas/rule-trace.md).
+
+| # | The plan said | What shipped |
+|---|---|---|
+| 1 | "**No bulk copy** (`bulkCopyLines`)" (§1.1). | **The single-cell copy.** Dropping it outright traced `updateAttribute`'s read-modify-write wrong — the harness caught it on Extended Wireworld. The trace copies the traced element's row only. |
+| 2 | The root wrapper emits records for its own **value**-outs (§1.1). | **The root is flow event 0**: `compileRoot` emits `_tr.f(root)` plus a wired-guarded `_tr.o(root, port)` ahead of the flow chain. Without an `f` record for the root, a breakpoint on a root node could never fire (review finding F2). P4's editor-side synthesis of the root became an idempotent fallback. |
+| 3 | Toggle CSS **classes** (`traceHit` / `traceCurrent` / `traceFlowTaken` / `traceValueLit`) on `.react-flow__node[data-id]` (§4). | A **`data-trace` ATTRIBUTE** carrying a token list (`hit` / `current` / `dark` / `flow` / `value`). React Flow rebuilds the wrapper's `className` on every render and would wipe an imperative class the moment a lit node was selected. |
+| 4 | "Breakpoints inside a macro scope are keyed by `macroPath + innerId`, so the same macro instanced twice can carry different breakpoints" (impact map §7). | **Def-scoped.** The editor's scope stack names macro **DEFs**, not instances — entering a macro edits the shared definition — so a def-scoped mark is the only thing the editor can express, and it **arms in every instance**. Recorded as a known limitation rather than worked around. |
+| 5 | The Live bar gets `traceLabel` / `onStopTrace` (impact map §5). | Plus **`tracePausedAt`** — the breakpoint readout is part of the chip's own contract, so the pause reason is visible from the pane the user is looking at. |
+| 6 | `setTrace { target, … }` (§2). | **The target is the COMPLETE INTENT, never a delta**: one target sets that kind and clears the other, an array sets both, `null` clears both. A single delta field is ambiguous the moment a grid+agents model wants to drop only one of its two targets. |
+| 7 | `traceTargetLost { reason }` (impact map §4). | **`traceTargetLost { kind, reason }`** with `kind: 'cell' \| 'agent' \| 'both'`. The main thread had been inferring the kind from the prose. |
+| 8 | Values tab: attributes plus the engine writes (§5). | The **Output Mapping** entry also carries a **colour row** — `colors` at `idx*4`, decoded to a hex swatch — so an OM trace shows what it actually produced. |
+| 9 | Sampled = one trace per root **per batch** (§2, D5). | Plus a **10 Hz throttle with a trailing edge** (`TRACE_SAMPLE_MIN_MS = 100`; every-gen and on-demand untouched). A batch at a high frame rate is not a useful sampling unit — measured Life3D 24³ at max rate: −12.0 % with the throttle vs −20.2 % without. |
+| 10 | One shadow proxy per wrapped argument (§1.3). | **Identity-aliased proxies** (`sharedProxies`, default true): the same array passed under two parameter names gets ONE shadow, matching the engine's single-buffer semantics where it aliases (async cells, async agent attrs, every division fn). `false` only for the WebGPU sync grid, whose separate CPU write buffer was dropped for memory. |

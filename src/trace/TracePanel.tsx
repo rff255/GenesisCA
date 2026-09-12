@@ -561,7 +561,8 @@ export function TracePanel() {
               title={'This trace is a re-evaluation, not a recording of the engine’s own run: '
                 + 'random draws come from the trace’s own stream, asynchronous updates make the '
                 + 'neighbour state order-dependent, WebGPU computes in 32-bit, and an indicator '
-                + 'accumulates across every element. See Help › Trace.'}
+                + 'accumulates across every element. '
+                + 'See Help › Trace a cell or an agent (Rule Trace).'}
             >approximate</span>
           )}
           {entry?.truncated && (

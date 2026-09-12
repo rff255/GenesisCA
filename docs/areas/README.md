@@ -49,7 +49,8 @@ radius, follow, repeat until a pass turns up nothing new — is *Read to CLOSURE
 | [io-and-formats.md](io-and-formats.md) | 49 KB | Save/load, simulation state, presets, the standalone `.html` presentation export, PWA/Tauri, CSV import & export, reset-restores-board. |
 | [gis.md](gis.md) | 64 KB | Esri ASCII grids, GeoTIFF, GeoJSON, the georeference record, the backdrop map, the GIS gate, the satellite-data samples. |
 | [model-library.md](model-library.md) | 27 KB | The sample models, their generator scripts, and the conventions for adding one. |
-| [testing-harnesses.md](testing-harnesses.md) | 9 KB | Index of the 67 `scripts/*.mjs` harnesses, grouped, plus the house style that makes them trustworthy. |
+| [rule-trace.md](rule-trace.md) | 63 KB | **Rule Trace**: the trace build of the JS reference compile, the origin table, the write-recording sandbox, the worker protocol and its three cadences, breakpoints, the lit path in the editor, the Trace panel. |
+| [testing-harnesses.md](testing-harnesses.md) | 9 KB | Index of the 68 `scripts/*.mjs` harnesses, grouped, plus the house style that makes them trustworthy. |
 
 ## Adding an area
 

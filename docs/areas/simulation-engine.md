@@ -2,7 +2,7 @@
 
 > Area doc for **GenesisCA**. sim.worker.ts, the Structure-of-Arrays grid, step batching, the busy overlay, sparse stepping, the Grid Init Event. Read before touching the worker or the grid step loop.
 >
-> **Also read** — a change here usually reaches [`compiler-core.md`](compiler-core.md) · [`compiler-wasm.md`](compiler-wasm.md) · [`compiler-webgpu.md`](compiler-webgpu.md) · [`agent-engine.md`](agent-engine.md) · [`grid-3d.md`](grid-3d.md) · [`io-and-formats.md`](io-and-formats.md).
+> **Also read** — a change here usually reaches [`compiler-core.md`](compiler-core.md) · [`compiler-wasm.md`](compiler-wasm.md) · [`compiler-webgpu.md`](compiler-webgpu.md) · [`agent-engine.md`](agent-engine.md) · [`grid-3d.md`](grid-3d.md) · [`io-and-formats.md`](io-and-formats.md) · [`rule-trace.md`](rule-trace.md).
 > Keep following those onward until a pass turns up nothing new; the reading is not done at the first
 > doc that answers your question. See *Read to CLOSURE, not to the first hit* in `../../CLAUDE.md`.
 >
@@ -25,6 +25,7 @@
 - LIVE mode adds NO worker message (2026-09-07)
 - ⚠ A `recompile` THAT REBUILDS A GPU RUNTIME MUST READ THE GPU DOWN FIRST (2026-09-07)
 - ⚠ ...AND NOTHING MAY REPORT THAT REBUILD AS A DEATH (2026-09-07)
+- RULE TRACE — the hooks in the batch loops (2026-09-12) → [`rule-trace.md`](rule-trace.md)
 
 ---
 
@@ -372,3 +373,38 @@ The proof standard for any change touching this feature: a feature-OFF compile (
 
 ---
 
+
+---
+
+## RULE TRACE — the hooks in the batch loops (2026-09-12)
+
+The worker half of **Rule Trace** — the root registry, the wire protocol, the sandbox call, the
+approximation terms — is documented in [`rule-trace.md`](rule-trace.md). What matters *here* is that a
+feature with no message of its own during a normal generation nonetheless has **five touch points inside
+this file's hottest loops**, and every one of them is a place a step-loop change can break it.
+
+**Zero cost when off.** Every hook opens with `traceArmed()` — one null test per batch.
+
+| Touch point | Where | The rule |
+|---|---|---|
+| **Sampled trace** | `traceAfterBatch()` at the **tail** of all three batch loops, plus an inline guard on the G/F-1 synchronous path | one trace per root per batch, on the post-batch state = the pre-step state of the next generation. ⚠ Throttled to 10 Hz (`TRACE_SAMPLE_MIN_MS = 100`) **with a trailing edge** — a tiny WebGPU 3D grid at G/F 1 ran the hook ~1900×/s. Only this cadence is throttled |
+| **Every-generation trace** | `traceBeforeGeneration()` / `…Sync()` at the **very top** of the generation — before the periodic events, before the agent step, before the cell dispatch | opt-in (breakpoints exist). ⚠ A new batch loop, or a re-ordering of the top of an existing one, must carry this hook or breakpoints go quiet in that path |
+| **The break** | `traceBeforeGenerationSync` returns true → the loop `break`s | ⚠ **The generation is NOT run.** The batch still ends normally and posts `stepped` **carrying `traceBreakPending`**, *then* `flushTraceBreak()` filters `deferredDuringAsyncBatch` for reqId-less `step`s — **exactly the `cancelStep` rule** (§ *Interruptible step batches*). Overseer batches carry a `reqId` and are never dropped |
+| **The latch** | `setGeneration` | ⚠ `traceBreakGen` is cleared **at that one seam**, on any non-monotonic move (`v <= generation`), so no handler — Reset, `loadState`, an Overseer preset load — can forget and swallow the first legitimate break at the new counter |
+| **Freshness + neighbours** | `traceAwaitFreshness()`, `computeCellNeighbours` / `traceNbrRow` | every trace under GPU ownership goes through the existing `ensureCpuAttrsFresh` / `ensureAgentStoreFresh` one-shots and ⚠ **never clears those flags itself** — the trace is a reader. The WebGPU grid target's dropped neighbour table is stood in for by `traceNbrRow`, built from `computeCellNeighbours` — the ONE definition of the torus / sentinel / 3D-layer maths, extracted from `buildNeighborIndices` so the full table and the single row can never disagree |
+
+⚠ **`traceBreakPending` rides the EARLIER message deliberately.** The play loop arms its next batch from a
+`requestAnimationFrame` inside the `stepped` handler; a vsync boundary between the `stepped` and
+`traceBreak` message tasks let that rAF fire while `playingRef` was still true, and Resume advanced
+**two** generations.
+
+⚠ **`traceAwaitFreshness` returns `null`, not a resolved promise**, whenever neither one-shot is needed —
+that is what lets the synchronous G/F-1 path trace in line rather than deferring a generation.
+
+⚠ **A `recompile` marks the trace fns stale**, not cleared; they come back only with the main thread's
+`setTrace` carrying rebuilt codes. The recompile deliberately lands first — the engine must never wait on
+a second full JS compile — and a trace of the old graph against the new engine would be a lie with a
+plausible face.
+
+The only intrusion into the engine's own arg builders is an optional trailing `traceNbrIdx` on
+`buildLoopArgs` / `buildCellArgs`; absent, at every engine call site, the args are byte-identical.

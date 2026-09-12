@@ -178,6 +178,7 @@ Browsable index with sizes: [`docs/areas/README.md`](docs/areas/README.md).
 | `src/simulator/engine/agentWebgpuRuntime.ts` render paths, `drawAgentsOverlay` | `docs/areas/agent-render.md` |
 | `src/simulator/SimulatorView.tsx` — canvas, transport, capture, panels | `docs/areas/simulator-ui.md` |
 | `src/live/**`, `src/simulator/simLayoutState.ts` — **Live** mode (the split workspace) | `docs/areas/simulator-ui.md` § *LIVE mode*, then `modeler-ui.md` § *LIVE mode* |
+| `src/trace/**`, `src/simulator/engine/traceRunner.ts`, `traceProtocol.ts`, `simTransportState.ts`, the `trace` option in `compile.ts` | `docs/areas/rule-trace.md` |
 | the agent brush inside `SimulatorView.tsx` | `docs/areas/agent-brush-ui.md` |
 | `src/simulator/render/gl3d.ts`, the voxel renderer, the 3D viewport | `docs/areas/grid-3d.md` |
 | `src/model/fileOperations.ts`, `.gcaproj` / `.gcastate` / presets / CSV / export | `docs/areas/io-and-formats.md` |
@@ -205,6 +206,7 @@ Browsable index with sizes: [`docs/areas/README.md`](docs/areas/README.md).
 | **Agent capabilities** / physics profiles / the agent ABI | `docs/areas/agent-capabilities.md` |
 | Emitting an agent graph on **WASM or WebGPU** | `docs/areas/agent-compilers.md` |
 | **GPU residency**, direct render, the UI-sync policy | `docs/areas/agent-render.md` |
+| **Tracing** a cell's / an agent's rule in Live (Rule Trace) — the lit path, breakpoints, the Trace panel | `docs/areas/rule-trace.md` |
 | Writing or extending a **verification harness** | `docs/areas/testing-harnesses.md` |
 
 ---
@@ -251,7 +253,7 @@ is an area whose doc may now need a line. See *Documentation consistency* above.
 
 ## Verification gates
 
-This project's regression net is its 67 Node harnesses in `scripts/` — they run the SHIPPED modules, assert
+This project's regression net is its 68 Node harnesses in `scripts/` — they run the SHIPPED modules, assert
 **values** (not "it compiled"), and are **negative-controlled** (a deliberate source mutation must make them
 fail). Full index + house style: `docs/areas/testing-harnesses.md`.
 
