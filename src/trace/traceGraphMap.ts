@@ -237,9 +237,6 @@ export function valueConeFrom(
 // Macro scope — the two id spaces (see the module header)
 // ---------------------------------------------------------------------------
 
-/** instance node id → the macro DEF id it instantiates. */
-export type MacroDefIndex = ReadonlyMap<string, string>;
-
 /** Collect every macro INSTANCE in a set of graphs (the top-level graphs plus
  *  every macro def's own subgraph, so nested instances are covered too). */
 export function buildMacroDefIndex(
@@ -330,12 +327,12 @@ const SIMPLE_ROOTS: Record<string, string> = {
 
 /** Which node of the OPEN graph is the ROOT of this trace?
  *
- *  Why it is needed at all: the root's body IS the emitted wrapper, so the
- *  compiler records no `_tr.f` for it — nothing in the event log ever names it.
- *  It plainly DID run (the trace exists because it did), and the plan's §3
- *  drawing lights it, so the highlighter treats it as executed. Answered from
- *  the editor's own nodes rather than from a record, which is also why it is
- *  pure and testable.
+ *  Since P7b the trace build emits a real `_tr.f(<rootId>)` at the head of every
+ *  root wrapper, so the root normally lights from its own record like any other
+ *  flow node. This stays as the highlighter's FALLBACK — for a root whose id has
+ *  no origin-table resolution (a synthesized linked-mapping colour pass) and for
+ *  any trace taken before that emit. Answered from the editor's own nodes rather
+ *  than from a record, which is also why it is pure and testable.
  *
  *  A periodic key already carries its node id; a mapping key carries the
  *  mapping's, matched against the root node's `config.mappingId`. */

@@ -39,6 +39,14 @@ import { detectCompositeShapeMismatch } from './compositeRelay';
 import { inputBrushKindForNode, inputParamsForNode, spawnerBrushPorts, buildInputParamPorts, isInputMappingRoot } from '../../../model/inputMappingParams';
 import {
   foldOriginMap,
+  // P7b / F9 — the root keys the trace build writes into `traceParamNames` come
+  // from the ONE definition (`traceOrigin.ts`), which `traceProtocol.ts`
+  // re-exports to the engine side. They used to be spelled by hand here and
+  // prefix-matched by hand there.
+  TRACE_ROOT_STEP, TRACE_ROOT_INIT, TRACE_ROOT_GRID_INIT,
+  TRACE_ROOT_AGENT_BEHAVIOUR, TRACE_ROOT_AGENT_INIT, TRACE_ROOT_AGENT_DIVISION,
+  traceGridPeriodicKey, traceInputColorKey, traceOutputMappingKey,
+  traceAgentPeriodicKey, traceAgentOutputMappingKey, traceAgentInputMappingKey,
   type CompileOptions,
   type TraceCompileMeta,
   type TraceOriginTable,
@@ -1584,6 +1592,29 @@ function compileRoot(
     volatileEmitIndent = savedVolatileIndent;
   }
 
+  // TRACE BUILD — THE ROOT ITSELF RAN (P7b / review finding F2). Every other flow
+  // node gets its `_tr.f` from `compileFlowChain`, which records its TARGETS; the
+  // root is nobody's target, because its body IS the emitted wrapper. Before P7b
+  // that left the event log with no record naming the root at all, so a
+  // breakpoint on a Generation Step / Init Event / Output Mapping node could
+  // never fire — while still forcing the every-generation cadence and its GPU
+  // readback, i.e. paying the whole cost of a breakpoint for none of the effect.
+  //
+  // One `f` (the root ran) plus one `o` for the flow port this root opens, so the
+  // root is flow event 0 of every trace: the Steps tab lists it once, the cursor
+  // can land on it, and P4's editor-side synthesis of the root becomes a
+  // fallback rather than the only source (it is idempotent — `flowCount` is only
+  // forced to 1 when no record set it).
+  //
+  // Emitted HERE rather than at the twelve wrapper sites: `flowLines` is empty
+  // until this call and is always spliced in AFTER the wrapper's own value-out
+  // declarations, so the records land after everything they could reference (TDZ)
+  // without each root having to remember to do it. `trF` / `trO` are no-ops when
+  // `trace` is false, so the normal build is byte-identical (invariant I1).
+  // The `o` is wired-guarded like every other pass-through port: a root whose DO
+  // is connected to nothing must not claim a branch that does not exist.
+  flowLines.push(...trF(rootNode.id, '      '));
+  flowLines.push(...trO(rootNode.id, rootFlowPort, '      ', true));
   compileFlowChain(rootNode.id, rootFlowPort, '      ');
 
   return { valueLines, preLoopValueLines, flowLines, scratchNodes };
@@ -2415,7 +2446,7 @@ export function compileGraph(
       // coordinate decode, the sub-attribute scrub, the variable blocks, the viewer
       // hoist, the value + flow lines) is the engine's body verbatim, which is what
       // makes the traced values the values the engine would compute.
-      traceParamNames.step = [...splitParams(loopParams), '_traceIdx', '_tr'];
+      traceParamNames[TRACE_ROOT_STEP] = [...splitParams(loopParams), '_traceIdx', '_tr'];
       stepCode = [
         `(function(${loopParams}, _traceIdx, _tr) {`,
         ...scratchDecls,
@@ -2557,7 +2588,7 @@ export function compileGraph(
     });
     // TRACE BUILD - inputColor ALREADY takes `idx`, so only `_tr` is appended.
     if (trace) {
-      traceParamNames[`inputColor:${mappingId}`] =
+      traceParamNames[traceInputColorKey(mappingId)] =
         [...icResolved.channels.map(c => c.argName), ...splitParams(cellParams), '_tr'];
     }
     const code = [
@@ -2636,7 +2667,7 @@ export function compileGraph(
       ...omPerCell,
       '  }',
     ];
-    if (trace) traceParamNames[`outputMapping:${mappingId}`] = [...splitParams(omParams), '_traceIdx', '_tr'];
+    if (trace) traceParamNames[traceOutputMappingKey(mappingId)] = [...splitParams(omParams), '_traceIdx', '_tr'];
     const code = [
       `(function(${omParams}${trace ? ', _traceIdx, _tr' : ''}) {`,
       ...scratchDecls,
@@ -2675,7 +2706,7 @@ export function compileGraph(
       ? ['x', 'y', 'maxX', 'maxY', ...(is3d ? ['z', 'maxZ'] : [])]
         .map(portId => `    _tr.v(${JSON.stringify(initId)}, ${JSON.stringify(portId)}, _v${initId}_${portId});`)
       : [];
-    if (trace) traceParamNames.init = [...splitParams(omParams), '_traceIdx', '_tr'];
+    if (trace) traceParamNames[TRACE_ROOT_INIT] = [...splitParams(omParams), '_traceIdx', '_tr'];
     initCode = [
       `(function(${omParams}${trace ? ', _traceIdx, _tr' : ''}) {`,
       ...scratchDecls,
@@ -2729,7 +2760,7 @@ export function compileGraph(
     // `let`s + array fills run ONCE.
     const gv = buildVariableJS(model.variables || []);
     // TRACE BUILD - a GLOBAL root: no element index, so only `_tr` is appended.
-    if (trace) traceParamNames.gridInit = [...splitParams(omParams), '_tr'];
+    if (trace) traceParamNames[TRACE_ROOT_GRID_INIT] = [...splitParams(omParams), '_tr'];
     gridInitCode = [
       `(function(${omParams}${trace ? ', _tr' : ''}) {`,
       ...scratchDecls,
@@ -2772,7 +2803,7 @@ export function compileGraph(
     // Local Variables (cell scope) as global scratch — the Grid Init Event's rule.
     // Not loop-wrapped, so the scalar `let`s + array fills run ONCE per firing.
     const pv = buildVariableJS(model.variables || []);
-    if (trace) traceParamNames[`gridPeriodic:${pId}`] = [...splitParams(omParams), '_tr'];
+    if (trace) traceParamNames[traceGridPeriodicKey(pId)] = [...splitParams(omParams), '_tr'];
     gridPeriodicCodes.push({
       period, phase,
       code: [
@@ -3308,7 +3339,7 @@ export function compileAgentGraph(
        ...(rootPortConsumed(bsId, 'myVolume') ? ['myVolume'] : []), 'myBondDegree', 'myAge']
       .map(portId => `    _tr.v(${JSON.stringify(bsId)}, ${JSON.stringify(portId)}, _v${bsId}_${portId});`)
     : [];
-  if (trace) traceParamNames.agentBehaviour = [...splitParams(params), '_traceIdx', '_tr'];
+  if (trace) traceParamNames[TRACE_ROOT_AGENT_BEHAVIOUR] = [...splitParams(params), '_traceIdx', '_tr'];
   const behaviourCode = [
     `(function(${params}${trace ? ', _traceIdx, _tr' : ''}) {`,
     ...scratchDecls,
@@ -3368,7 +3399,7 @@ export function compileAgentGraph(
     const divUsesSibling = agentUsesDivisionSibling(model);
     const divUsesRequests = agentUsesDivisionRequests(model);
     // TRACE BUILD - division ALREADY takes `idx`, so only `_tr` is appended.
-    if (trace) traceParamNames.agentDivision = [...splitParams(buildDivisionParams(model)), '_tr'];
+    if (trace) traceParamNames[TRACE_ROOT_AGENT_DIVISION] = [...splitParams(buildDivisionParams(model)), '_tr'];
     divisionCode = [
       `(function(${buildDivisionParams(model)}${trace ? ', _tr' : ''}) {`,
       ...divScratch,
@@ -3424,7 +3455,7 @@ export function compileAgentGraph(
     const iId = initNode.id;
     const initVars = buildVariableJS(model.agentVariables || []);
     // TRACE BUILD - a GLOBAL root (no self): only `_tr` is appended.
-    if (trace) traceParamNames.agentInit = [...splitParams(buildAgentInitParams(model)), '_tr'];
+    if (trace) traceParamNames[TRACE_ROOT_AGENT_INIT] = [...splitParams(buildAgentInitParams(model)), '_tr'];
     initCode = [
       `(function(${buildAgentInitParams(model)}${trace ? ', _tr' : ''}) {`,
       ...initScratch,
@@ -3470,7 +3501,7 @@ export function compileAgentGraph(
     const pScratch = pv.scratchNodes.map(s => buildScratchDecl(s, model));
     const pId = pNode.id;
     const pVars = buildVariableJS(model.agentVariables || []);
-    if (trace) traceParamNames[`agentPeriodic:${pId}`] = [...splitParams(buildAgentInitParams(model)), '_tr'];
+    if (trace) traceParamNames[traceAgentPeriodicKey(pId)] = [...splitParams(buildAgentInitParams(model)), '_tr'];
     periodicCodes.push({
       period, phase,
       code: [
@@ -3525,7 +3556,7 @@ export function compileAgentGraph(
         );
         const omScratch = r.scratchNodes.map(s => buildScratchDecl(s, model));
         const omVars = buildVariableJS(model.agentVariables || []);
-        if (trace) traceParamNames[`agentOutputMapping:${mappingId}`] = [...splitParams(omParams), '_traceIdx', '_tr'];
+        if (trace) traceParamNames[traceAgentOutputMappingKey(mappingId)] = [...splitParams(omParams), '_traceIdx', '_tr'];
         const code = [
           `(function(${omParams}${trace ? ', _traceIdx, _tr' : ''}) {`,
           ...omScratch,
@@ -3586,7 +3617,7 @@ export function compileAgentGraph(
         // TRACE BUILD - the EDITOR kind already takes `idx`; the SPAWNER kind is
         // global. Either way only `_tr` is appended.
         if (trace) {
-          traceParamNames[`agentInputMapping:${mappingId}`] =
+          traceParamNames[traceAgentInputMappingKey(mappingId)] =
             [...imResolved.channels.map(c => c.argName), ...splitParams(imParams), '_tr'];
         }
         const code = [

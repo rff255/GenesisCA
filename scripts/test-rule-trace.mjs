@@ -80,7 +80,7 @@ export { buildAgentAbiArgs } from '../src/modeler/vpl/compiler/agentAbi.ts';
 export { agentAttrsOf, bondAttrsOf, cellFieldAttrsOf } from '../src/model/attributeScope.ts';
 export { resolveAgentFieldGates } from '../src/model/agentFieldGating.ts';
 export { resolveKeyLabels, normalizeLookupTable } from '../src/modeler/vpl/compiler/variegation.ts';
-export { approximateReason, buildTraceRows, indexWrites, cellCoords, shortestDelta, neighbourOffset, formatOffset, traceTargetLabel, traceRootLabel, traceChipLabel, isResetRoot, decodeBondRequest, bondRequestText, formatNumber, formatNI } from '../src/trace/traceValues.ts';
+export { approximateReason, buildTraceRows, indexWrites, cellCoords, shortestDelta, neighbourOffset, formatOffset, formatCellCoords, traceTargetLabel, traceRootLabel, traceChipLabel, isResetRoot, decodeBondRequest, bondRequestText, formatNumber, formatNI } from '../src/trace/traceValues.ts';
 `;
 const dir = mkdtempSync(join(tmpdir(), 'gca-trace-'));
 const entryPath = join(ROOT, 'scripts', '__trace_entry.ts');
@@ -1513,10 +1513,18 @@ section('J. VALUES (P5) — raw writes back into the sentences the panel shows')
       && M.isResetRoot('gridInit') && M.isResetRoot('agentInit') && !M.isResetRoot('step'));
     check('a generation root shows its generation',
       M.traceChipLabel('step', 412, names) === 'gen 412 · Step');
-    check('the element label carries the LAYER in 3D and omits it in 2D',
+    // P7b / F11 — the 3D form NAMES the layer axis ("(layer 2, 1, 3)"), because a
+    // bare triple gives the reader no way to tell which number is the layer, and
+    // the Live chip and this header had drifted into disagreeing about it. ONE
+    // formatter (`formatCellCoords`) now serves both surfaces.
+    check('the element label carries the NAMED layer in 3D and omits it in 2D',
       M.traceTargetLabel({ kind: 'cell', idx: 55 }, dims2d) === 'Cell (5, 5)'
-      && M.traceTargetLabel({ kind: 'cell', idx: 2 * 16 + 1 * 4 + 3 }, dims3d) === 'Cell (2, 1, 3)'
+      && M.traceTargetLabel({ kind: 'cell', idx: 2 * 16 + 1 * 4 + 3 }, dims3d) === 'Cell (layer 2, 1, 3)'
       && M.traceTargetLabel({ kind: 'agent', id: 1487 }, dims2d) === 'Agent #1487');
+    check('the Live chip and the panel header share ONE coordinate formatter',
+      M.formatCellCoords(55, dims2d) === '(5, 5)'
+      && M.formatCellCoords(2 * 16 + 1 * 4 + 3, dims3d) === '(layer 2, 1, 3)'
+      && M.traceTargetLabel({ kind: 'cell', idx: 55 }, dims2d) === `Cell ${M.formatCellCoords(55, dims2d)}`);
     check('numbers print compactly (an integer bare, a decimal trimmed)',
       M.formatNumber(3) === '3' && M.formatNumber(4.25) === '4.25'
       && M.formatNumber(1 / 3) === '0.3333');
@@ -1580,10 +1588,216 @@ section('J. VALUES (P5) — raw writes back into the sentences the panel shows')
   });
 }
 
+
+// ===========================================================================
+section('K. P7b — the review findings: the write-side name, the root record, the sandbox');
+// ===========================================================================
+//
+// Three of the adversarial review's findings were failures of the SHIPPED
+// modules that every existing section walked straight past, so each one gets a
+// check that drives the real code and a negative control that re-injects the
+// fault.
+{
+  // --- F1. AN ALIASED BUFFER REPORTS ITS WRITES UNDER THE WRITE-SIDE NAME ---
+  //
+  // Section B returns early on every non-synchronous model (the real step it
+  // compares against needs a double buffer), which is exactly why this went
+  // unseen: under `updateMode: 'asynchronous'` the engine passes ONE array as
+  // both `r_<id>` and `w_<id>`, the sandbox gives it ONE shadow, and its `param`
+  // used to be the FIRST name that reached it — always the read name, because
+  // every ABI lists the `r_` block first. The Values tab keys NEXT by `w_<id>`,
+  // so the row said "unchanged" while the real write fell out as a generic
+  // unknown row. Driven here through the REAL compiled trace fn with the
+  // worker's own aliasing.
+  const asyncCase = (file, gridCap) => {
+    const model = shipped(file);
+    check(`${file}: is an asynchronous model`,
+      model.properties.updateMode === 'asynchronous', model.properties.updateMode);
+    const W = clamp(model.properties.gridWidth, gridCap);
+    const H = clamp(model.properties.gridHeight, gridCap);
+    const st = buildCellBufs(model, W, H, 1);
+    // THE WORKER'S RULE: `writeAttrs = (isAsync || attrWriteAliased) ? attrsA : attrsB`.
+    for (const a of st.cellAttrs) { st.attrs[a.id].w = st.attrs[a.id].r; st.bufs['w_' + a.id] = st.bufs['r_' + a.id]; }
+    st.bufs.w_orientation = st.bufs.r_orientation;
+    seedCells(model, st);
+
+    const tr = M.compileGraph(model.graphNodes, model.graphEdges, model, { trace: true });
+    if (tr.error || !tr.stepCode) { check(`${file}: trace build compiles`, false, tr.error ?? 'no step'); return; }
+    const params = tr.trace.paramNames.step;
+    const fn = (0, eval)(tr.stepCode);
+    const args = argsFor(params, st.bufs, `${file}/async trace`);
+
+    // Find a cell whose rule actually writes something — an all-quiet cell would
+    // make every assertion below vacuously true.
+    let hit = null;
+    for (let idx = 0; idx < st.total && hit === null; idx++) {
+      const r = M.runTrace({ fn, args, paramNames: params, elementIdx: idx, generation: 7 });
+      if (r.error) { check(`${file}: the async trace runs`, false, r.error); return; }
+      if (r.writes.some(w => w.index === idx && w.param.startsWith('w_'))) hit = { idx, r };
+    }
+    check(`${file}: some cell's rule writes its OWN cell`, hit !== null,
+      'no own-cell write found anywhere on the grid');
+    if (!hit) return;
+
+    const readNamed = hit.r.writes.filter(w => /^r_/.test(w.param));
+    check(`${file}: NO write is filed under a read-side (r_) name`,
+      readNamed.length === 0, readNamed.map(w => w.param).join(', '));
+
+    const attrs = model.attributes.filter(a => !a.isModelAttribute)
+      .map(a => ({ id: a.id, name: a.name, type: a.type, ...(a.vectorDims ? { vectorDims: a.vectorDims } : {}) }));
+    const snapshot = {};
+    for (const a of attrs) snapshot[a.id] = st.bufs['r_' + a.id][hit.idx];
+    const rowsInput = {
+      target: { kind: 'cell', idx: hit.idx }, dims: { W, H, D: 1 },
+      attrs, writes: hit.r.writes, events: hit.r.events, snapshot,
+      indicatorNames: (model.indicators || []).map(i => i.name),
+    };
+    const built = M.buildTraceRows(rowsInput);
+    check(`${file}: every write is CLAIMED by a row (unknownCount 0)`,
+      built.unknownCount === 0,
+      built.rows.filter(r => r.key.startsWith('raw:')).map(r => r.name).join(', '));
+    const changedAttrRows = built.rows.filter(r => r.key.startsWith('attr:') && r.changed);
+    check(`${file}: the rule's own-cell write shows as a CHANGED attribute row`,
+      changedAttrRows.length > 0,
+      built.rows.filter(r => r.key.startsWith('attr:')).map(r => `${r.name}=${r.changed}`).join(' '));
+
+    // NEGATIVE CONTROL — re-file the same writes under the READ-side name, i.e.
+    // exactly what the runner did before P7b, and watch the table go blind.
+    expectFail(`${file}: an aliased write filed under its READ name`, () => {
+      const mis = hit.r.writes.map(w => ({ ...w, param: w.param.replace(/^w_/, 'r_') }));
+      const blind = M.buildTraceRows({ ...rowsInput, writes: mis });
+      check('every write is CLAIMED by a row (unknownCount 0)', blind.unknownCount === 0);
+      check('the own-cell write shows as a CHANGED attribute row',
+        blind.rows.some(r => r.key.startsWith('attr:') && r.changed));
+    });
+  };
+  asyncCase('snake.gcaproj', 16);
+  asyncCase('Amphiphile.gcaproj', 16);
+
+  // --- F2. THE ROOT NODE RECORDS THAT IT RAN ------------------------------
+  //
+  // The root's body IS the emitted wrapper, so nothing in the log named it: a
+  // breakpoint on a Generation Step node could never fire, while still forcing
+  // the every-generation cadence (and, on WebGPU, its readback). The root is now
+  // flow event 0 of every trace.
+  const rootCase = (file, gridCap) => {
+    const model = shipped(file);
+    const stepNode = model.graphNodes.find(n => n.data.nodeType === 'step');
+    if (!stepNode) { check(`${file}: has a Generation Step root`, false); return null; }
+    const W = clamp(model.properties.gridWidth, gridCap);
+    const H = clamp(model.properties.gridHeight, gridCap);
+    const D = M.is3dModel(model) ? clamp(model.properties.gridDepth, 6) : 1;
+    const st = buildCellBufs(model, W, H, D);
+    if (model.properties.updateMode === 'asynchronous') {
+      for (const a of st.cellAttrs) { st.attrs[a.id].w = st.attrs[a.id].r; st.bufs['w_' + a.id] = st.bufs['r_' + a.id]; }
+      st.bufs.w_orientation = st.bufs.r_orientation;
+    }
+    seedCells(model, st);
+    const tr = M.compileGraph(model.graphNodes, model.graphEdges, model, { trace: true });
+    if (tr.error || !tr.stepCode) { check(`${file}: trace build compiles`, false, tr.error ?? 'no step'); return null; }
+    const params = tr.trace.paramNames.step;
+    const fn = (0, eval)(tr.stepCode);
+    const args = argsFor(params, st.bufs, `${file}/root record`);
+    const r = M.runTrace({ fn, args, paramNames: params, elementIdx: Math.floor(st.total / 2), generation: 3 });
+    check(`${file}: the root trace runs`, r.error === undefined, r.error);
+    const flows = r.events.filter(e => e[0] === 'f');
+    check(`${file}: the ROOT is flow event 0 (so a breakpoint on it can fire)`,
+      flows.length > 0 && flows[0][1] === stepNode.id,
+      `${flows.length} flow events, first = ${flows[0] ? flows[0][1] : 'none'}`);
+    check(`${file}: the root records itself exactly ONCE (no double count)`,
+      flows.filter(e => e[1] === stepNode.id).length === 1,
+      String(flows.filter(e => e[1] === stepNode.id).length));
+    // …and it names the flow port it opened, so P4 can light the wire leaving it.
+    const firstF = r.events.findIndex(e => e[0] === 'f');
+    const nextO = r.events.slice(firstF).find(e => e[0] === 'o');
+    check(`${file}: the root names the DO port it took`,
+      !!nextO && nextO[1] === stepNode.id && nextO[2] === 'do',
+      JSON.stringify(nextO));
+    return { r, stepNode };
+  };
+  const golRoot = rootCase('Game Of Life.gcaproj', 16);
+  rootCase('Life3D.gcaproj', 8);            // 3D — the dual-impact rule
+  rootCase('Extended Wireworld.gcaproj', 16);
+  rootCase('snake.gcaproj', 16);            // asynchronous
+  rootCase('Kelp War.gcaproj', 16);         // macro-heavy
+
+  // NEGATIVE CONTROL — drop the root's own record (the pre-P7b compiler) and the
+  // "flow event 0 is the root" claim must collapse.
+  if (golRoot) {
+    expectFail('a trace build that records no `f` for its own root', () => {
+      const stripped = golRoot.r.events.filter(e => !(e[0] === 'f' && e[1] === golRoot.stepNode.id));
+      const flows = stripped.filter(e => e[0] === 'f');
+      check('the ROOT is flow event 0 (so a breakpoint on it can fire)',
+        flows.length > 0 && flows[0][1] === golRoot.stepNode.id);
+    });
+  }
+
+  // --- F4. THE SANDBOX DENIES METHODS BY DEFAULT ---------------------------
+  //
+  // The `get` trap used to fall through to `Reflect.get(...).bind(target)`, so
+  // every method ran against the REAL array: `.push` / `.splice` / `.pop` /
+  // `.unshift` wrote straight through invariant I2, and a read-only method would
+  // have read AROUND this trace's shadow.
+  const escapes = (label, body, base) => {
+    const before = JSON.stringify(Array.from(base));
+    let name = '';
+    try {
+      M.runTrace({ fn: (w, _tr) => body(w), args: [base], paramNames: ['w_x', '_tr'], elementIdx: 0, generation: 1 });
+    } catch (e) { name = (e && e.name) || ''; }
+    check(`the sandbox refuses ${label} and the base array is untouched`,
+      name === 'TraceSandboxEscape' && JSON.stringify(Array.from(base)) === before,
+      `threw ${name || 'NOTHING'}, base ${before} -> ${JSON.stringify(Array.from(base))}`);
+  };
+  escapes('.push()', (w) => w.push(99), [1, 2, 3, 4]);
+  escapes('.splice()', (w) => w.splice(0, 1, 42), [1, 2, 3, 4]);
+  escapes('.pop()', (w) => w.pop(), [1, 2, 3, 4]);
+  escapes('.unshift()', (w) => w.unshift(7), [1, 2, 3, 4]);
+  escapes('.indexOf() (a READ-ONLY method would read around the shadow)', (w) => w.indexOf(2), [1, 2, 3, 4]);
+  escapes('.subarray()', (w) => w.subarray(0, 1), new Float64Array([1, 2, 3]));
+  escapes('.slice()', (w) => w.slice(0, 1), new Float64Array([1, 2, 3]));
+
+  // …while the BULK WRITERS stay deliberate no-ops (dropping the whole-grid copy
+  // is the trace build's own design, not an escape).
+  for (const [label, body] of [['set', (w) => w.set([9, 9, 9])], ['fill', (w) => w.fill(7)]]) {
+    const base = new Float64Array([1, 2, 3]);
+    const out = M.runTrace({ fn: (w, _tr) => body(w), args: [base], paramNames: ['w_x', '_tr'], elementIdx: 0, generation: 1 });
+    check(`a bulk .${label}() is a silent no-op, not an escape`,
+      out.error === undefined && Array.from(base).join(',') === '1,2,3',
+      `err=${out.error ?? '-'} base=${Array.from(base).join(',')}`);
+  }
+
+  // …and an indexed write still lands in the SHADOW and is reported.
+  {
+    const base = new Float64Array([1, 2, 3]);
+    const out = M.runTrace({
+      fn: (w, _tr) => { w[1] = 8; _tr.v('n', 'value', w[1]); },
+      args: [base], paramNames: ['w_x', '_tr'], elementIdx: 0, generation: 1,
+    });
+    check('an indexed write is shadowed, reported, and read back as the NEW value',
+      base[1] === 2 && out.writes.length === 1 && out.writes[0].param === 'w_x'
+      && out.writes[0].value === 8 && out.writes[0].prev === 2
+      && out.events.some(e => e[0] === 'v' && e[3] === 8),
+      JSON.stringify(out.writes));
+  }
+
+  // NEGATIVE CONTROL — the ALLOW-by-default trap this replaced.
+  expectFail('a shadow proxy that binds unknown methods to the base array', () => {
+    const base = [1, 2, 3, 4];
+    const before = JSON.stringify(base);
+    const leaky = new Proxy(base, {
+      get(t, p) { const v = Reflect.get(t, p); return typeof v === 'function' ? v.bind(t) : v; },
+    });
+    let name = '';
+    try { leaky.push(99); } catch (e) { name = (e && e.name) || ''; }
+    check('the sandbox refuses .push() and the base array is untouched',
+      name === 'TraceSandboxEscape' && JSON.stringify(base) === before);
+  });
+}
+
 // ===========================================================================
 rmSync(entryPath, { force: true });
 rmSync(dir, { recursive: true, force: true });
 console.log(failures === 0
-  ? '\nRULE TRACE (P1+P3+P4+P5) ✓  (all checks passed)'
+  ? '\nRULE TRACE (P1+P3+P4+P5+P7b) ✓  (all checks passed)'
   : `\n${failures} CHECK(S) FAILED ✗`);
 process.exit(failures === 0 ? 0 : 1);

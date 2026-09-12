@@ -15,10 +15,32 @@
  * | primitive         | pass-through                                               |
  *
  * INVARIANT I2 — the real buffers are byte-identical around a trace. The harness
- * hashes them before and after; the only way a write can escape is a method that
- * hands out a VIEW, so `.subarray` / `.slice` on a wrapped argument throw
- * `TraceSandboxEscape` rather than silently leaking (a guard for a FUTURE node
- * emitter — no shipped emitter calls either on a parameter).
+ * hashes them before and after.
+ *
+ * THE METHOD POLICY IS DENY BY DEFAULT (P7b / review finding F4). The shadow
+ * proxy intercepts indexed reads and indexed writes; a METHOD call does neither,
+ * and until P7b the `get` trap fell through to `Reflect.get(...).bind(target)` —
+ * i.e. every method ran against the REAL base array. `.push` / `.pop` / `.shift`
+ * / `.unshift` / `.splice` on a wrapped plain-Array argument wrote straight
+ * through the sandbox (measured: `[1,2,3,4]` → `[1,2,3,4,99]`), and a read-only
+ * method bound to the base would have answered PRE-state for an index this trace
+ * had already written — a quieter lie of the same kind. So:
+ *
+ *   - `NOOP_METHODS` (`set` / `fill` / `copyWithin` / `sort` / `reverse`) are
+ *     deliberate no-ops: harmless to ignore (the trace build drops the bulk
+ *     `w.set(r)` copy anyway) but catastrophic to let through.
+ *   - EVERY OTHER function-valued property throws `TraceSandboxEscape` when
+ *     CALLED (reading it is harmless). That covers the view producers
+ *     `.subarray` / `.slice` this file always guarded AND the mutators that used
+ *     to leak — one rule instead of two lists, so a method nobody thought of is
+ *     loud rather than silent.
+ *
+ * There is deliberately NO read-only allow-list: no shipped node emitter calls
+ * any method on a PARAMETER (every `.indexOf` / `.sort` in emitted code is on a
+ * `_scr_<id>` scratch array declared INSIDE the function, which is never
+ * wrapped). Teaching a read-only method to the sandbox means implementing it
+ * over this proxy's own numeric gets — never `.bind(target)`, which would read
+ * around the shadow.
  *
  * DOM-free on purpose: the worker imports it, and so does the Node harness
  * (`scripts/test-rule-trace.mjs`). No `self`, no `postMessage`, no DOM types.
@@ -72,14 +94,18 @@ export interface TraceResult {
   error?: string;
 }
 
-/** Thrown when emitted code reaches for a method that would hand it a live VIEW
- *  of a wrapped buffer. Not a user-facing condition — it means a node emitter
- *  started calling `.subarray` / `.slice` on a parameter and the sandbox must be
- *  taught how to wrap it. */
+/** Thrown when emitted code calls a METHOD on a wrapped engine buffer. A method
+ *  neither reads through the shadow nor writes into it, so letting one run would
+ *  either hand out a live view (`.subarray` / `.slice`), mutate the base
+ *  (`.push` / `.splice`) or answer pre-state for an index this trace already
+ *  wrote. Not a user-facing condition — it means a node emitter started calling
+ *  a method on a PARAMETER and the sandbox must be taught how to wrap it. */
 export class TraceSandboxEscape extends Error {
   constructor(param: string, method: string) {
     super(`Rule Trace sandbox escape: the traced code called .${method}() on "${param}". `
-      + 'That would hand out a live view of an engine buffer — teach traceRunner.ts to wrap it.');
+      + 'The sandbox allows only indexed reads and indexed writes on a wrapped engine buffer — '
+      + 'teach traceRunner.ts how to wrap this method (a read-only one must read through the '
+      + 'SHADOW, never through the base array).');
     this.name = 'TraceSandboxEscape';
   }
 }
@@ -127,14 +153,15 @@ export function encodeTraceValue(v: unknown): TraceValue {
  *  anyway) but catastrophic to let through — `w_x.set(r_x)` on a real buffer
  *  would rewrite the whole grid. */
 const NOOP_METHODS = new Set(['set', 'fill', 'copyWithin', 'sort', 'reverse']);
-/** View producers — see TraceSandboxEscape. */
-const ESCAPE_METHODS = new Set(['subarray', 'slice']);
 
 interface ShadowEntry { param: string; base: ArrayLike<number>; shadow: Map<number, number> }
 
-function wrapArray(base: ArrayLike<number>, param: string, shadows: ShadowEntry[]): unknown {
+function wrapArray(
+  base: ArrayLike<number>, param: string, shadows: ShadowEntry[],
+): { entry: ShadowEntry; proxy: unknown } {
   const shadow = new Map<number, number>();
-  shadows.push({ param, base, shadow });
+  const entry: ShadowEntry = { param, base, shadow };
+  shadows.push(entry);
   const noop = () => undefined;
   let proxy: ArrayLike<number>;
   proxy = new Proxy(base as object, {
@@ -148,7 +175,6 @@ function wrapArray(base: ArrayLike<number>, param: string, shadows: ShadowEntry[
         }
         if (prop === 'length') return (target as unknown as ArrayLike<number>).length;
         if (NOOP_METHODS.has(prop)) return noop;
-        if (ESCAPE_METHODS.has(prop)) return () => { throw new TraceSandboxEscape(param, prop); };
       }
       if (prop === Symbol.iterator) {
         // `for..of` must see the SHADOW values, so iterate through this proxy's
@@ -159,7 +185,16 @@ function wrapArray(base: ArrayLike<number>, param: string, shadows: ShadowEntry[
         };
       }
       const val = Reflect.get(target, prop, recv);
-      return typeof val === 'function' ? (val as (...a: unknown[]) => unknown).bind(target) : val;
+      // DENY BY DEFAULT (F4). A method is never bound to the base: `.push` /
+      // `.splice` would write through the sandbox and `.indexOf` / `.join` would
+      // read AROUND the shadow. Reading the property is harmless — the throw
+      // happens on the CALL, so `typeof arr.push === 'function'` style guards in
+      // future emitted code still answer truthfully.
+      if (typeof val === 'function') {
+        const method = typeof prop === 'string' ? prop : String(prop);
+        return () => { throw new TraceSandboxEscape(entry.param, method); };
+      }
+      return val;
     },
     set(_target, prop, value) {
       if (typeof prop === 'string') {
@@ -169,7 +204,7 @@ function wrapArray(base: ArrayLike<number>, param: string, shadows: ShadowEntry[
       return true;   // swallow anything else (a `.length = 0` on a plain Array)
     },
   }) as ArrayLike<number>;
-  return proxy;
+  return { entry, proxy };
 }
 
 /** Shallow copy + one level of array copies — the shape of `modelAttrs`,
@@ -253,9 +288,9 @@ export function runTrace(o: RunTraceOptions): TraceResult {
   const elementIdx = o.elementIdx ?? 0;
   const generation = o.generation ?? 0;
   const shared = o.sharedProxies !== false;
-  /** base array → its proxy, so an aliased buffer is wrapped ONCE (see
-   *  `sharedProxies`). The first parameter name to reach a buffer names it. */
-  const proxyByBase = new Map<object, unknown>();
+  /** base array → its proxy + its shadow entry, so an aliased buffer is wrapped
+   *  ONCE (see `sharedProxies`). */
+  const wrapByBase = new Map<object, { entry: ShadowEntry; proxy: unknown }>();
 
   const wrapped: unknown[] = o.args.map((arg, i) => {
     const name = o.paramNames[i] ?? `arg${i}`;
@@ -277,13 +312,29 @@ export function runTrace(o: RunTraceOptions): TraceResult {
     }
     if (isArrayLike(arg)) {
       if (shared) {
-        const existing = proxyByBase.get(arg as object);
-        if (existing !== undefined) return existing;
-        const p = wrapArray(arg as ArrayLike<number>, name, shadows);
-        proxyByBase.set(arg as object, p);
-        return p;
+        const existing = wrapByBase.get(arg as object);
+        if (existing !== undefined) {
+          // THE WRITE-SIDE NAME WINS (P7b / review finding F1). An aliased buffer
+          // gets ONE shadow, and its `param` used to be whichever name reached it
+          // FIRST — which is always the READ name, because every ABI lists the
+          // `r_<id>` block before the `w_<id>` block (`buildLoopParams` here,
+          // `agentAbi.ts`'s attribute blocks there). The consumers of a write key
+          // a row's NEXT value by `w_<id>`, so under asynchronous cells, the
+          // default async agent attributes, and ALWAYS the division fn (whose
+          // `w_` block aliases `attrRead` by design), every own-element write was
+          // filed under `r_<id>`: the Values tab found nothing, printed
+          // "unchanged", and dumped the real write into the generic unknown-row
+          // fallback. Renaming here — rather than teaching every consumer to try
+          // both names — keeps ONE write, ONE row, under the name that means
+          // "what this element would become".
+          if (name.startsWith('w_')) existing.entry.param = name;
+          return existing.proxy;
+        }
+        const w = wrapArray(arg as ArrayLike<number>, name, shadows);
+        wrapByBase.set(arg as object, w);
+        return w.proxy;
       }
-      return wrapArray(arg as ArrayLike<number>, name, shadows);
+      return wrapArray(arg as ArrayLike<number>, name, shadows).proxy;
     }
     return wrapObject(arg as Record<string, unknown>);
   });

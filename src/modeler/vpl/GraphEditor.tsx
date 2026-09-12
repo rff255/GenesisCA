@@ -1175,7 +1175,10 @@ export function GraphEditorInner() {
   }, []);
 
   const applyTraceMarks = useCallback((isRetry = false) => {
-    const t0 = performance.now();
+    // P7b / F8 — the highlighter's own cost is a DEV probe (`__traceMarkPerf`).
+    // `import.meta.env.DEV` is a compile-time constant, so a production build
+    // drops both `performance.now()` calls and the accumulator writes.
+    const t0 = import.meta.env.DEV ? performance.now() : 0;
     // A fresh (non-retry) invocation restores the retry budget; a retry spends
     // from the one the invocation that scheduled it left behind.
     if (!isRetry) traceRetryRef.current.left = 3;
@@ -1235,9 +1238,14 @@ export function GraphEditorInner() {
 
       const viewNodes = new Map<string, TraceNodeView>();
       const flowHit = new Set<string>();
-      // THE ROOT NODE ITSELF. Its body is the emitted wrapper, so the compiler
-      // records no `f` for it and nothing in the log ever names it — yet it
-      // plainly ran (the trace exists because it did), and the plan lights it.
+      // THE ROOT NODE ITSELF — now a FALLBACK. Since P7b the trace build emits a
+      // real `_tr.f(<rootId>)` (+ its taken DO port) at the head of every root
+      // wrapper, so the root is normally flow event 0 like any other node and is
+      // lit by the loop above. This is kept for the cases the record cannot
+      // cover: a root whose id does not resolve through the origin table (a
+      // synthesized linked-mapping colour pass), and any trace produced before
+      // the emit landed. It is IDEMPOTENT — `flowCount` is only forced to 1 when
+      // no record set it, so the root never double-counts.
       // Only at the top scope: a root cannot live inside a macro.
       const rootNodeId = scope.length === 0 ? traceRootNodeId(entry.root, nodesNow) : null;
       const valueHit = new Set<string>();
@@ -1405,9 +1413,11 @@ export function GraphEditorInner() {
       });
     }
 
-    const dt = performance.now() - t0;
-    const p = tracePerfRef.current;
-    p.n++; p.total += dt; if (dt > p.max) p.max = dt;
+    if (import.meta.env.DEV) {
+      const dt = performance.now() - t0;
+      const p = tracePerfRef.current;
+      p.n++; p.total += dt; if (dt > p.max) p.max = dt;
+    }
   }, [activeGraph, macroDefIndex, macroOutputMap, traceElFor]);
 
   const applyTraceMarksRef = useRef(applyTraceMarks);

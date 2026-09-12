@@ -30,7 +30,7 @@
  */
 
 import type { TraceEvent, TraceWrite } from '../simulator/engine/traceRunner';
-import type { TraceTarget, TraceRootKey } from '../simulator/engine/traceProtocol';
+import type { TraceTarget, TraceRootKey, TraceApproximateTerm } from '../simulator/engine/traceProtocol';
 import { BOND_REQ_NONE, BOND_REQ_ID_BIAS } from '../modeler/vpl/compiler/bondRequestQueue';
 import { unpackNI, unpackNI3, INVALID_NI } from '../modeler/vpl/compiler/niCodec';
 
@@ -210,13 +210,26 @@ export function formatOffset(o: { dr: number; dc: number; dl: number }, is3d: bo
   return is3d ? `(${o.dr}, ${o.dc}, ${o.dl})` : `(${o.dr}, ${o.dc})`;
 }
 
+/** ONE spelling of a cell's coordinates for the whole feature (P7b / review
+ *  finding F11): `(r, c)` in 2D and `(layer L, r, c)` in 3D.
+ *
+ *  The `layer` word is not decoration — a bare `(10, 15, 10)` gives the reader no
+ *  way to tell which of the three numbers is the layer, and the two surfaces had
+ *  drifted into disagreeing about it: the Live bar chip said
+ *  `Tracing cell (layer 10, 15, 10)` while the panel header said
+ *  `Cell (10, 15, 10)` for the SAME cell. `SimulatorView` builds its chip from
+ *  this function too, so they cannot drift again. */
+export function formatCellCoords(idx: number, dims: TraceGridDims): string {
+  const { r, c, l } = cellCoords(idx, dims);
+  return dims.D > 1 ? `(layer ${l}, ${r}, ${c})` : `(${r}, ${c})`;
+}
+
 /** The element label the panel's header carries — `Cell (r, c)` in 2D,
- *  `Cell (layer, r, c)` in 3D, `Agent #id`. */
+ *  `Cell (layer L, r, c)` in 3D, `Agent #id`. */
 export function traceTargetLabel(target: TraceTarget, dims: TraceGridDims): string {
   if (target.kind === 'agent') return `Agent #${target.id}`;
   if (target.idx < 0) return 'Cell';
-  const { r, c, l } = cellCoords(target.idx, dims);
-  return dims.D > 1 ? `Cell (${l}, ${r}, ${c})` : `Cell (${r}, ${c})`;
+  return `Cell ${formatCellCoords(target.idx, dims)}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -350,8 +363,14 @@ function componentIdsOf(attr: TraceAttrSpec): string[] {
 
 export interface TraceRowsResult {
   rows: TraceRow[];
-  /** How many writes no row builder claimed (0 in every shipped model — the
-   *  generic rows exist for a node type nobody has taught this module yet). */
+  /** How many writes no row builder claimed. 0 across every shipped model —
+   *  asserted by `scripts/test-rule-trace.mjs` § B / § K on the SYNCHRONOUS and
+   *  the ASYNCHRONOUS arms both, because the claim was quietly false on the
+   *  async arm until P7b: an aliased `r_x === w_x` buffer reported its writes
+   *  under `r_x`, no `w_` row claimed them, and every own-cell write came out as
+   *  a generic row while the real attribute row said "unchanged" (review finding
+   *  F1, fixed in `traceRunner.ts`). The generic rows remain for a node type
+   *  nobody has taught this module yet. */
   unknownCount: number;
 }
 
@@ -516,6 +535,26 @@ function buildCellExtraRows(input: TraceRowsInput, ctx: RowCtx): void {
       }
     }
   }
+
+  // …and ORIENTATION aimed at another cell. `orientation` is not one of
+  // `input.attrs` (it is the variegation axis, not a user attribute), so the
+  // loop above cannot see it and such a write fell through to the generic
+  // unknown row — the last write in the shipped library that did (Amphiphile,
+  // whose rule turns a NEIGHBOUR; review finding F1's sweep).
+  const om = ctx.byParam.get('w_orientation');
+  if (om) {
+    for (const w of [...om.values()].filter(x => x.index !== idx).sort((a, b) => a.index - b.index)) {
+      ctx.claim('w_orientation', w.index);
+      const off = neighbourOffset(idx, w.index, input.dims);
+      rows.push({
+        key: `nbr:orientation:${w.index}`,
+        name: `${formatOffset(off, is3d)} Orientation`,
+        current: { kind: 'number', v: w.prev },
+        next: { kind: 'number', v: w.value },
+        changed: w.value !== w.prev, note: 'write to another cell',
+      });
+    }
+  }
 }
 
 /** An agent's non-attribute rows: geometry, the force the rule accumulated, the
@@ -640,8 +679,7 @@ function buildAgentExtraRows(input: TraceRowsInput, ctx: RowCtx): void {
     if (!m) continue;
     for (const w of [...m.values()].sort((a, b) => a.index - b.index)) {
       ctx.claim(`_field_${f.id}`, w.index);
-      const { r, c, l } = cellCoords(w.index, input.dims);
-      const where = input.dims.D > 1 ? `(${l}, ${r}, ${c})` : `(${r}, ${c})`;
+      const where = formatCellCoords(w.index, input.dims);   // F11: one spelling
       rows.push({
         key: `field:${f.id}:${w.index}`, name: `Field ${f.name}`,
         current: { kind: 'number', v: w.prev }, next: { kind: 'number', v: w.value },
@@ -738,11 +776,23 @@ function pushUnknownRows(
 // The "approximate" caveat — the brainstorm's table, in one sentence
 // ---------------------------------------------------------------------------
 
-/** WHY a trace is approximate, in the words the header line uses. The worker
- *  ships one boolean (it knows the reasons but not the user's vocabulary), so
- *  the model's own settings pick the sentence — and when several apply, the one
- *  that changes the answer most is named first. */
+/** WHY a trace is approximate, in the words the header line uses.
+ *
+ *  THE WIRE TERM IS THE AUTHORITY (P7b / review finding F6). The worker decides
+ *  `approximate` from things only it can see — the emitted text (does this root
+ *  draw from the RNG? does it write an indicator accumulator?) and the run's own
+ *  state (is the spatial hash a generation old?) — and since P7b it ships WHICH
+ *  term fired alongside the boolean. Before that the panel had to re-derive the
+ *  reason from the MODEL, which cannot see any of those three: a synchronous,
+ *  agent-free model that merely accumulates an indicator (Kelp War) matched none
+ *  of the model-visible cases and fell through to the circular "see the badge for
+ *  why" — a reason that tells the user to read the badge they are hovering.
+ *
+ *  The model-derived guess survives as the FALLBACK, for a reply that carries no
+ *  term (an older worker, or a term this build does not recognise). */
 export function approximateReason(opts: {
+  /** The worker's own verdict, when the reply carried one. */
+  term?: TraceApproximateTerm | undefined;
   asyncCells: boolean;
   agentsAsync: boolean;
   /** Agents are running AND they deposit into a cell field this rule reads —
@@ -752,6 +802,16 @@ export function approximateReason(opts: {
   webgpu: boolean;
   kind: 'cells' | 'agents';
 }): string {
+  switch (opts.term) {
+    case 'asyncCells': return 'approximate under asynchronous updates';
+    case 'asyncAgents': return 'approximate — agent attributes update asynchronously';
+    case 'indicators':
+      return 'approximate — the rule accumulates an indicator other cells also write this generation';
+    case 'agentField': return 'approximate — agents deposit into the field after this trace';
+    case 'staleAgentHash': return 'approximate — the neighbour hash was built a generation ago';
+    case 'rng': return 'approximate — the rule draws random numbers';
+    default: break;
+  }
   if (opts.kind === 'cells' && opts.asyncCells) return 'approximate under asynchronous updates';
   if (opts.kind === 'agents' && opts.agentsAsync) return 'approximate — agent attributes update asynchronously';
   if (opts.kind === 'cells' && opts.agentsWriteField) {
@@ -759,7 +819,7 @@ export function approximateReason(opts: {
   }
   if (opts.usesRng) return 'approximate — the rule draws random numbers';
   if (opts.webgpu) return 'approximate — WebGPU computes in 32-bit';
-  // The worker knows the reason; the panel only knows the model. A term it
-  // cannot name is still worth flagging — the badge's tooltip lists them all.
+  // Neither the wire nor the model could name a term. Still worth flagging — the
+  // badge's tooltip lists them all.
   return 'approximate — see the badge for why';
 }

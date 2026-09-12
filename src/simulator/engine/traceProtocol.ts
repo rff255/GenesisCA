@@ -1,11 +1,16 @@
 /** Rule Trace — the WORKER PROTOCOL (P2): the message shapes, the root keys, and
  *  the one helper that turns a TRACE BUILD's compile results into the payload.
  *
- *  DOM-free and dependency-free at RUNTIME (every `compile.ts` import is
- *  `import type`, erased at build) so the worker, the main thread and a Node
- *  harness can all import it. It exists so the two sides of the protocol are ONE
- *  declaration rather than two mirrored guesses — the `agentAbi.ts` discipline,
- *  applied to a message instead of an ABI.
+ *  DOM-free, and free of the COMPILER at runtime: every `compile.ts` import is
+ *  `import type`, erased at build. Its one runtime import is the compiler's
+ *  `traceOrigin.ts`, for the root keys alone — a side-effect-free module whose
+ *  other exports tree-shake away, so the worker bundle still carries nothing but
+ *  the key strings it always did (P7b / F9: those keys had been spelled once
+ *  here and once in the compiler, and a key built under one spelling and
+ *  filtered under another fails SILENTLY). The worker, the main thread and a
+ *  Node harness can all import this module. It exists so the two sides of the
+ *  protocol are ONE declaration rather than two mirrored guesses — the
+ *  `agentAbi.ts` discipline, applied to a message instead of an ABI.
  *
  *  WHO OWNS WHAT
  *   - The MAIN THREAD compiles the graph twice while a trace target exists: the
@@ -25,23 +30,28 @@ import type { CompileResult, AgentCompileResult } from '../../modeler/vpl/compil
 // ---------------------------------------------------------------------------
 
 /** The trace registry's key for one emitted root. MUST match the keys
- *  `compile.ts` writes into `traceParamNames` — the helpers below are the only
- *  place either side spells them. */
-export type TraceRootKey = string;
+ *  `compile.ts` writes into `traceParamNames`, so since P7b (review finding F9)
+ *  there is exactly ONE definition of them — in the COMPILER's `traceOrigin.ts`,
+ *  because the compiler is the side that WRITES them — and this module simply
+ *  re-exports it. Every existing engine-side import keeps working unchanged.
+ *
+ *  `traceOrigin.ts` is side-effect-free ESM whose other exports (the origin
+ *  resolver) the worker never references, so this costs the worker bundle only
+ *  the key strings it already carried. */
+export {
+  TRACE_ROOT_STEP, TRACE_ROOT_INIT, TRACE_ROOT_GRID_INIT,
+  TRACE_ROOT_AGENT_BEHAVIOUR, TRACE_ROOT_AGENT_INIT, TRACE_ROOT_AGENT_DIVISION,
+  TRACE_PREFIX_GRID_PERIODIC, TRACE_PREFIX_INPUT_COLOR, TRACE_PREFIX_OUTPUT_MAPPING,
+  TRACE_PREFIX_AGENT_PERIODIC, TRACE_PREFIX_AGENT_OUTPUT_MAPPING, TRACE_PREFIX_AGENT_INPUT_MAPPING,
+  traceGridPeriodicKey, traceInputColorKey, traceOutputMappingKey,
+  traceAgentPeriodicKey, traceAgentOutputMappingKey, traceAgentInputMappingKey,
+} from '../../modeler/vpl/compiler/traceOrigin';
+export type { TraceRootKey } from '../../modeler/vpl/compiler/traceOrigin';
 
-export const TRACE_ROOT_STEP = 'step';
-export const TRACE_ROOT_INIT = 'init';
-export const TRACE_ROOT_GRID_INIT = 'gridInit';
-export const TRACE_ROOT_AGENT_BEHAVIOUR = 'agentBehaviour';
-export const TRACE_ROOT_AGENT_INIT = 'agentInit';
-export const TRACE_ROOT_AGENT_DIVISION = 'agentDivision';
-
-export const traceGridPeriodicKey = (nodeId: string): TraceRootKey => `gridPeriodic:${nodeId}`;
-export const traceInputColorKey = (mappingId: string): TraceRootKey => `inputColor:${mappingId}`;
-export const traceOutputMappingKey = (mappingId: string): TraceRootKey => `outputMapping:${mappingId}`;
-export const traceAgentPeriodicKey = (nodeId: string): TraceRootKey => `agentPeriodic:${nodeId}`;
-export const traceAgentOutputMappingKey = (mappingId: string): TraceRootKey => `agentOutputMapping:${mappingId}`;
-export const traceAgentInputMappingKey = (mappingId: string): TraceRootKey => `agentInputMapping:${mappingId}`;
+import {
+  TRACE_PREFIX_GRID_PERIODIC, TRACE_PREFIX_AGENT_PERIODIC,
+  type TraceRootKey,
+} from '../../modeler/vpl/compiler/traceOrigin';
 
 // ---------------------------------------------------------------------------
 // The target
@@ -117,14 +127,14 @@ export function traceCodesFromCompile(
 
   if (cellRes?.trace) {
     const paramNames = cellRes.trace.paramNames;
-    const gpKeys = keysWithPrefix(paramNames, 'gridPeriodic:');
+    const gpKeys = keysWithPrefix(paramNames, TRACE_PREFIX_GRID_PERIODIC);
     const cell: TraceCellCodes = { paramNames };
     if (cellRes.stepCode) cell.stepCode = cellRes.stepCode;
     if (cellRes.initCode) cell.initCode = cellRes.initCode;
     if (cellRes.gridInitCode) cell.gridInitCode = cellRes.gridInitCode;
     if (cellRes.gridPeriodicCodes?.length) {
       cell.gridPeriodicCodes = cellRes.gridPeriodicCodes.map((p, i) => ({
-        rootKey: gpKeys[i] ?? `gridPeriodic:#${i}`,
+        rootKey: gpKeys[i] ?? `${TRACE_PREFIX_GRID_PERIODIC}#${i}`,
         period: p.period, phase: p.phase, code: p.code,
       }));
     }
@@ -135,14 +145,14 @@ export function traceCodesFromCompile(
 
   if (agentRes?.trace) {
     const paramNames = agentRes.trace.paramNames;
-    const apKeys = keysWithPrefix(paramNames, 'agentPeriodic:');
+    const apKeys = keysWithPrefix(paramNames, TRACE_PREFIX_AGENT_PERIODIC);
     const agent: TraceAgentCodes = { paramNames };
     if (agentRes.behaviourCode) agent.behaviourCode = agentRes.behaviourCode;
     if (agentRes.initCode) agent.initCode = agentRes.initCode;
     if (agentRes.divisionCode) agent.divisionCode = agentRes.divisionCode;
     if (agentRes.periodicCodes?.length) {
       agent.periodicCodes = agentRes.periodicCodes.map((p, i) => ({
-        rootKey: apKeys[i] ?? `agentPeriodic:#${i}`,
+        rootKey: apKeys[i] ?? `${TRACE_PREFIX_AGENT_PERIODIC}#${i}`,
         period: p.period, phase: p.phase, code: p.code,
       }));
     }
@@ -185,7 +195,16 @@ export interface SetTraceMsg {
   everyGen?: boolean;
 }
 
-/** Trace the current state NOW (the simulation is paused, or the user asked). */
+/** Trace the current state NOW (the simulation is paused, or the user asked).
+ *
+ *  ⚠ NO SENDER at present (P7b / review finding F12). Setting a target used to
+ *  post this straight after `setTrace`, whose handler ALREADY ends in
+ *  `scheduleTraceOfCurrentState()` — so every target set ran two identical
+ *  traces of every root and filed two replies into the timeline ring. The
+ *  redundant post is gone. The message and its handler are KEPT because they are
+ *  the seam a "re-trace now" gesture needs (and the one the on-demand cadence is
+ *  named after); a future sender must not re-introduce the duplicate — check
+ *  whether the state-changing message it follows already schedules a trace. */
 export interface RequestTraceMsg { type: 'requestTrace' }
 
 /** Drop the target, the fns, the breakpoints — the whole session. */
@@ -194,6 +213,23 @@ export interface ClearTraceMsg { type: 'clearTrace' }
 // ---------------------------------------------------------------------------
 // worker → main thread
 // ---------------------------------------------------------------------------
+
+/** WHY a trace is an approximation rather than a prediction. One token per term
+ *  in the worker's `traceApproximateTerm`; the panel turns it into a sentence.
+ *
+ *  - `asyncCells`     the cell's real turn comes after some neighbours have
+ *                     already written this generation
+ *  - `asyncAgents`    agent attributes are single-buffered (the engine default)
+ *  - `indicators`     the rule accumulates into an indicator every OTHER element
+ *                     also writes this generation
+ *  - `agentField`     the agents deposit into a cell field AFTER the trace point
+ *  - `staleAgentHash` a spatial-hash query against a hash built for an earlier
+ *                     generation (the agents have moved since it was binned)
+ *  - `rng`            the sandbox draws from its own per-(element, generation)
+ *                     stream, so the draws differ from the real run's (D1)
+ */
+export type TraceApproximateTerm =
+  | 'asyncCells' | 'asyncAgents' | 'indicators' | 'agentField' | 'staleAgentHash' | 'rng';
 
 /** One traced root. `events` / `writes` are `traceRunner.ts`'s own types — the
  *  reply is a plain structured-clonable object (no typed arrays, no transfers:
@@ -227,10 +263,27 @@ export interface TraceReplyMsg {
    *  periodic event), which has no element. */
   snapshot?: Record<string, number>;
   /** The trace CANNOT be an exact prediction of this element's next state —
-   *  see `traceApproximateReason` in the worker for the exact terms (async
+   *  see `traceApproximateTerm` in the worker for the exact terms (async
    *  updates, RNG, indicator accumulation, a stale neighbour hash, a field the
    *  agents deposit into after the trace was taken). */
   approximate: boolean;
+  /** WHICH term fired, when `approximate` is true (P7b / review finding F6).
+   *
+   *  The worker is the only side that KNOWS: two of the terms are read off the
+   *  emitted TEXT (does this root draw from the RNG? does it write an indicator
+   *  accumulator?) and one off the run's own state (is the spatial hash a
+   *  generation old?), none of which the main thread can see. Before P7b it
+   *  shipped only the boolean and the panel guessed the sentence from the MODEL —
+   *  which for a synchronous, agent-free model that merely accumulates an
+   *  indicator had nothing to guess from and fell back to the circular "see the
+   *  badge for why". A TERM rather than a sentence: user-facing vocabulary stays
+   *  on the main thread (impact map D3 — the worker holds no presentation state),
+   *  and a term the panel does not recognise degrades to that same fallback
+   *  instead of putting worker prose on screen.
+   *
+   *  Exactly ONE term: the first that fired, in "changes the answer most" order.
+   *  The badge's tooltip lists them all regardless. */
+  approximateReason?: TraceApproximateTerm;
   /** Set when the traced fn threw (captured by the sandbox, never rethrown). */
   error?: string;
 }
@@ -264,5 +317,7 @@ export interface TraceCompileErrorsMsg {
   errors: Array<{ root: TraceRootKey; message: string }>;
 }
 
-export type TraceWorkerMsg = SetTraceMsg | RequestTraceMsg | ClearTraceMsg;
-export type TraceReply = TraceReplyMsg | TraceBreakMsg | TraceTargetLostMsg | TraceCompileErrorsMsg;
+// (P7b / review finding F9: the `TraceWorkerMsg` / `TraceReply` umbrella unions
+// were exported but never referenced — every consumer names the ONE message it
+// handles. Removed rather than kept as decoration; a union nobody narrows is a
+// second place to forget a new message kind.)

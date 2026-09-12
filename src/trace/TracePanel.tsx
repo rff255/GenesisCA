@@ -283,7 +283,11 @@ if (import.meta.env.DEV) {
 }
 
 export function TracePanel() {
-  const renderStart = performance.now();
+  // P7b / F8 — the panel's own render cost is a DEV probe (`__tracePanelPerf`),
+  // so it costs a production build nothing: `import.meta.env.DEV` is a compile-
+  // time constant Vite folds, and the `performance.now()` pairs, the accumulator
+  // writes and the layout effect's body all fold away with it.
+  const renderStart = import.meta.env.DEV ? performance.now() : 0;
   const { model } = useModel();
   const session = useSyncExternalStore(subscribeTraceSession, getTraceSession);
   const timeline = useSyncExternalStore(subscribeTraceTimeline, getTraceTimeline);
@@ -294,6 +298,7 @@ export function TracePanel() {
   // Render + commit cost of THIS panel, every render (see `panelPerf`).
   const bodyMsRef = useRef(0);
   useLayoutEffect(() => {
+    if (!import.meta.env.DEV) return;
     const dt = performance.now() - renderStart;
     panelPerf.n++;
     panelPerf.commit += dt; if (dt > panelPerf.commitMax) panelPerf.commitMax = dt;
@@ -465,10 +470,13 @@ export function TracePanel() {
     ? resolveLabel(model, session.paused.nodeId, kind).label
     : null;
 
-  bodyMsRef.current = performance.now() - renderStart;
+  if (import.meta.env.DEV) bodyMsRef.current = performance.now() - renderStart;
 
   const approxNote = entry?.approximate
     ? approximateReason({
+      // The worker's own term leads; everything below is the fallback for a
+      // reply that carries none (P7b / F6).
+      ...(entry.approximateReason !== undefined ? { term: entry.approximateReason } : {}),
       asyncCells: model.properties.updateMode === 'asynchronous',
       // `agentUpdateMode` defaults to ASYNC when unset (the engine's own
       // default), so an absent field is the asynchronous case, not the safe one.
@@ -787,9 +795,15 @@ function StepsTab({
           className={`${styles.srow} ${s.flowIndex !== null && s.flowIndex === cursor ? styles.srowCur : ''}`}
           onMouseDown={e => e.preventDefault()}
           onClick={() => { if (s.flowIndex !== null) setCursor(s.flowIndex); }}
-          role="button"
-          tabIndex={-1}
-          title={s.flowIndex !== null ? 'Put the cursor on this node' : 'A queued request — the cursor does not stop here'}
+          // P7b / F10 — NO `role="button"`. It sat on a `<div tabIndex={-1}>`
+          // with no key handler, i.e. it told assistive tech "this is a button"
+          // and then refused the Enter / Space a button owes. A real `<button>`
+          // is not available either: the row already CONTAINS the value-expander
+          // button below, and a button inside a button is invalid. The honest
+          // shape is a plain clickable row — and the keyboard path to the cursor
+          // is the one the feature actually ships, the global `]` / `[` keys,
+          // which reach the same `setCursor` without needing this row focused.
+          title={s.flowIndex !== null ? 'Put the cursor on this node (or step with ] and [)' : 'A queued request — the cursor does not stop here'}
         >
           <span className={styles.sidx}>{s.flowIndex !== null ? s.flowIndex + 1 : ''}</span>
           {s.request

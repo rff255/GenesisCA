@@ -81,7 +81,7 @@ import {
   TRACE_ROOT_STEP, TRACE_ROOT_INIT, TRACE_ROOT_GRID_INIT,
   TRACE_ROOT_AGENT_BEHAVIOUR, TRACE_ROOT_AGENT_INIT, TRACE_ROOT_AGENT_DIVISION,
   traceInputColorKey, traceOutputMappingKey, traceAgentOutputMappingKey, traceAgentInputMappingKey,
-  type TraceCodes, type TraceRootKey, type TraceTarget,
+  type TraceCodes, type TraceRootKey, type TraceTarget, type TraceApproximateTerm,
   type SetTraceMsg, type RequestTraceMsg, type ClearTraceMsg,
 } from './traceProtocol';
 
@@ -992,6 +992,18 @@ let generationCellView: Int32Array | null = null;
 let rngCellView: Uint32Array | null = null;
 let generationAgentView: Float64Array | null = null;
 function setGeneration(v: number): void {
+  // RULE TRACE (P7b / review finding F3) — DROP THE BREAKPOINT LATCH ON A
+  // NON-MONOTONIC MOVE. `traceBreakGen` remembers "a breakpoint already fired on
+  // THIS generation number" so the `step` that resumes runs that generation
+  // through instead of breaking on it again. The latch is therefore only
+  // meaningful while the counter keeps climbing: the moment the counter is RESET
+  // or RESTORED (Reset, `loadState`, `init`, and every Overseer preset load that
+  // goes through them), a latch left over from generation 0 makes the first
+  // legitimate break at the new generation 0 get silently swallowed — the user
+  // sets a breakpoint, breaks at gen 0, resets, plays, and the simulation runs
+  // straight past the mark exactly once. Cleared HERE, at the one seam that moves
+  // the counter (see the L2 note above), so no future caller has to remember.
+  if (v <= generation) traceBreakGen = -1;
   generation = v;
   if (generationCellView) generationCellView[0] = v;
   if (generationAgentView) generationAgentView[0] = v;
@@ -7080,6 +7092,29 @@ function postInspectCellsData(): void {
 // because the WebGPU/agent step batches call sendColors from an async tail.
 let stepAckId: number | undefined;
 
+/** RULE TRACE (P7b / review finding F7) — ride the `stepped` message with "a
+ *  breakpoint break follows this batch".
+ *
+ *  Invariant I4 posts `stepped` FIRST and `traceBreak` second, so the main thread
+ *  sees an ordinary completed batch and then the reason it stopped. Both are
+ *  posted in the same worker task, but they arrive as two SEPARATE main-thread
+ *  tasks — and the play loop schedules its next batch from a `requestAnimationFrame`
+ *  armed inside the `stepped` handler. A vsync boundary falling between the two
+ *  tasks therefore fires that rAF while `playingRef` is still true, and the run
+ *  advances a second generation (it breaks again immediately, so the symptom is
+ *  "Resume occasionally moves two generations"). Cancelling afterwards cannot
+ *  help: by the time `traceBreak` is handled the extra batch has already been
+ *  posted, and it breaks on its own after one generation — before any
+ *  chunk-boundary cancel poll.
+ *
+ *  So the news travels on the EARLIER message: the `stepped` handler clears
+ *  `playingRef` synchronously and the window closes. The field is absent in every
+ *  session with no pending break (one null test per batch — the trace's
+ *  zero-cost-when-off rule). */
+function traceBreakPendingField(): { traceBreakPending?: true } {
+  return tracePendingBreak !== null ? { traceBreakPending: true } : {};
+}
+
 function sendColors(): void {
   const ackId = stepAckId;
   stepAckId = undefined;
@@ -7221,11 +7256,11 @@ function sendColors(): void {
   if ((gridDisplayOwnedByGpu() || agentCompositeActive) && !recordingNeedsColors) {
     if (glyphsPayload) {
       self.postMessage(
-        { type: 'stepped', generation, indicators, sieActive, reqId: ackId, glyphCodes: glyphsPayload.codes, glyphColors: glyphsPayload.colors, agents: agentsPayload, agentLiveCount },
+        { type: 'stepped', ...traceBreakPendingField(), generation, indicators, sieActive, reqId: ackId, glyphCodes: glyphsPayload.codes, glyphColors: glyphsPayload.colors, agents: agentsPayload, agentLiveCount },
         { transfer: [glyphsPayload.codes.buffer, glyphsPayload.colors.buffer, ...agentTransfers] },
       );
     } else {
-      self.postMessage({ type: 'stepped', generation, indicators, sieActive, reqId: ackId, agents: agentsPayload, agentLiveCount }, { transfer: agentTransfers });
+      self.postMessage({ type: 'stepped', ...traceBreakPendingField(), generation, indicators, sieActive, reqId: ackId, agents: agentsPayload, agentLiveCount }, { transfer: agentTransfers });
     }
     postInspectCellsData();
     return;
@@ -7236,7 +7271,7 @@ function sendColors(): void {
   // the WebGPU direct-render branch above). At agent-world scales this is the
   // difference between a usable sim and copying WÃƒâ€šÃ‚Â·HÃƒâ€šÃ‚Â·DÃƒâ€šÃ‚Â·4 bytes every step.
   if (!gridCellsEnabled && (!colorsDirty || colors.length === 0)) {
-    self.postMessage({ type: 'stepped', generation, indicators, sieActive, reqId: ackId, agents: agentsPayload, agentLiveCount }, { transfer: agentTransfers });
+    self.postMessage({ type: 'stepped', ...traceBreakPendingField(), generation, indicators, sieActive, reqId: ackId, agents: agentsPayload, agentLiveCount }, { transfer: agentTransfers });
     postInspectCellsData();
     return;
   }
@@ -7244,12 +7279,12 @@ function sendColors(): void {
   colorsDirty = false;
   if (glyphsPayload) {
     self.postMessage(
-      { type: 'stepped', generation, colors: copy, indicators, sieActive, reqId: ackId, glyphCodes: glyphsPayload.codes, glyphColors: glyphsPayload.colors, agents: agentsPayload, agentLiveCount },
+      { type: 'stepped', ...traceBreakPendingField(), generation, colors: copy, indicators, sieActive, reqId: ackId, glyphCodes: glyphsPayload.codes, glyphColors: glyphsPayload.colors, agents: agentsPayload, agentLiveCount },
       { transfer: [copy.buffer, glyphsPayload.codes.buffer, glyphsPayload.colors.buffer, ...agentTransfers] },
     );
   } else {
     self.postMessage(
-      { type: 'stepped', generation, colors: copy, indicators, sieActive, reqId: ackId, agents: agentsPayload, agentLiveCount },
+      { type: 'stepped', ...traceBreakPendingField(), generation, colors: copy, indicators, sieActive, reqId: ackId, agents: agentsPayload, agentLiveCount },
       { transfer: [copy.buffer, ...agentTransfers] },
     );
   }
@@ -7358,6 +7393,25 @@ let traceLastHitRoot: TraceRootKey = TRACE_ROOT_STEP;
 /** Coalescing latch for the on-demand cadence (a paint drag posts one message
  *  per frame; a stroke must trace ONCE). */
 let traceRequestPending = false;
+/** THE SAMPLED CADENCE'S FLOOR (P7b / review finding F13).
+ *
+ *  "One trace per root per BATCH" is the right RULE but the wrong RATE once the
+ *  batch is small: a tiny WebGPU 3D grid at G/F 1 runs ~1900 generations a
+ *  second, so the sampled hook fired ~1900 times a second — each one a GPU→CPU
+ *  readback stall plus a `trace` message plus a Trace-panel render (~35 React
+ *  commits/s measured), for a cost of ~30% throughput on a feature nobody can
+ *  read at that rate. 10 Hz is above the eye's ability to follow a changing
+ *  values table and below the rate at which the readback matters.
+ *
+ *  ONLY the sampled cadence is throttled. The every-generation cadence is the
+ *  user asking to see every generation (and is what a breakpoint runs on), and
+ *  the on-demand cadence is a direct answer to a gesture — both would be lies if
+ *  dropped. The throttle is leading + TRAILING: the last batch before a pause
+ *  must still reach the panel, or the table would sit up to 100 ms stale exactly
+ *  when the user stopped to read it. */
+const TRACE_SAMPLE_MIN_MS = 100;
+let traceSampledAt = 0;
+let traceSampleTrailing: ReturnType<typeof setTimeout> | null = null;
 /** Set by `recompile`: the fns in hand were built from the PREVIOUS graph and
  *  must not be run. The main thread's `setTrace` with fresh codes clears it (P3
  *  sends `recompile` first — the engine must not wait on the trace compile). */
@@ -7498,17 +7552,31 @@ function traceAgentId(): number | null {
  *     step runs BEFORE the cell step, so this generation's deposit is not in the
  *     numbers the trace read (the trace is taken before the generation, which is
  *     what a breakpoint means).
+ *
+ *  RETURNS THE TERM, not a boolean (P7b / review finding F6). The main thread can
+ *  see the MODEL but not the emitted text nor the run's hash age, so a panel
+ *  guessing the sentence from the model alone had nothing to say about the
+ *  commonest term of all — a synchronous, agent-free rule that accumulates an
+ *  indicator — and printed the circular "approximate — see the badge for why".
+ *  The term travels on the reply; the panel owns the wording (impact map D3).
+ *
+ *  ONE term, first-fired, ordered by how much it moves the answer: an
+ *  out-of-order turn beats a shared accumulator beats a deposit that has not
+ *  landed yet beats a stale bin beats a different random draw.
  */
-function traceApproximate(entry: TraceFnEntry): boolean {
-  if (entry.usesRng || entry.usesIndicatorWrite) return true;
+function traceApproximateTerm(entry: TraceFnEntry): TraceApproximateTerm | null {
   if (entry.side === 'cell') {
-    if (updateMode === 'asynchronous') return true;
-    if (agentStore && simulateAgents && agentUsesField) return true;
-    return false;
+    if (updateMode === 'asynchronous') return 'asyncCells';
+    if (entry.usesIndicatorWrite) return 'indicators';
+    if (agentStore && simulateAgents && agentUsesField) return 'agentField';
+    if (entry.usesRng) return 'rng';
+    return null;
   }
-  if (entry.usesAgentHash && currentAgentHashGen !== generation) return true;
-  if (agentStore && !agentStore.syncAttrs) return true;
-  return false;
+  if (agentStore && !agentStore.syncAttrs) return 'asyncAgents';
+  if (entry.usesIndicatorWrite) return 'indicators';
+  if (entry.usesAgentHash && currentAgentHashGen !== generation) return 'staleAgentHash';
+  if (entry.usesRng) return 'rng';
+  return null;
 }
 
 /** The first breakpoint id in an event log, or null. Value (`v`) and flow (`f`)
@@ -7620,9 +7688,11 @@ function traceRootSync(
   // buffers (I2), so the two orders agree — and reading here keeps the snapshot
   // out of the path of a root that bails early.
   const snapshot = traceSnapshot(target);
+  const approxTerm = traceApproximateTerm(entry);
   self.postMessage({
     type: 'trace', seq: ++traceSeq, root: rootKey, gen: generation, target,
-    events, writes, truncated: result.truncated, approximate: traceApproximate(entry),
+    events, writes, truncated: result.truncated, approximate: approxTerm !== null,
+    ...(approxTerm !== null ? { approximateReason: approxTerm } : {}),
     ...(snapshot !== undefined ? { snapshot } : {}),
     ...(result.error !== undefined ? { error: result.error } : {}),
   });
@@ -7814,7 +7884,34 @@ async function traceAfterBatch(traceable: boolean): Promise<void> {
   if (!traceable || !traceArmed() || traceFns.size === 0) return;
   if (tracePendingBreak !== null) return;
   if (traceEveryGen && generation === traceBreakGen) return;
+  // The every-generation cadence is the user asking for every generation — never
+  // throttled (and it is the cadence a breakpoint runs on).
+  if (traceEveryGen) { await traceCurrentState(); return; }
+  const now = performance.now();
+  const wait = TRACE_SAMPLE_MIN_MS - (now - traceSampledAt);
+  if (wait > 0) {
+    // TRAILING EDGE — the batch we are dropping may be the LAST one (the user
+    // just hit Pause), and a panel frozen on a 100 ms-old state at the exact
+    // moment the run stops is the one place this throttle could lie. One timer
+    // at a time; `traceCurrentState` re-checks every guard, so a timer that
+    // outlives its session is a no-op rather than a stray trace.
+    if (traceSampleTrailing === null) {
+      traceSampleTrailing = setTimeout(() => {
+        traceSampleTrailing = null;
+        traceSampledAt = performance.now();
+        void traceCurrentState();
+      }, wait);
+    }
+    return;
+  }
+  traceSampledAt = now;
   await traceCurrentState();
+}
+
+/** Drop a pending trailing sampled trace (the session is ending or restarting). */
+function cancelTraceSampleTrailing(): void {
+  if (traceSampleTrailing !== null) { clearTimeout(traceSampleTrailing); traceSampleTrailing = null; }
+  traceSampledAt = 0;
 }
 
 // ---------------------------------------------------------------------------
@@ -7960,8 +8057,10 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
       if (msg.codes) installTraceCodes(msg.codes);
       if (msg.breakpoints) traceBreakIds = new Set(msg.breakpoints);
       if (msg.everyGen !== undefined) traceEveryGen = !!msg.everyGen;
-      // A fresh session must not inherit the previous one's "already broke here".
+      // A fresh session must not inherit the previous one's "already broke here",
+      // nor its sampled-cadence floor (the user just pointed at a new element).
       traceBreakGen = -1;
+      cancelTraceSampleTrailing();
       // Trace once immediately: the user just pointed at an element and expects
       // to see its rule, whether or not the simulation is running.
       scheduleTraceOfCurrentState();
@@ -7979,6 +8078,7 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
       traceBreakGen = -1;
       tracePendingBreak = null;
       traceCodesStale = false;
+      cancelTraceSampleTrailing();
       break;
     }
 

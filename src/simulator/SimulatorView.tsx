@@ -25,6 +25,9 @@ import {
   resetTraceSeq, subscribeTraceSession, getTraceSession, getTraceOrigin as getTraceOriginTable,
   type TraceGraphKind,
 } from '../trace/traceState';
+// P7b / F11 — the Live chip's cell coordinates come from the Trace panel's own
+// formatter, so the two surfaces cannot drift apart again.
+import { formatCellCoords } from '../trace/traceValues';
 import { resolveTraceOrigin } from '../modeler/vpl/compiler/traceOrigin';
 import { getNodeDef } from '../modeler/vpl/nodes/registry';
 import { LiveViewportBar } from '../live/LiveViewportBar';
@@ -7757,7 +7760,16 @@ export function SimulatorView({ visible = true, activeTab = true, live = false, 
       // button sets), so `useEffect([playing])` posts its usual `cancelStep`,
       // the transport glyph flips and every other pause consumer follows. The
       // extra `cancelStep` is harmless - the batch it would shorten is over.
+      //
+      // P7b / F7: the ref is cleared SYNCHRONOUSLY (the `stepped` that preceded
+      // this one already did it via `traceBreakPending`; repeating it costs
+      // nothing and keeps this handler correct on its own), and the `cancelStep`
+      // is posted HERE rather than waiting for `useEffect([playing])` to notice
+      // the state change a commit later — that is the mechanism Pause uses, and
+      // it also drops any reqId-less `step` still queued in the worker.
       playingRef.current = false;
+      if (nextStepRaf.current != null) { cancelAnimationFrame(nextStepRaf.current); nextStepRaf.current = null; }
+      workerRef.current?.postMessage({ type: 'cancelStep' });
       setPlaying(false);
       const kind: TraceGraphKind = String(msg.root).startsWith('agent') ? 'agents' : 'cells';
       storeSetPaused({ root: msg.root, gen: msg.gen, nodeId: msg.nodeId });
@@ -7816,6 +7828,16 @@ export function SimulatorView({ visible = true, activeTab = true, live = false, 
       return;
     }
     if (msg.type === 'stepped') {
+      // RULE TRACE (P7b / F7) — THE BREAK IS ALREADY DECIDED. The worker sets
+      // this when the `traceBreak` it is about to post is already pending. It
+      // has to reach us HERE, on the earlier message: the next batch is armed
+      // from a rAF scheduled inside this very handler, and a vsync boundary
+      // between the two message tasks would fire it while `playingRef` was still
+      // true — one extra generation per resume, intermittently. Clearing the REF
+      // (not the state) is enough: `sendNextStep` and the rAF `tick` both gate on
+      // it, and the `traceBreak` handler right behind this one owns the visible
+      // pause.
+      if (msg.traceBreakPending) playingRef.current = false;
       // `colors` may be ABSENT: WebGPU direct render skips it, and agents-only
       // models ship the (static) buffer only when it changed — keep the last one.
       if (msg.colors !== undefined) {
@@ -9400,8 +9422,12 @@ export function SimulatorView({ visible = true, activeTab = true, live = false, 
       storeClearTrace();
       setTracePausedAt(null);
     } else {
+      // ONE trace per target set (P7b / review finding F12). `setTrace`'s own
+      // handler ends with `scheduleTraceOfCurrentState()` — pointing at an
+      // element already traces it, whether or not the simulation is running —
+      // so the `requestTrace` that used to follow simply ran a SECOND, identical
+      // trace of every root and posted a second reply into the timeline ring.
       postSetTrace(buildTraceCodes());
-      worker?.postMessage({ type: 'requestTrace' });
     }
     // The mark lives on the cursor-highlight layer, which repaints on a scene
     // draw or a pointer move - a target set while PAUSED would otherwise not
@@ -9486,15 +9512,12 @@ export function SimulatorView({ visible = true, activeTab = true, live = false, 
   const traceChipLabel = useMemo(() => {
     const parts: string[] = [];
     if (traceCellTarget != null) {
-      const w = gridWidth.current, h = gridHeight.current;
-      const wh = Math.max(1, w * h);
-      const layer = Math.floor(traceCellTarget / wh);
-      const rem = traceCellTarget - layer * wh;
-      const row = Math.floor(rem / Math.max(1, w));
-      const col = rem - row * Math.max(1, w);
-      parts.push(gridDepth.current > 1
-        ? `Tracing cell (layer ${layer}, ${row}, ${col})`
-        : `Tracing cell (${row}, ${col})`);
+      // P7b / F11 — the SAME formatter the Trace panel's header uses, so the
+      // chip and the header cannot say `(layer 10, 15, 10)` and `(10, 15, 10)`
+      // about one cell again.
+      parts.push(`Tracing cell ${formatCellCoords(traceCellTarget, {
+        W: gridWidth.current, H: gridHeight.current, D: gridDepth.current,
+      })}`);
     }
     if (traceAgentTarget != null) parts.push(`Tracing agent #${traceAgentTarget}`);
     return parts.length === 0 ? null : parts.join(' · ');

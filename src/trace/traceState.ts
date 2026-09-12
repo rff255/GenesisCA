@@ -46,7 +46,7 @@
 import type { TraceOrigin, TraceOriginTable } from '../modeler/vpl/compiler/traceOrigin';
 import { resolveTraceOrigin } from '../modeler/vpl/compiler/traceOrigin';
 import type { TraceEvent, TraceValue, TraceWrite } from '../simulator/engine/traceRunner';
-import type { TraceReplyMsg, TraceRootKey, TraceTarget } from '../simulator/engine/traceProtocol';
+import type { TraceReplyMsg, TraceRootKey, TraceTarget, TraceApproximateTerm } from '../simulator/engine/traceProtocol';
 import {
   TRACE_ROOT_AGENT_BEHAVIOUR, TRACE_ROOT_STEP,
 } from '../simulator/engine/traceProtocol';
@@ -78,6 +78,11 @@ export interface TraceEntry {
   snapshot?: Record<string, number>;
   truncated: boolean;
   approximate: boolean;
+  /** WHICH term made it approximate, straight off the wire (P7b / F6). The
+   *  worker is the only side that can see the emitted text and the run's hash
+   *  age; the panel owns the wording. Absent ⇒ fall back to the model-derived
+   *  guess. */
+  approximateReason?: TraceApproximateTerm;
   error?: string;
   receivedAt: number;
 }
@@ -302,6 +307,7 @@ export function pushTrace(msg: TraceReplyMsg): void {
     ...(msg.snapshot !== undefined ? { snapshot: msg.snapshot } : {}),
     truncated: msg.truncated,
     approximate: msg.approximate,
+    ...(msg.approximateReason !== undefined ? { approximateReason: msg.approximateReason } : {}),
     ...(msg.error !== undefined ? { error: msg.error } : {}),
     receivedAt: performance.now(),
   };
@@ -575,12 +581,11 @@ export function takenFlowPorts(entry: TraceEntry, eventIdx: number | null): Set<
   return out;
 }
 
-/** The origin table an entry's records must be resolved through. An entry is
- *  always resolved against ITS OWN graph's table, never the open editor tab's —
- *  a cell trace read through the agent table would silently resolve nothing. */
-export function resolveForGraph(entry: TraceEntry, kind?: TraceGraphKind): { originTable: TraceOriginTable } {
-  return { originTable: getTraceOrigin(kind ?? entry.graphKind) };
-}
+// (P7b / review finding F9: `resolveForGraph` — a one-line wrapper round
+//  `getTraceOrigin` — was exported and never called. `resolveRecordOrigin` below
+//  is the resolver every consumer actually imports, and it already applies the
+//  rule that wrapper documented: an entry resolves against ITS OWN graph's
+//  table, never the open editor tab's.)
 
 /** Resolve one recorded id to its user node (a thin re-export so P4/P5 import
  *  the resolver from the store they already import). */

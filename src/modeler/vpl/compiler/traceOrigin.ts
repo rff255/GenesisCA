@@ -114,6 +114,45 @@ export interface CompileOptions {
  *  these strings; `<id>` suffixes are the root node / mapping id. */
 export type TraceRootKey = string;
 
+// ---------------------------------------------------------------------------
+// THE ROOT KEYS — one definition, three readers
+// ---------------------------------------------------------------------------
+
+/** The root keys live HERE, next to the compile-options type, because the
+ *  COMPILER is what writes them (into `TraceCompileMeta.paramNames`) and the
+ *  worker + the protocol only read them back. `traceProtocol.ts` re-exports all
+ *  of it, so the engine side keeps importing from the protocol as before.
+ *
+ *  They were spelled by hand in three places until P7b (review finding F9):
+ *  `compile.ts` built `` `gridPeriodic:${id}` `` inline, `traceProtocol.ts`
+ *  filtered on the literal `'gridPeriodic:'`, and the same pair existed for
+ *  `agentPeriodic` / the four mapping kinds. A key and its own prefix filter
+ *  drifting apart is silent: the periodic root simply never pairs with its code
+ *  and the trace for that root goes missing with no error anywhere. */
+export const TRACE_ROOT_STEP = 'step';
+export const TRACE_ROOT_INIT = 'init';
+export const TRACE_ROOT_GRID_INIT = 'gridInit';
+export const TRACE_ROOT_AGENT_BEHAVIOUR = 'agentBehaviour';
+export const TRACE_ROOT_AGENT_INIT = 'agentInit';
+export const TRACE_ROOT_AGENT_DIVISION = 'agentDivision';
+
+/** The prefixes of the keyed roots — `<prefix>:<id>`. The BUILDERS below and the
+ *  protocol's `keysWithPrefix` filter both read these, so a key can never be
+ *  built under one spelling and looked up under another. */
+export const TRACE_PREFIX_GRID_PERIODIC = 'gridPeriodic:';
+export const TRACE_PREFIX_INPUT_COLOR = 'inputColor:';
+export const TRACE_PREFIX_OUTPUT_MAPPING = 'outputMapping:';
+export const TRACE_PREFIX_AGENT_PERIODIC = 'agentPeriodic:';
+export const TRACE_PREFIX_AGENT_OUTPUT_MAPPING = 'agentOutputMapping:';
+export const TRACE_PREFIX_AGENT_INPUT_MAPPING = 'agentInputMapping:';
+
+export const traceGridPeriodicKey = (nodeId: string): TraceRootKey => TRACE_PREFIX_GRID_PERIODIC + nodeId;
+export const traceInputColorKey = (mappingId: string): TraceRootKey => TRACE_PREFIX_INPUT_COLOR + mappingId;
+export const traceOutputMappingKey = (mappingId: string): TraceRootKey => TRACE_PREFIX_OUTPUT_MAPPING + mappingId;
+export const traceAgentPeriodicKey = (nodeId: string): TraceRootKey => TRACE_PREFIX_AGENT_PERIODIC + nodeId;
+export const traceAgentOutputMappingKey = (mappingId: string): TraceRootKey => TRACE_PREFIX_AGENT_OUTPUT_MAPPING + mappingId;
+export const traceAgentInputMappingKey = (mappingId: string): TraceRootKey => TRACE_PREFIX_AGENT_INPUT_MAPPING + mappingId;
+
 export interface TraceCompileMeta {
   /** Root key → the emitted function's FULL parameter list, in order (including
    *  the appended `_traceIdx` / `_tr`). The runner names its sandbox wrappers
