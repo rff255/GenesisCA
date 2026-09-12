@@ -49,6 +49,7 @@
  */
 
 import type { CAModel, GraphNode, GraphEdge } from '../../../model/types';
+import type { TraceOriginMap } from './traceOrigin';
 
 /** Clamp a Periodic Step's config to the values the lowering can emit:
  *  `period ≥ 1` (0 would make `gen % period` a divide-by-zero, which the Math
@@ -71,7 +72,7 @@ const mkNode = (
 
 export function expandPeriodicSteps(
   nodes: GraphNode[], edges: GraphEdge[], _model: CAModel,
-): { nodes: GraphNode[]; edges: GraphEdge[] } {
+): { nodes: GraphNode[]; edges: GraphEdge[]; origin?: TraceOriginMap } {
   const periodics = nodes.filter(n => n.data.nodeType === 'periodicStep');
   if (periodics.length === 0) return { nodes, edges };
 
@@ -79,6 +80,7 @@ export function expandPeriodicSteps(
   const outEdges: GraphEdge[] = [];
   const remapSrc = new Map<string, { source: string; sourceHandle: string }>();
   const periodicIds = new Set(periodics.map(n => n.id));
+  const origin: TraceOriginMap = new Map();   // Rule Trace (S2)
 
   // The root every gate hangs off: the user's Behaviour Step when present (its
   // own chain keeps running unconditionally), else a synthesized one. Either way
@@ -91,12 +93,13 @@ export function expandPeriodicSteps(
     if (periodicIds.has(n.id)) continue;      // the Periodic Step roots dissolve
     outNodes.push(n);
   }
-  if (!existing) outNodes.push(mkNode(rootId, 'behaviourStep', anchor.position));
+  if (!existing) { outNodes.push(mkNode(rootId, 'behaviourStep', anchor.position)); origin.set(rootId, { nodeId: anchor.id }); }
 
   // ONE shared Get Generation, fanned out to every gate (and to every Step Index
   // chain). Deterministic id anchored on the FIRST periodic root.
   const genId = `${anchor.id}__psGen`;
   outNodes.push(mkNode(genId, 'getGeneration', anchor.position));
+  origin.set(genId, { nodeId: anchor.id });
 
   // Branch heads, in order: whatever the root already ran, then each gate.
   const branchHeads: Array<{ target: string; targetHandle: string }> = [];
@@ -108,6 +111,10 @@ export function expandPeriodicSteps(
     const modId = `${p.id}__psMod`;
     const cmpId = `${p.id}__psCmp`;
     const ifId = `${p.id}__psIf`;
+    // Rule Trace (S2): the whole gate IS the user's Periodic Step root.
+    origin.set(modId, { nodeId: p.id });
+    origin.set(cmpId, { nodeId: p.id });
+    origin.set(ifId, { nodeId: p.id, portId: 'do' });
     // gen % period
     outNodes.push(mkNode(modId, 'arithmeticOperator', p.position, { operation: '%', _port_y: String(period) }));
     outEdges.push({ id: `${p.id}__psEg`, source: genId, sourceHandle: 'output_value_value', target: modId, targetHandle: 'input_value_x' });
@@ -127,6 +134,8 @@ export function expandPeriodicSteps(
     if (wantsStepIndex) {
       const divId = `${p.id}__psDiv`;
       const flrId = `${p.id}__psFlr`;
+      origin.set(divId, { nodeId: p.id });
+      origin.set(flrId, { nodeId: p.id, portId: 'stepIndex' });
       outNodes.push(mkNode(divId, 'arithmeticOperator', p.position, { operation: '/', _port_y: String(period) }));
       outNodes.push(mkNode(flrId, 'arithmeticOperator', p.position, { operation: 'floor' }));
       outEdges.push({ id: `${p.id}__psEd`, source: genId, sourceHandle: 'output_value_value', target: divId, targetHandle: 'input_value_x' });
@@ -148,6 +157,7 @@ export function expandPeriodicSteps(
   } else {
     const seqId = `${anchor.id}__psSeq`;
     outNodes.push(mkNode(seqId, 'sequence', anchor.position, { extraCount: branchHeads.length - 2 }));
+    origin.set(seqId, { nodeId: anchor.id });
     outEdges.push({ id: `${anchor.id}__psEs`, source: rootId, sourceHandle: 'output_flow_do', target: seqId, targetHandle: 'input_flow_do' });
     branchHeads.forEach((h, i) => {
       const port = i === 0 ? 'first' : i === 1 ? 'then' : `then_${i}`;
@@ -170,5 +180,5 @@ export function expandPeriodicSteps(
     });
   }
 
-  return { nodes: outNodes, edges: outEdges };
+  return { nodes: outNodes, edges: outEdges, origin };
 }

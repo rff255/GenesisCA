@@ -42,6 +42,7 @@ import type { GraphNode, GraphEdge, CAModel } from '../../../model/types';
 import { getNodeDef } from '../nodes/registry';
 import { is3dModelLike } from './niCodec';
 import { DEG_TO_RAD } from '../nodes/VectorOpNode';
+import type { TraceComponent, TraceOrigin, TraceOriginMap } from './traceOrigin';
 import {
   COMPOSITE_ARITY, COMPOSITE_RELAY_TYPES, RELAY_BRANCH_PORTS, RELAY_RESULT_PORT,
   makeCompositeTypeResolver, staticPortCompositeType, type CompositeType,
@@ -57,6 +58,10 @@ const SCALAR_OUT_PORTS: Record<string, string[]> = { breakVector: ['x', 'y', 'z'
 /** A resolved scalar value: a wire to a real/synthetic node, or a literal. */
 type Comp = { kind: 'wire'; source: string; sourceHandle: string } | { kind: 'literal'; value: string };
 
+/** The composite component port ids — used only to tag a Rule Trace origin with
+ *  the axis/channel a lowered scalar node stands for. */
+const COMPONENT_PORTS = new Set(['x', 'y', 'z', 'w', 'r', 'g', 'b', 'a']);
+
 const inH = (port: string) => `input_value_${port}`;
 const outH = (port: string) => `output_value_${port}`;
 /** Parse the port id out of a `input_value_…` / `output_value_…` handle. */
@@ -70,7 +75,7 @@ export function expandComposites(
   nodes: GraphNode[],
   edges: GraphEdge[],
   model: CAModel,
-): { nodes: GraphNode[]; edges: GraphEdge[] } {
+): { nodes: GraphNode[]; edges: GraphEdge[]; origin?: TraceOriginMap } {
   const compositeIds = new Set<string>();
   for (const n of nodes) if (COMPOSITE_NODE_TYPES.has(n.data.nodeType)) compositeIds.add(n.id);
   // Apply Force in vector-input mode is a composite CONSUMER even though it isn't
@@ -123,7 +128,22 @@ export function expandComposites(
   const synthNodes: GraphNode[] = [];
   const synthEdges: GraphEdge[] = [];
   let synthSeq = 0;
-  const nextId = () => `__vec${synthSeq++}`;
+  // Rule Trace (S2): `__vec<n>` is a bare counter (deliberately — renaming it would
+  // move emitted bytes on every target), so the ORIGIN is carried out-of-band. The
+  // resolvers below set `originCtx` to the composite (node, port[, component]) they
+  // are lowering; every id minted while that context is live is attributed to it.
+  const origin: TraceOriginMap = new Map();
+  let originCtx: TraceOrigin | undefined;
+  const withOrigin = <T,>(o: TraceOrigin | undefined, f: () => T): T => {
+    const saved = originCtx;
+    if (o) originCtx = o;
+    try { return f(); } finally { originCtx = saved; }
+  };
+  const nextId = () => {
+    const id = `__vec${synthSeq++}`;
+    if (originCtx) origin.set(id, originCtx);
+    return id;
+  };
 
   // Clone-on-write for real nodes whose config we set (inline literals / applyForce mode).
   const cloned = new Map<string, GraphNode>();
@@ -224,6 +244,8 @@ export function expandComposites(
     if (cached) return cached;
     if (active.has(key)) return arity === 4 ? [LIT('0'), LIT('0'), LIT('0'), LIT('255')] : [LIT('0'), LIT('0'), LIT('0')];
     active.add(key);
+    const savedCtx = originCtx;
+    originCtx = { nodeId, portId: port };
     const type = nodeMap.get(nodeId)?.data.nodeType ?? '';
     let comps: Comp[];
     if (type === 'makeVector') {
@@ -272,6 +294,7 @@ export function expandComposites(
     } else {
       comps = [LIT('0'), LIT('0'), LIT('0')];
     }
+    originCtx = savedCtx;
     active.delete(key);
     vecMemo.set(key, comps);
     return comps;
@@ -284,6 +307,9 @@ export function expandComposites(
     if (cached) return cached;
     if (active.has(key)) return LIT('0');
     active.add(key);
+    const savedCtx = originCtx;
+    // A composite SCALAR output names its component directly (breakVector.x → 'x').
+    originCtx = { nodeId, portId: port, ...(COMPONENT_PORTS.has(port) ? { component: port as TraceComponent } : {}) };
     const type = nodeMap.get(nodeId)?.data.nodeType ?? '';
     let comp: Comp;
     if (type === 'breakVector') {
@@ -297,6 +323,7 @@ export function expandComposites(
     } else {
       comp = LIT('0');
     }
+    originCtx = savedCtx;
     active.delete(key);
     scalarMemo.set(key, comp);
     return comp;
@@ -396,7 +423,10 @@ export function expandComposites(
     const isVecConsumerEdge = tgtType === 'applyForce' && portOf(e.targetHandle) === 'force';
     if (srcIsComposite || tgtIsComposite || isVecConsumerEdge) {
       if (srcIsComposite && !tgtIsComposite && !isVecConsumerEdge && (SCALAR_OUT_PORTS[srcType] ?? []).includes(srcPort)) {
-        connect(scalarSourceOf(e.source, srcPort), e.target, portOf(e.targetHandle));
+        withOrigin(
+          { nodeId: e.source, portId: srcPort, ...(COMPONENT_PORTS.has(srcPort) ? { component: srcPort as TraceComponent } : {}) },
+          () => connect(scalarSourceOf(e.source, srcPort), e.target, portOf(e.targetHandle)),
+        );
       }
       // All other composite-touching edges are dropped (consumed by resolution).
       continue;
@@ -411,9 +441,9 @@ export function expandComposites(
     if (n.data.nodeType !== 'applyForce' || !n.data.config?.vectorInput) continue;
     const m = mutable(n.id)!;
     m.data.config.vectorInput = false;
-    const comps = resolveVecInput(n.id, 'force', 3);
+    const comps = withOrigin({ nodeId: n.id, portId: 'force' }, () => resolveVecInput(n.id, 'force', 3));
     const ports = is3d ? ['fx', 'fy', 'fz'] : ['fx', 'fy'];
-    ports.forEach((p, i) => connect(comps[i] ?? LIT('0'), n.id, p));
+    ports.forEach((p, i) => withOrigin({ nodeId: n.id, portId: 'force' }, () => connect(comps[i] ?? LIT('0'), n.id, p)));
   }
 
   const outNodes: GraphNode[] = [];
@@ -422,5 +452,5 @@ export function expandComposites(
     outNodes.push(cloned.get(n.id) ?? n);
   }
   outNodes.push(...synthNodes);
-  return { nodes: outNodes, edges: [...keptEdges, ...synthEdges] };
+  return { nodes: outNodes, edges: [...keptEdges, ...synthEdges], origin };
 }

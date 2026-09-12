@@ -53,6 +53,13 @@ for (const f of files) {
     // agent.divisionCode / agent.initCode below.
     'js.gridInitCode': sha(r.js.gridInitCode ?? ''),
     'js.gridPeriodicCode': sha(r.js.gridPeriodicCode ?? ''),
+    // Rule Trace (P1) — the TRACE build is a real emit surface (a second JS
+    // compile of the same graph), so it gets the same regression net as the
+    // rest: without these lines a change to a record, a trace wrapper or an
+    // appended trailing parameter would pass this gate silently.
+    'js.traceStepCode': sha(r.js.traceStepCode ?? ''),
+    'js.traceFullCode': sha(r.js.traceFullCode ?? ''),
+    'js.traceError': r.js.traceError ?? null,
     'js.error': r.js.error,
     'wasm.bytes': sha(r.wasm.bytesJoined),
     'wasm.bytesLen': r.wasm.bytesLen,
@@ -69,6 +76,10 @@ for (const f of files) {
     'agent.initCode': sha(r.agent.initCode),
     // Population Periodic Events — the same argument, one root later.
     'agent.periodicCode': sha(r.agent.periodicCode ?? ''),
+    // Rule Trace (P1) — the agent graph's trace build (see js.trace* above).
+    'agent.traceBehaviourCode': sha(r.agent.traceBehaviourCode ?? ''),
+    'agent.traceFullCode': sha(r.agent.traceFullCode ?? ''),
+    'agent.traceError': r.agent.traceError ?? null,
     'agent.error': r.agent.error,
     'agent.wasm.bytes': sha(r.agent.wasm.bytesJoined),
     'agent.wasm.error': r.agent.wasm.error,

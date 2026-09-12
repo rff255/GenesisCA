@@ -29,6 +29,7 @@
 import type { Attribute, AttributeType, CAModel, GraphNode, GraphEdge, Variable } from '../../../model/types';
 import { is3dModelLike } from './niCodec';
 import { encodeAttrValue } from '../../../model/attrValueEncoding';
+import type { TraceComponent, TraceOrigin, TraceOriginMap } from './traceOrigin';
 
 const VECTOR_SUFFIXES = ['_vx', '_vy', '_vz'] as const;
 const VECTOR_LABELS = ['X', 'Y', 'Z'] as const;
@@ -307,7 +308,7 @@ const SET_LOWER: Record<string, { key: string; fanout: string[]; copyConfig: boo
  *  badged by `detectMissingConfig` (they are NOT in `VECTOR_LOWERED`). */
 export function lowerVectorAttrs(
   nodes: GraphNode[], edges: GraphEdge[], model: CAModel,
-): { nodes: GraphNode[]; edges: GraphEdge[]; model: CAModel } {
+): { nodes: GraphNode[]; edges: GraphEdge[]; model: CAModel; origin?: TraceOriginMap } {
   const anyVecAttr = hasVectorAttrs(model.attributes ?? []) || hasVectorAttrs(model.agentAttributes ?? []);
   const anyVecVar = (model.variables ?? []).some(isScalarVectorVar) || (model.agentVariables ?? []).some(isScalarVectorVar);
   if (!anyVecAttr && !anyVecVar) return { nodes, edges, model };
@@ -360,9 +361,14 @@ export function lowerVectorAttrs(
   // accessor — the fan-out the neighbour/by-id nodes need (the own-cell reads don't).
   const fanoutTgt = new Map<string, Array<{ target: string; targetHandle: string }>>();
 
-  const mkNode = (nodeType: string, config: Record<string, string | number | boolean>): GraphNode => {
+  // Rule Trace (S2): every synthesized component accessor / Make / Break node is
+  // stamped with the USER node + port (and the component axis) it stands for, so a
+  // record on `__va7` lights the Get/Set Attribute the user actually placed.
+  const origin: TraceOriginMap = new Map();
+  const mkNode = (nodeType: string, config: Record<string, string | number | boolean>, org?: TraceOrigin): GraphNode => {
     const n: GraphNode = { id: nid(), type: 'caNode', position: { x: 0, y: 0 }, data: { nodeType, config } };
     outNodes.push(n);
+    if (org) origin.set(n.id, org);
     return n;
   };
   const mkEdge = (s: string, sh: string, t: string, th: string) =>
@@ -432,9 +438,10 @@ export function lowerVectorAttrs(
       // inputs (NI / agent id) fan out to every component reader.
       const dims = dimsFor(getK.key).get(getId)!;
       const compIds = vectorComponentIds(getId, dims);
-      const mv = mkNode('makeVector', {});
+      const mv = mkNode('makeVector', {}, { nodeId: n.id, portId: 'value' });
       for (let i = 0; i < dims; i++) {
-        const gn = mkNode(t, compConfig(n, t, getK.key, compIds[i]!, getK.copyConfig));
+        const gn = mkNode(t, compConfig(n, t, getK.key, compIds[i]!, getK.copyConfig),
+          { nodeId: n.id, portId: 'value', component: AXES[i] as TraceComponent });
         mkEdge(gn.id, vOut('value'), mv.id, vIn(AXES[i]!));
         for (const fp of getK.fanout) addFanout(n.id, fp, gn.id);
       }
@@ -446,10 +453,11 @@ export function lowerVectorAttrs(
       // The shared value inputs (NI / agent id) fan out to every component setter.
       const dims = dimsFor(setK.key).get(setId)!;
       const compIds = vectorComponentIds(setId, dims);
-      const bv = mkNode('breakVector', {});
+      const bv = mkNode('breakVector', {}, { nodeId: n.id, portId: 'value' });
       const setNodes: GraphNode[] = [];
       for (let i = 0; i < dims; i++) {
-        const sn = mkNode(t, compConfig(n, t, setK.key, compIds[i]!, setK.copyConfig));
+        const sn = mkNode(t, compConfig(n, t, setK.key, compIds[i]!, setK.copyConfig),
+          { nodeId: n.id, portId: 'value', component: AXES[i] as TraceComponent });
         mkEdge(bv.id, vOut(AXES[i]!), sn.id, vIn('value'));
         for (const fp of setK.fanout) addFanout(n.id, fp, sn.id);
         setNodes.push(sn);
@@ -497,5 +505,5 @@ export function lowerVectorAttrs(
     variables: model.variables ? expandVectorVariables(model.variables) : model.variables,
     agentVariables: model.agentVariables ? expandVectorVariables(model.agentVariables) : model.agentVariables,
   };
-  return { nodes: outNodes, edges: outEdges, model: model2 };
+  return { nodes: outNodes, edges: outEdges, model: model2, origin };
 }

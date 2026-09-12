@@ -40,7 +40,16 @@ export interface CompileAllResult {
    *  separately is what keeps the byte-identity gate from having a blind spot over
    *  them (the D1 reasoning, applied to the cell side). They are kept OUT of
    *  `fullCode` deliberately: that hash predates them and must not move. */
-  js: { stepCode: string; fullCode: string; gridInitCode: string; gridPeriodicCode: string; error: string | null };
+  js: { stepCode: string; fullCode: string; gridInitCode: string; gridPeriodicCode: string;
+    /** Rule Trace (P1) — the TRACE build of the cell graph. A separate emit
+     *  surface with its own regression net: "a surface it does not hash is a
+     *  surface with no regression net at all". `traceFullCode` joins EVERY cell
+     *  root the trace build emits (step / init / gridInit / each grid periodic /
+     *  each input colour / each output mapping) PLUS the root-key -> parameter
+     *  list table, so a change to a trace wrapper or to the appended trailing
+     *  params shows up here. */
+    traceStepCode: string; traceFullCode: string; traceError: string | null;
+    error: string | null };
   wasm: { total: number; bytesLen: number; bytesJoined: string; error: string | null };
   webgpu: { shaderCode: string; error: string | null };
   /** Bond-Graph Agents: the compiled agent behaviour loop (JS) + the PR6b-1 WASM
@@ -60,6 +69,8 @@ export interface CompileAllResult {
      *  target, like division/init) - joined so the byte-identity gate covers them
      *  too. Empty for a model with no `agentPeriodic` root. */
     periodicCode: string;
+    /** Rule Trace (P1) — the TRACE build of the agent graph (see `js.trace*`). */
+    traceBehaviourCode: string; traceFullCode: string; traceError: string | null;
     error: string | null;
     wasm: { supported: boolean; bytesLen: number; bytesJoined: string; supportedTypes: string[]; error: string | null };
     /** PR7/G1+G2 — the WebGPU agent behaviour SHADER (WGSL source). `supported`
@@ -78,11 +89,11 @@ export interface CompileAllResult {
 
 export function compileAll(model: CAModel): CompileAllResult {
   const out: CompileAllResult = {
-    js: { stepCode: '', fullCode: '', gridInitCode: '', gridPeriodicCode: '', error: null },
+    js: { stepCode: '', fullCode: '', gridInitCode: '', gridPeriodicCode: '', traceStepCode: '', traceFullCode: '', traceError: null, error: null },
     wasm: { total: 0, bytesLen: 0, bytesJoined: '', error: null },
     webgpu: { shaderCode: '', error: null },
     agent: {
-      behaviourCode: '', divisionCode: '', initCode: '', periodicCode: '', error: null,
+      behaviourCode: '', divisionCode: '', initCode: '', periodicCode: '', traceBehaviourCode: '', traceFullCode: '', traceError: null, error: null,
       wasm: { supported: false, bytesLen: 0, bytesJoined: '', supportedTypes: [], error: null },
       webgpu: { supported: false, shaderCode: '', supportedTypes: [], error: null, omShaders: [], omSupported: true },
     },
@@ -106,6 +117,24 @@ export function compileAll(model: CAModel): CompileAllResult {
     out.js.error = js.error || null;
   } catch (e) {
     out.js.error = String((e as Error)?.message || e);
+  }
+  // Rule Trace (P1) — the SECOND compile of the same graph, with `trace: true`.
+  // Its own try block so a trace-build failure can neither mask nor be masked by
+  // the normal build's result.
+  try {
+    const tr = compileGraph(model.graphNodes, model.graphEdges, model, { trace: true });
+    out.js.traceStepCode = tr.stepCode || '';
+    const tparts = [tr.stepCode || '', tr.initCode || '', tr.gridInitCode || ''];
+    for (const gp of tr.gridPeriodicCodes || []) tparts.push('// period=' + gp.period + ' phase=' + gp.phase + '\n' + gp.code);
+    for (const ic of tr.inputColorCodes || []) tparts.push(ic.code);
+    for (const om of tr.outputMappingCodes || []) tparts.push(om.code);
+    // The parameter TABLE is part of the surface: the runner names its sandbox
+    // wrappers from it, so a silently reordered param list IS a regression.
+    tparts.push(JSON.stringify(tr.trace?.paramNames ?? {}, Object.keys(tr.trace?.paramNames ?? {}).sort()));
+    out.js.traceFullCode = tparts.join('\n');
+    out.js.traceError = tr.error || null;
+  } catch (e) {
+    out.js.traceError = String((e as Error)?.message || e);
   }
   // WASM
   try {
@@ -138,6 +167,20 @@ export function compileAll(model: CAModel): CompileAllResult {
     out.agent.error = ag.error || null;
   } catch (e) {
     out.agent.error = String((e as Error)?.message || e);
+  }
+  // Rule Trace (P1) — the agent graph's trace build (see the cell note).
+  try {
+    const tr = compileAgentGraph(model.agentGraphNodes || [], model.agentGraphEdges || [], model, 0, { trace: true });
+    out.agent.traceBehaviourCode = tr.behaviourCode || '';
+    const tparts = [tr.behaviourCode || '', tr.divisionCode || '', tr.initCode || ''];
+    for (const c of tr.periodicCodes || []) tparts.push('// period=' + c.period + ' phase=' + c.phase + '\n' + c.code);
+    for (const om of tr.outputMappingCodes || []) tparts.push(om.code);
+    for (const im of tr.inputMappingCodes || []) tparts.push(im.code);
+    tparts.push(JSON.stringify(tr.trace?.paramNames ?? {}, Object.keys(tr.trace?.paramNames ?? {}).sort()));
+    out.agent.traceFullCode = tparts.join('\n');
+    out.agent.traceError = tr.error || null;
+  } catch (e) {
+    out.agent.traceError = String((e as Error)?.message || e);
   }
   // Bond-Graph Agents — the PR6b-1 WASM agent-loop skeleton.
   try {

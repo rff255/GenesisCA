@@ -1,6 +1,7 @@
 import type { GraphNode, GraphEdge, CAModel } from '../../../model/types';
 import { agentAttrsOf } from '../../../model/attributeScope';
 import { is3dModelLike } from './niCodec';
+import type { TraceOriginMap } from './traceOrigin';
 
 /** The FOV nodes (Sensing capability) whose `headingSource: 'facing'` reads a
  *  stored per-agent facing direction instead of the agent's velocity / wired inputs. */
@@ -33,7 +34,7 @@ export function isFacingAttr(id: unknown, model: CAModel): boolean {
  *  (the FOV nodes are `requirements.bondGraph`). */
 export function lowerFacingSource(
   nodes: GraphNode[], edges: GraphEdge[], model: CAModel,
-): { nodes: GraphNode[]; edges: GraphEdge[] } {
+): { nodes: GraphNode[]; edges: GraphEdge[]; origin?: TraceOriginMap } {
   const facing = nodes.filter(n =>
     FACING_HEADING_NODES.has(n.data?.nodeType) &&
     n.data.config?.headingSource === 'facing' &&
@@ -44,6 +45,7 @@ export function lowerFacingSource(
   const facingIds = new Set(facing.map(n => n.id));
   let uid = 0;
   const nid = () => `__facing${uid++}`;
+  const origin: TraceOriginMap = new Map();   // Rule Trace (S2)
 
   // Drop any pre-existing edge into a facing node's Heading ports (the facing source
   // overrides them — normally none, since those ports are hidden under 'facing').
@@ -65,10 +67,14 @@ export function lowerFacingSource(
     const getN: GraphNode = { id: nid(), type: 'caNode', position: { x: 0, y: 0 }, data: { nodeType: 'getCellAttribute', config: { attributeId: facingId } } };
     const bv: GraphNode = { id: nid(), type: 'caNode', position: { x: 0, y: 0 }, data: { nodeType: 'breakVector', config: {} } };
     outNodes.push(getN, bv);
+    // Rule Trace (S2): the synthesized read + break stand for the FOV node's
+    // `facing` heading source — there is no user node for them.
+    origin.set(getN.id, { nodeId: n.id });
+    origin.set(bv.id, { nodeId: n.id });
     outEdges.push({ id: nid() + 'e', source: getN.id, sourceHandle: 'output_value_value', target: bv.id, targetHandle: 'input_value_vector' });
     outEdges.push({ id: nid() + 'e', source: bv.id, sourceHandle: 'output_value_x', target: n.id, targetHandle: 'input_value_headingX' });
     outEdges.push({ id: nid() + 'e', source: bv.id, sourceHandle: 'output_value_y', target: n.id, targetHandle: 'input_value_headingY' });
     if (is3d) outEdges.push({ id: nid() + 'e', source: bv.id, sourceHandle: 'output_value_z', target: n.id, targetHandle: 'input_value_headingZ' });
   }
-  return { nodes: outNodes, edges: outEdges };
+  return { nodes: outNodes, edges: outEdges, origin };
 }

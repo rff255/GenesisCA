@@ -30,6 +30,7 @@ import { presetStops } from '../nodes/colorScalePresets';
 import { OPAQUE, isOpaque } from '../../../model/colorHex';
 import { colorScaleHasAlpha } from '../nodes/ColorScaleNode';
 import { categoricalHasAlpha } from '../nodes/CategoricalColorNode';
+import { linkedOriginId, type TraceOriginMap } from './traceOrigin';
 
 const SYNTH_PREFIX = '__linkedOM_';
 
@@ -39,7 +40,7 @@ export function injectLinkedOutputMappings(
   graphNodes: GraphNode[],
   graphEdges: GraphEdge[],
   model: CAModel,
-): { nodes: GraphNode[]; edges: GraphEdge[] } {
+): { nodes: GraphNode[]; edges: GraphEdge[]; origin?: TraceOriginMap } {
   const linked = (model.mappings ?? []).filter(
     m => m.isAttributeToColor && m.linked && m.linkedAttributeId,
   );
@@ -47,6 +48,10 @@ export function injectLinkedOutputMappings(
 
   const nodes = [...graphNodes];
   let edges = [...graphEdges];
+  // Rule Trace (S2): these colour-pass nodes have NO user node — the MAPPING is
+  // the origin, carried as the `linked:<mappingId>` sentinel so the harness can
+  // tell "synthesized, deliberately not on the canvas" from "dark node".
+  const origin: TraceOriginMap = new Map();
 
   for (const m of linked) {
     // Resolve live by id; must be a CELL attribute (the color pass reads cell state).
@@ -54,12 +59,13 @@ export function injectLinkedOutputMappings(
     if (!attr || attr.isModelAttribute) continue;
 
     const P = `${SYNTH_PREFIX}${m.id}_`;
+    const mark = (id: string) => { origin.set(id, { nodeId: linkedOriginId(m.id) }); return id; };
 
     // 1. value chain: getCellAttribute → (colorScale | categoricalColor)
-    const getAttrId = P + 'getattr';
+    const getAttrId = mark(P + 'getattr');
     nodes.push(mkNode(getAttrId, 'getCellAttribute', { attributeId: attr.id }));
 
-    const colorId = P + 'color';
+    const colorId = mark(P + 'color');
     let colorInPort: string;
     let withAlpha: boolean;
     if (attr.type === 'tag') {
@@ -76,7 +82,7 @@ export function injectLinkedOutputMappings(
     edges.push(valEdge(P + 'e_av', getAttrId, 'value', colorId, colorInPort));
 
     // 2. terminal setCellLooks (plain-color mode) fed by r/g/b [, a]
-    const scvId = P + 'scv';
+    const scvId = mark(P + 'scv');
     nodes.push(mkNode(scvId, 'setCellLooks', { mappingId: m.id, useGlyph: false, setBackground: true }));
     edges.push(valEdge(P + 'e_r', colorId, 'r', scvId, 'r'));
     edges.push(valEdge(P + 'e_g', colorId, 'g', scvId, 'g'));
@@ -96,7 +102,7 @@ export function injectLinkedOutputMappings(
 
     if (!userRoot) {
       // No user node → synthesize the root and run only the auto pass.
-      const rootId = P + 'root';
+      const rootId = mark(P + 'root');
       nodes.push(mkNode(rootId, 'outputMapping', { mappingId: m.id }));
       edges.push(flowEdge(P + 'e_root', rootId, 'do', scvId, 'do'));
     } else {
@@ -106,7 +112,7 @@ export function injectLinkedOutputMappings(
         edges.push(flowEdge(P + 'e_root', userRoot.id, 'do', scvId, 'do'));
       } else {
         // Insert a Sequence: first = auto background, then = user's original graph.
-        const seqId = P + 'seq';
+        const seqId = mark(P + 'seq');
         nodes.push(mkNode(seqId, 'sequence', { extraCount: 0 }));
         edges = edges.filter(e => e !== userEdge); // re-point immutably (no mutation)
         edges.push(flowEdge(P + 'e_seq_in', userRoot.id, 'do', seqId, 'do'));
@@ -122,7 +128,7 @@ export function injectLinkedOutputMappings(
     }
   }
 
-  return { nodes, edges };
+  return { nodes, edges, origin };
 }
 
 // --- synthetic node/edge builders -----------------------------------------

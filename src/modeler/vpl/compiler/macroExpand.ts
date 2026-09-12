@@ -17,6 +17,7 @@
  */
 
 import type { CAModel, GraphNode, GraphEdge } from '../../../model/types';
+import type { TraceOrigin, TraceOriginMap } from './traceOrigin';
 
 /** Parse a React Flow handle id of the form `<input|output>_<value|flow>_<portId>`. */
 function parseHandle(handleId: string | undefined): { category: 'value' | 'flow'; portId: string } | null {
@@ -26,12 +27,32 @@ function parseHandle(handleId: string | undefined): { category: 'value' | 'flow'
   return { category: m[1] as 'value' | 'flow', portId: m[2]! };
 }
 
+/** Rule Trace (S2): compose this level's prefix map with the map the RECURSION
+ *  produced. A deeper entry's `macroPath` names instance ids in THIS level's
+ *  id-space (`mA_B`), so each is translated back through this level's own map —
+ *  yielding a path of instance ids the user can actually walk in the editor
+ *  (outermost first). Additive: nothing here touches the emitted graph. */
+function composeMacroOrigins(own: TraceOriginMap, deeper: TraceOriginMap | undefined): TraceOriginMap {
+  if (!deeper || deeper.size === 0) return own;
+  const out: TraceOriginMap = new Map(own);
+  for (const [id, o] of deeper) {
+    const path: string[] = [];
+    for (const p of o.macroPath ?? []) {
+      const outer = own.get(p);
+      if (outer) path.push(...(outer.macroPath ?? []), outer.nodeId);
+      else path.push(p);
+    }
+    out.set(id, path.length > 0 ? { ...o, macroPath: path } : o);
+  }
+  return out;
+}
+
 export function expandMacros(
   graphNodes: GraphNode[],
   graphEdges: GraphEdge[],
   model: CAModel,
   depth = 0,
-): { nodes: GraphNode[]; edges: GraphEdge[]; error?: string } {
+): { nodes: GraphNode[]; edges: GraphEdge[]; error?: string; origin?: TraceOriginMap } {
   if (depth > 20) return { nodes: graphNodes, edges: graphEdges, error: 'macro recursion depth > 20' };
   const macroInstances = graphNodes.filter(n => n.data.nodeType === 'macro');
   if (macroInstances.length === 0) return { nodes: graphNodes, edges: graphEdges };
@@ -49,6 +70,9 @@ export function expandMacros(
   const removedNodeIds = new Set(macroInstances.map(m => m.id));
   const newNodes: GraphNode[] = [];
   const newEdges: GraphEdge[] = [];
+  /** Rule Trace (S2): `m<instanceId>_<innerId>` → the inner node + the instance
+   *  it came from. Built alongside the copy below — one entry per copied node. */
+  const origin: TraceOriginMap = new Map();
 
   // Carry over all non-macro outer nodes.
   for (const n of graphNodes) if (!removedNodeIds.has(n.id)) newNodes.push(n);
@@ -89,6 +113,8 @@ export function expandMacros(
     for (const inner of def.nodes) {
       if (inner.data.nodeType === 'macroInput' || inner.data.nodeType === 'macroOutput') continue;
       newNodes.push({ ...inner, id: prefix + inner.id });
+      const o: TraceOrigin = { nodeId: inner.id, macroPath: [m.id] };
+      origin.set(prefix + inner.id, o);
     }
 
     // Copy internal edges, rewriting endpoints.
@@ -163,5 +189,6 @@ export function expandMacros(
   }
 
   // Recurse — nested macros appear as `macro` nodes in newNodes.
-  return expandMacros(newNodes, newEdges, model, depth + 1);
+  const rec = expandMacros(newNodes, newEdges, model, depth + 1);
+  return { ...rec, origin: composeMacroOrigins(origin, rec.origin) };
 }

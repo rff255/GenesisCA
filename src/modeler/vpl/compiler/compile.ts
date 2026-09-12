@@ -19,9 +19,9 @@ import { injectLinkedOutputMappings } from './linkedOutputMappings';
 import { injectAgentLinkedOutputMappings } from './agentLinkedOutputMappings';
 import { collapseReroutes } from './rerouteCollapse';
 import { isAgentIdArraySource } from './agentIdArray';
-import { expandMultiAttrs } from './multiAttrExpand';
+import { expandMultiAttrs, MULTI_ATTR_TYPES, buildExtraSlotPorts } from './multiAttrExpand';
 import { expandForceToAgents } from './forceToAgentsExpand';
-import { expandNeighbourCensus } from './censusExpand';
+import { expandNeighbourCensus, buildCensusPorts } from './censusExpand';
 import { expandDensityRadius } from './densityExpand';
 import { expandPeriodicSteps, periodicParams } from './periodicExpand';
 import { cellUsesGeneration, agentUsesGeneration } from './generationUse';
@@ -36,7 +36,15 @@ import { sparseSteppingEnabled } from './sparseStepping';
 import { expandMacros } from './macroExpand';
 import { detectDanglingRefs } from './danglingRefs';
 import { detectCompositeShapeMismatch } from './compositeRelay';
-import { inputBrushKindForNode, inputParamsForNode, spawnerBrushPorts } from '../../../model/inputMappingParams';
+import { inputBrushKindForNode, inputParamsForNode, spawnerBrushPorts, buildInputParamPorts, isInputMappingRoot } from '../../../model/inputMappingParams';
+import {
+  foldOriginMap,
+  type CompileOptions,
+  type TraceCompileMeta,
+  type TraceOriginTable,
+} from './traceOrigin';
+export { resolveTraceOrigin, linkedOriginId } from './traceOrigin';
+export type { CompileOptions, TraceCompileMeta, TraceOrigin, TraceOriginTable } from './traceOrigin';
 export { sparseSteppingEnabled } from './sparseStepping';
 import { computeVolatileHoist } from './volatileHoist';
 import {
@@ -47,6 +55,42 @@ import {
 } from './subAttribute';
 import { directionIndex, DIRECTION_TAGS, resolveKeyLabels, resolveAxes, isMultiAxisTable } from './variegation';
 import { buildVariableJS } from './variable';
+
+// ===========================================================================
+// THE TRACE BUILD (Rule Trace, P1) — `compileGraph(…, { trace: true })`
+//
+// The trace build is THE SAME compile — the same lowering chain, the same node
+// emitters, the same sink/volatile/hazard analyses — with three differences,
+// every one of them behind `opts.trace`:
+//
+//   1. RECORDS. Each value node appends `_tr.v("<nodeId>","<portId>", …)` per
+//      value OUTPUT port to its OWN emitted code, and each flow node gets a
+//      `_tr.f("<nodeId>")` before it plus a `_tr.o("<nodeId>","<port>")` at the
+//      top of every branch body the walker opens. `_tr` is a trailing parameter
+//      (a `TraceRecorder`, typed in `src/simulator/engine/traceRunner.ts`).
+//   2. A SINGLE-ELEMENT BODY. The per-element loop becomes
+//      `{ const idx = _traceIdx; … }` (`_traceIdx` is the parameter BEFORE
+//      `_tr`), so one cell / one agent is re-evaluated against the live state.
+//      The bulk `w.set(r)` copy, the sparse dual loop, the linked-indicator
+//      embedding and the `_rngState[0] = _rs` write-back are DROPPED — the trace
+//      is a reader and the runner hands it a private RNG cell.
+//   3. PASS SWITCHES. Accessor-CSE is skipped (each duplicate accessor
+//      materialises its own record) and aggregate fusion is disabled (the gather
+//      materialises so its array is recordable). Sinking, loop-invariance,
+//      volatile hoisting and the async hazard are UNCHANGED — a value sunk into
+//      an untaken branch has no record, which is the truth about that cell.
+//
+// INVARIANTS
+//   I1  With `opts` absent NOTHING here changes: every trace line is behind the
+//       flag and the helpers return '' — proved by `check-compile-identity`
+//       (31 models, every surface unchanged).
+//   TDZ A record is APPENDED to the node's own code and never hoisted: a record
+//       above a `const` in the same block would touch it in its temporal dead
+//       zone, and even `typeof` throws there.
+//   ARR `_scr_<id>` / `_v<id>_vals` are REUSED scratch arrays — the recorder
+//       copies them (bounded) at record time, so each record shows that node's
+//       contents at that moment rather than the final fill.
+// ===========================================================================
 
 // ---------------------------------------------------------------------------
 // Graph adjacency helpers
@@ -433,6 +477,9 @@ function compileRoot(
   graphNodes: GraphNode[],
   graphEdges: GraphEdge[],
   model?: CAModel,
+  /** TRACE BUILD — emit the per-node value / flow records (see the header block).
+   *  `false` (the default) is byte-identical to the pre-trace compiler. */
+  trace = false,
 ): RootCompileResult {
   // Some internal helpers in this function were written when `model` was unused
   // (named `_model`). Keep both names in scope for those references.
@@ -783,6 +830,68 @@ function compileRoot(
     return `_v${sourceNodeId}`;
   }
 
+  // -- TRACE BUILD: the record emitters (no-ops unless `trace`) ------------
+
+  /** Every VALUE OUTPUT port a node declares RIGHT NOW — the static `def.ports`
+   *  outputs plus the DYNAMIC builders the editor itself renders from
+   *  (`buildExtraSlotPorts` for the five multi-attr accessors, `buildCensusPorts`
+   *  for Neighbour Census, `buildInputParamPorts` for the input-mapping roots).
+   *  Reusing the editor's builders is what stops the compiler drifting from what
+   *  the canvas draws (the `buildBondAttrPorts` discipline at the flow-node emit).
+   *  `buildBondAttrPorts` itself contributes nothing here — its ports are INPUTS. */
+  function traceValueOutPortIds(node: GraphNode): string[] {
+    const def = getNodeDef(node.data.nodeType);
+    if (!def) return [];
+    const ids: string[] = [];
+    const add = (id: string) => { if (!ids.includes(id)) ids.push(id); };
+    for (const p of def.ports) if (p.kind === 'output' && p.category === 'value') add(p.id);
+    const t = node.data.nodeType;
+    const cfg = node.data.config as Record<string, unknown>;
+    if (MULTI_ATTR_TYPES.has(t)) for (const p of buildExtraSlotPorts(t, cfg, model).outputs) add(p.id);
+    if (t === 'neighbourCensus') for (const p of buildCensusPorts(t, cfg, model).outputs) add(p.id);
+    if (isInputMappingRoot(t)) for (const p of buildInputParamPorts(t, cfg, model).outputs) add(p.id);
+    return ids;
+  }
+
+  /** One `_tr.v(...)` per value-output port, resolved through `varName` so the
+   *  record names EXACTLY the identifier consumers read. A SINGLE-output node
+   *  records once (every port id resolves to the same `_v<id>`), preferring the
+   *  port literally called `value`. Ports a config never declares (`myVolume`, a
+   *  colour slot's `a_<i>`) are `typeof`-guarded rather than throwing. */
+  function traceValueRecords(nodeId: string): string {
+    if (!trace) return '';
+    const node = nodeMap.get(nodeId);
+    if (!node) return '';
+    let ports = traceValueOutPortIds(node);
+    if (ports.length === 0) return '';
+    if (!isMultiOutput(node.data)) ports = [ports.includes('value') ? 'value' : ports[0]!];
+    return '\n' + ports.map(portId => {
+      const v = varName(nodeId, portId);
+      return `_tr.v(${JSON.stringify(nodeId)}, ${JSON.stringify(portId)}, typeof ${v} === 'undefined' ? undefined : ${v});`;
+    }).join(' ');
+  }
+
+  /** A record for ONE named value-out of a flow node (the per-iteration outs the
+   *  flow walker declares itself: forEach element/index, a loop counter, a bond's
+   *  partner/lengths, a Create Agent handle). Emitted at the declaration site. */
+  function traceFlowValueRecord(nodeId: string, portId: string, varExpr: string, indent: string): string[] {
+    if (!trace) return [];
+    return [`${indent}_tr.v(${JSON.stringify(nodeId)}, ${JSON.stringify(portId)}, ${varExpr});`];
+  }
+
+  /** `_tr.f` — this flow node ran. */
+  const trF = (nodeId: string, indent: string): string[] =>
+    trace ? [`${indent}_tr.f(${JSON.stringify(nodeId)});`] : [];
+
+  /** `_tr.o` — this flow OUTPUT port was taken. Guarded on there actually being
+   *  a target for the pass-through ports (`next`, a sequence's `then_i`): a record
+   *  for a port nothing is wired to would claim a branch that does not exist. */
+  const trO = (nodeId: string, portId: string, indent: string, onlyIfWired = false): string[] => {
+    if (!trace) return [];
+    if (onlyIfWired && !flowOutputToTargets.has(`${nodeId}:${portId}`)) return [];
+    return [`${indent}_tr.o(${JSON.stringify(nodeId)}, ${JSON.stringify(portId)});`];
+  };
+
   // Does a given source (node + output port) yield an ARRAY value in JS? True
   // for a static `isArray` output port (filterNeighbors, getAllNeighborIndexes,
   // …), an array-kind getVariable, OR a valueSwitch whose BOTH branches yield
@@ -908,7 +1017,7 @@ function compileRoot(
           code = buildFusedGroupStatementJS(nodeId, fused.op, nbrId, attrId, xVar);
         }
         if (code) {
-          routeValueEmit(nodeId, code);
+          routeValueEmit(nodeId, code + traceValueRecords(nodeId));
           return `_v${nodeId}`;
         }
       }
@@ -1010,7 +1119,9 @@ function compileRoot(
       const used = hemifieldArraysUsed(nodeId, graphEdges);
       compileConfig = { ...compileConfig, _leftAgentsUsed: used.left, _rightAgentsUsed: used.right };
     }
-    const code = def.compile(nodeId, compileConfig, inputVars, model?.properties.boundaryTreatment, ctx);
+    const rawCode = def.compile(nodeId, compileConfig, inputVars, model?.properties.boundaryTreatment, ctx);
+    // TRACE BUILD — the records ride the node's OWN line (never hoisted: TDZ).
+    const code = rawCode ? rawCode + traceValueRecords(nodeId) : rawCode;
     if (code) {
       // Loop-invariant nodes (e.g. modelAttrs reads + arithmetic over them)
       // hoist out of the cell loop and emit once per step instead of per cell.
@@ -1100,6 +1211,10 @@ function compileRoot(
         forceVolatileCurrentScope = savedForce;
       }
 
+      // TRACE BUILD - "this flow node ran", before anything it emits (including
+      // the inline value emissions its input resolution may push here).
+      flowLines.push(...trF(target.nodeId, indent));
+
       if (node.data.nodeType === 'conditional') {
         const condSource = inputToSource.get(`${node.id}:condition`);
         let condVar: string;
@@ -1113,10 +1228,12 @@ function compileRoot(
         }
         const hasElse = flowOutputToTargets.has(`${node.id}:else`);
         flowLines.push(`${indent}if (${condVar}) {`);
+        flowLines.push(...trO(node.id, 'then', indent + '  '));
         flushBranchValues(`${node.id}:then`, flowLines, indent + '  ');
         compileFlowChain(node.id, 'then', indent + '  ');
         if (hasElse) {
           flowLines.push(`${indent}} else {`);
+          flowLines.push(...trO(node.id, 'else', indent + '  '));
           flushBranchValues(`${node.id}:else`, flowLines, indent + '  ');
           compileFlowChain(node.id, 'else', indent + '  ');
         }
@@ -1130,6 +1247,7 @@ function compileRoot(
         const isViewer = !!model?.mappings?.some(m => m.id === mid && m.isAttributeToColor);
         if (isViewer && flowOutputToTargets.has(`${node.id}:then`)) {
           flowLines.push(`${indent}if (_isV_${safeId(mid)}) {`);
+          flowLines.push(...trO(node.id, 'then', indent + '  '));
           flushBranchValues(`${node.id}:then`, flowLines, indent + '  ');
           compileFlowChain(node.id, 'then', indent + '  ');
           flowLines.push(`${indent}}`);
@@ -1137,10 +1255,15 @@ function compileRoot(
         // An unset / non-viewer mapping can never be the active viewer, so the
         // branch is DROPPED (mirrors setCellLooks' "unknown viewer - skip").
       } else if (node.data.nodeType === 'sequence') {
+        // A sequence opens no block, so its port records are wired-guarded (a
+        // record on an unwired `then_3` would claim a branch that does not exist).
+        flowLines.push(...trO(node.id, 'first', indent, true));
         compileFlowChain(node.id, 'first', indent);
+        flowLines.push(...trO(node.id, 'then', indent, true));
         compileFlowChain(node.id, 'then', indent);
         const extra = Number(node.data.config.extraCount) || 0;
         for (let si = 2; si < 2 + extra; si++) {
+          flowLines.push(...trO(node.id, `then_${si}`, indent, true));
           compileFlowChain(node.id, `then_${si}`, indent);
         }
       } else if (node.data.nodeType === 'loop') {
@@ -1166,6 +1289,8 @@ function compileRoot(
           const countVar = resolveLoopInput('count', '0');
           flowLines.push(`${indent}for (let _li${node.id} = 0; _li${node.id} < ${countVar}; _li${node.id}++) {`);
         }
+        flowLines.push(...trO(node.id, 'body', indent + '  '));
+        flowLines.push(...traceFlowValueRecord(node.id, 'index', `_li${node.id}`, indent + '  '));
         flushBranchValues(`${node.id}:body`, flowLines, indent + '  ');
         // Body-emit context (mirrors forEachInArray): value nodes depending on
         // the loop's `index` output that are compiled lazily during the body
@@ -1199,6 +1324,9 @@ function compileRoot(
         const elementVar = `_v${node.id}_element`;
         flowLines.push(`${indent}for (let ${idxVar} = 0; ${idxVar} < ${arrayVar}.length; ${idxVar}++) {`);
         flowLines.push(`${indent}  const ${elementVar} = ${arrayVar}[${idxVar}];`);
+        flowLines.push(...trO(node.id, 'body', indent + '  '));
+        flowLines.push(...traceFlowValueRecord(node.id, 'element', elementVar, indent + '  '));
+        flowLines.push(...traceFlowValueRecord(node.id, 'index', idxVar, indent + '  '));
         flushBranchValues(`${node.id}:body`, flowLines, indent + '  ');
         // Activate body-emit context so element-dependent value nodes consumed
         // inside the body land in flowLines at body indent (inside the loop block,
@@ -1256,6 +1384,13 @@ function compileRoot(
           flowLines.push(`${indent}  const _v${node.id}_currentLength = Math.sqrt(${dbx} * ${dbx} + ${dby} * ${dby});`);
         }
         flowLines.push(`${indent}  const _v${node.id}_index = ${feb};`);
+        flowLines.push(...trO(node.id, 'body', indent + '  '));
+        for (const [portId, expr] of [
+          ['partnerId', pid], ['restLength', `_v${node.id}_restLength`],
+          ['currentLength', `_v${node.id}_currentLength`], ['index', `_v${node.id}_index`],
+        ] as Array<[string, string]>) {
+          flowLines.push(...traceFlowValueRecord(node.id, portId, expr, indent + '  '));
+        }
         flushBranchValues(`${node.id}:body`, flowLines, indent + '  ');
         const savedTarget = bodyTarget;
         const savedIndent = bodyIndent;
@@ -1287,6 +1422,7 @@ function compileRoot(
           return inline ?? dflt;
         };
         flowLines.push(`${indent}const _v${node.id}_handle = _agentCreate(${inP('x', '0')}, ${inP('y', '0')}, ${inP('z', '0')}, ${inP('radius', '1')});`);
+        flowLines.push(...traceFlowValueRecord(node.id, 'handle', `_v${node.id}_handle`, indent));
       } else if (node.data.nodeType === 'switch') {
         const switchMode = (node.data.config.mode as string) || 'conditions';
         const firstMatchOnly = node.data.config.firstMatchOnly !== false;
@@ -1295,6 +1431,7 @@ function compileRoot(
         const hasDefault = flowOutputToTargets.has(`${node.id}:default`);
 
         if (caseCount === 0) {
+          flowLines.push(...trO(node.id, 'default', indent, true));
           compileFlowChain(node.id, 'default', indent);
         } else {
           // Build condition expressions for each case
@@ -1349,11 +1486,13 @@ function compileRoot(
             for (let ci = 0; ci < caseCount; ci++) {
               const prefix = ci === 0 ? 'if' : '} else if';
               flowLines.push(`${indent}${prefix} (${caseConditions[ci]}) {`);
+              flowLines.push(...trO(node.id, `case_${ci}`, indent + '  '));
               flushBranchValues(`${node.id}:case_${ci}`, flowLines, indent + '  ');
               compileFlowChain(node.id, `case_${ci}`, indent + '  ');
             }
             if (hasDefault) {
               flowLines.push(`${indent}} else {`);
+              flowLines.push(...trO(node.id, 'default', indent + '  '));
               flushBranchValues(`${node.id}:default`, flowLines, indent + '  ');
               compileFlowChain(node.id, 'default', indent + '  ');
             }
@@ -1363,12 +1502,14 @@ function compileRoot(
             flowLines.push(`${indent}let _sw${node.id} = false;`);
             for (let ci = 0; ci < caseCount; ci++) {
               flowLines.push(`${indent}if (${caseConditions[ci]}) { _sw${node.id} = true;`);
+              flowLines.push(...trO(node.id, `case_${ci}`, indent + '  '));
               flushBranchValues(`${node.id}:case_${ci}`, flowLines, indent + '  ');
               compileFlowChain(node.id, `case_${ci}`, indent + '  ');
               flowLines.push(`${indent}}`);
             }
             if (hasDefault) {
               flowLines.push(`${indent}if (!_sw${node.id}) {`);
+              flowLines.push(...trO(node.id, 'default', indent + '  '));
               flushBranchValues(`${node.id}:default`, flowLines, indent + '  ');
               compileFlowChain(node.id, 'default', indent + '  ');
               flowLines.push(`${indent}}`);
@@ -1434,6 +1575,7 @@ function compileRoot(
       // the whole construct for control nodes), at the same scope/indent,
       // BEFORE the parent port's next sibling target — depth-first like UE.
       // No-op when nothing is wired (every pre-existing model).
+      flowLines.push(...trO(node.id, 'next', indent, true));
       compileFlowChain(node.id, 'next', indent);
     }
 
@@ -1711,14 +1853,33 @@ export interface CompileResult {
    *  simulator pauses and shows `stopMessages[n]`. Length = number of Stop
    *  Event nodes in the graph (including those inside macro defs). */
   stopMessages: string[];
+  /** TRACE BUILD only (`opts.trace`) — the parameter list of every emitted trace
+   *  function plus the lowered-id -> user-node origin table. Absent on the normal
+   *  build, which is byte-identical to the pre-trace compiler. */
+  trace?: TraceCompileMeta;
   error?: string;
+}
+
+/** Split an emitted parameter string back into names. The builders join with
+ *  `', '`, so this is exact - never hand-write a parallel list (the showCode.ts
+ *  rule, applied to the trace runner's arg naming). */
+function splitParams(params: string): string[] {
+  return params ? params.split(', ') : [];
 }
 
 export function compileGraph(
   graphNodes: GraphNode[],
   graphEdges: GraphEdge[],
   model?: CAModel,
+  opts?: CompileOptions,
 ): CompileResult {
+  const trace = opts?.trace === true;
+  /** TRACE BUILD - folded in PASS ORDER (see traceOrigin.ts). Stays empty on the
+   *  normal build; the passes return their maps either way, but folding is what
+   *  costs anything and it only runs here. */
+  const traceOrigin: TraceOriginTable = {};
+  const traceParamNames: Record<string, string[]> = {};
+  const fold = (m?: Map<string, import('./traceOrigin').TraceOrigin>) => { if (trace) foldOriginMap(traceOrigin, m); };
   if (!model) {
     return { stepCode: '', initCode: '', gridInitCode: '', gridPeriodicCodes: [], inputColorCodes: [], outputMappingCodes: [], stopMessages: [], error: 'Model required for SoA compilation.' };
   }
@@ -1735,6 +1896,7 @@ export function compileGraph(
     }
     graphNodes = expanded.nodes;
     graphEdges = expanded.edges;
+    fold(expanded.origin);
   }
 
   // Dangling model references (a cross-model paste / macro import) — report by
@@ -1754,6 +1916,8 @@ export function compileGraph(
   // transitively). Runs AFTER expandMacros so in-macro reroutes (now flattened
   // to top-level prefixed nodes) collapse too, and so no later analysis or
   // emitter ever sees a reroute. `A → R → B` compiles byte-identically to `A → B`.
+  // (collapseReroutes contributes NO origin entries: it only DROPS relay nodes,
+  //  it never synthesizes one, so there is nothing a record could land on.)
   ({ nodes: graphNodes, edges: graphEdges } = collapseReroutes(graphNodes, graphEdges));
   // Composite (vector / colour) SHAPE mismatches — the same "report by NAME"
   // discipline as the dangling-reference gate, for a wire `expandComposites`
@@ -1776,7 +1940,10 @@ export function compileGraph(
   // primitives every target already emits (gets split per slot; sets become a
   // linear flow splice). BEFORE lowerVectorAttrs so a vector attribute in an
   // extra slot lowers normally. Hot-path no-op. See multiAttrExpand.ts.
-  ({ nodes: graphNodes, edges: graphEdges } = expandMultiAttrs(graphNodes, graphEdges, model));
+  {
+    const r = expandMultiAttrs(graphNodes, graphEdges, model);
+    graphNodes = r.nodes; graphEdges = r.edges; fold(r.origin);
+  }
 
   // Vector stored-attribute lowering — rewrite Get/Set Vector Attribute into
   // Make/Break Vector over per-component scalar-float reads/writes AND expand the
@@ -1785,12 +1952,18 @@ export function compileGraph(
   // sees ONLY scalar floats. Runs AFTER macro/reroute flattening + BEFORE
   // expandComposites (which lowers the synthesized Make/Break Vector). Reassigns
   // `model` to the component-expanded model. Hot-path no-op. See vectorAttr.ts.
-  ({ nodes: graphNodes, edges: graphEdges, model } = lowerVectorAttrs(graphNodes, graphEdges, model));
+  {
+    const r = lowerVectorAttrs(graphNodes, graphEdges, model);
+    graphNodes = r.nodes; graphEdges = r.edges; model = r.model; fold(r.origin);
+  }
 
   // Composite-type lowering — rewrite vector / colour Make / Break / Vector-Op
   // (+ Apply Force's vector mode) into plain scalar nodes so every target emits
   // them via the verified scalar emitters (no JS-only clamp). See expandComposites.ts.
-  ({ nodes: graphNodes, edges: graphEdges } = expandComposites(graphNodes, graphEdges, model));
+  {
+    const r = expandComposites(graphNodes, graphEdges, model);
+    graphNodes = r.nodes; graphEdges = r.edges; fold(r.origin);
+  }
 
   // Linked Output Mappings — synthesize the auto color pass for any mapping
   // marked `linked` (ephemeral; rebuilt from the live model each compile). Done
@@ -1798,7 +1971,10 @@ export function compileGraph(
   // pass (no Step/user nodes) still compiles, and before CSE + buildAdjacency so
   // the synthetic nodes participate normally. (WASM/WebGPU inject post-expand
   // and have no empty-graph early return, so this keeps the three targets aligned.)
-  ({ nodes: graphNodes, edges: graphEdges } = injectLinkedOutputMappings(graphNodes, graphEdges, model));
+  {
+    const r = injectLinkedOutputMappings(graphNodes, graphEdges, model);
+    graphNodes = r.nodes; graphEdges = r.edges; fold(r.origin);
+  }
 
   if (graphNodes.length === 0) {
     return { stepCode: '', initCode: '', gridInitCode: '', gridPeriodicCodes: [], inputColorCodes: [], outputMappingCodes: [], stopMessages: [], error: 'No nodes in graph.' };
@@ -1840,7 +2016,9 @@ export function compileGraph(
   // one canonical representative per group. Frees users from sharing accessor
   // nodes manually in multi-equation models (Gray-Scott and similar). See
   // accessorCSE.ts for the full rationale and purity rules.
-  graphEdges = canonicalizeAccessorEdges(graphNodes, graphEdges, model);
+  // TRACE BUILD: CSE OFF - each duplicate accessor must materialise its OWN
+  // record, or a node the user is watching would silently borrow another's value.
+  if (!trace) graphEdges = canonicalizeAccessorEdges(graphNodes, graphEdges, model);
 
   const { nodeMap, inputToSource, inputToSources, flowOutputToTargets } = buildAdjacency(graphNodes, graphEdges);
 
@@ -2101,7 +2279,10 @@ export function compileGraph(
   // gather materialises through GetNeighborsAttribute's inline-aware scratch
   // fill and the reducer consumes the scratch array — correct on both modes.
   // Sparse cells are few, so the lost fusion micro-opt is negligible there.
-  const fusion = sparseSteppingEnabled(model)
+  // TRACE BUILD: fusion OFF for the same reason the sparse mode disables it (the
+  // empty-graph call is that precedent) - the gather has to materialise so its
+  // array is recordable instead of vanishing into a reducer's inline loop.
+  const fusion = (trace || sparseSteppingEnabled(model))
     ? detectFusableConsumers([], [], inputToSources, inputToSource, model, fusionHazards)
     : detectFusableConsumers(graphNodes, graphEdges, inputToSources, inputToSource, model, fusionHazards);
 
@@ -2199,7 +2380,7 @@ export function compileGraph(
   let stepCode = '';
   if (stepNode) {
     const { valueLines, preLoopValueLines, flowLines, scratchNodes } = compileRoot(
-      stepNode, 'do', nodeMap, inputToSource, inputToSources, flowOutputToTargets, loopInvariant, fusion, graphNodes, graphEdges, model,
+      stepNode, 'do', nodeMap, inputToSource, inputToSources, flowOutputToTargets, loopInvariant, fusion, graphNodes, graphEdges, model, trace,
     );
 
     // Scratch array declarations (before the loop)
@@ -2213,7 +2394,49 @@ export function compileGraph(
     // Build linked indicator aggregation code (injected into the loop)
     const linked = buildLinkedIndicatorCode(model);
 
-    if (isAsync) {
+    if (trace) {
+      // TRACE BUILD - the bulk `w_x.set(r_x)` copy becomes the SINGLE-CELL copy of
+      // the traced cell. The bulk form is O(total) and would touch the whole grid,
+      // but DROPPING it outright is wrong: in sync mode the engine's `w_` buffer is
+      // two generations stale between steps, so a body that READS the write buffer
+      // (`updateAttribute`'s read-modify-write, a sub-attribute guard resolved
+      // `fromWriteBuffer`) would read that stale value and the trace would disagree
+      // with the engine (caught by the harness on Extended Wireworld). The per-cell
+      // copy is the single-element equivalent and is exactly what `inputColor`
+      // already emits. Async mode aliases r_/w_, so it emits nothing - the same gate
+      // `bulkCopyLines` uses.
+      const traceCellCopyLines = isAsync ? [] : [
+        ...cellAttrs.filter(a => sparseBulk || !subAttrInfoById.get(a.id))
+          .map(a => `    w_${a.id}[idx] = r_${a.id}[idx];`),
+        ...(model.variegatedCells?.enabled ? ['    w_orientation[idx] = r_orientation[idx];'] : []),
+      ];
+      // ONE cell, no order loop, no sparse variant, no
+      // linked-indicator embedding, no `_rngState` write-back. Everything else (the
+      // coordinate decode, the sub-attribute scrub, the variable blocks, the viewer
+      // hoist, the value + flow lines) is the engine's body verbatim, which is what
+      // makes the traced values the values the engine would compute.
+      traceParamNames.step = [...splitParams(loopParams), '_traceIdx', '_tr'];
+      stepCode = [
+        `(function(${loopParams}, _traceIdx, _tr) {`,
+        ...scratchDecls,
+        ...variableBlocks.preLoop,
+        ...viewerHoistLines,
+        ...preLoopValueLines,
+        '  let _rs = _rngState[0] || 0x12345678;',
+        '  {',
+        '    const idx = _traceIdx;',
+        '    const colorIdx = idx * 4;',
+        ...decodeCoordLines(is3d, '    '),
+        ...traceCellCopyLines,
+        ...subAttrSyncCopyLines,
+        ...variableBlocks.inLoopReset,
+        ...valueLines,
+        '',
+        ...flowLines,
+        '  }',
+        '})',
+      ].join('\n');
+    } else if (isAsync) {
       // Async mode: iterate cells via shuffled order array
       stepCode = [
         `(function(${loopParams}) {`,
@@ -2316,7 +2539,7 @@ export function compileGraph(
     // character what they always were. See src/model/inputMappingParams.ts.
     const icResolved = inputParamsForNode('inputColor', icNode.data.config, model);
     const { valueLines, preLoopValueLines, flowLines } = compileRoot(
-      icNode, 'do', nodeMap, inputToSource, inputToSources, flowOutputToTargets, loopInvariant, fusion, graphNodes, graphEdges, model,
+      icNode, 'do', nodeMap, inputToSource, inputToSources, flowOutputToTargets, loopInvariant, fusion, graphNodes, graphEdges, model, trace,
     );
     // InputColor is called per-cell (for painted cells only), keep per-cell signature.
     // preLoopValueLines (modelAttrs reads etc.) still go in the function preamble —
@@ -2332,8 +2555,13 @@ export function compileGraph(
       const defaultLit = attrValueLiteralJS(full, full.defaultValue);
       return `  w_${a.id}[idx] = (${guard}) ? r_${a.id}[idx] : ${defaultLit};`;
     });
+    // TRACE BUILD - inputColor ALREADY takes `idx`, so only `_tr` is appended.
+    if (trace) {
+      traceParamNames[`inputColor:${mappingId}`] =
+        [...icResolved.channels.map(c => c.argName), ...splitParams(cellParams), '_tr'];
+    }
     const code = [
-      `(function(${icResolved.channels.map(c => `${c.argName}, `).join('')}${cellParams}) {`,
+      `(function(${icResolved.channels.map(c => `${c.argName}, `).join('')}${cellParams}${trace ? ', _tr' : ''}) {`,
       '  const colorIdx = idx * 4;',
       // Wave A.6: per-cell (row, col) decoded from idx for NI access helpers.
       ...decodeCoordLines(is3d, '  '),
@@ -2344,6 +2572,10 @@ export function compileGraph(
       ...(icResolved.channels.length > 0
         ? [`  ${icResolved.channels.map(c => `const _v${icNode.id}_${c.portId} = ${c.argName};`).join(' ')}`]
         : []),
+      // The root's own value-outs, recorded AFTER their declarations (TDZ).
+      ...(trace
+        ? icResolved.channels.map(c => `  _tr.v(${JSON.stringify(icNode.id)}, ${JSON.stringify(c.portId)}, _v${icNode.id}_${c.portId});`)
+        : []),
       '  let _rs = _rngState[0] || 0x12345678;',
       ...viewerHoistLines,
       ...preLoopValueLines,
@@ -2351,7 +2583,7 @@ export function compileGraph(
       ...valueLines,
       '',
       ...flowLines,
-      '  _rngState[0] = _rs;',
+      ...(trace ? [] : ['  _rngState[0] = _rs;']),
       '})',
     ].join('\n');
     inputColorCodes.push({ mappingId, code });
@@ -2368,7 +2600,7 @@ export function compileGraph(
   for (const omNode of outputMappingNodes) {
     const mappingId = omNode.data.config.mappingId as string || '';
     const { valueLines, preLoopValueLines, flowLines, scratchNodes } = compileRoot(
-      omNode, 'do', nodeMap, inputToSource, inputToSources, flowOutputToTargets, loopInvariant, fusion, graphNodes, graphEdges, model,
+      omNode, 'do', nodeMap, inputToSource, inputToSources, flowOutputToTargets, loopInvariant, fusion, graphNodes, graphEdges, model, trace,
     );
     const scratchDecls = scratchNodes.map(s => buildScratchDecl(s, model));
     const omPerCell = [
@@ -2397,14 +2629,22 @@ export function compileGraph(
           ...omPerCell,
           '  }',
         ];
+    // TRACE BUILD - one cell (`_traceIdx`), no sparse dual loop.
+    const traceOmLoop = [
+      '  {',
+      '    const idx = _traceIdx;',
+      ...omPerCell,
+      '  }',
+    ];
+    if (trace) traceParamNames[`outputMapping:${mappingId}`] = [...splitParams(omParams), '_traceIdx', '_tr'];
     const code = [
-      `(function(${omParams}) {`,
+      `(function(${omParams}${trace ? ', _traceIdx, _tr' : ''}) {`,
       ...scratchDecls,
       ...viewerHoistLines,
       ...preLoopValueLines,
       '  let _rs = _rngState[0] || 0x12345678;',
-      ...omLoop,
-      '  _rngState[0] = _rs;',
+      ...(trace ? traceOmLoop : omLoop),
+      ...(trace ? [] : ['  _rngState[0] = _rs;']),
       '})',
     ].join('\n');
     outputMappingCodes.push({ mappingId, code });
@@ -2421,7 +2661,7 @@ export function compileGraph(
   let initCode = '';
   if (initNode) {
     const { valueLines, preLoopValueLines, flowLines, scratchNodes } = compileRoot(
-      initNode, 'do', nodeMap, inputToSource, inputToSources, flowOutputToTargets, loopInvariant, fusion, graphNodes, graphEdges, model,
+      initNode, 'do', nodeMap, inputToSource, inputToSources, flowOutputToTargets, loopInvariant, fusion, graphNodes, graphEdges, model, trace,
     );
     const scratchDecls = scratchNodes.map(s => buildScratchDecl(s, model));
     // Sync-mode bulk copy. Async mode skips (single buffer) — sub-attribute
@@ -2430,16 +2670,26 @@ export function compileGraph(
       ? []
       : cellAttrs.filter(a => !subAttrInfoById.get(a.id)).map(a => `  w_${a.id}.set(r_${a.id});`);
     const initId = initNode.id;
+    // The Init Event's coordinate value-outs, recorded after their declarations.
+    const initPortRecords = trace
+      ? ['x', 'y', 'maxX', 'maxY', ...(is3d ? ['z', 'maxZ'] : [])]
+        .map(portId => `    _tr.v(${JSON.stringify(initId)}, ${JSON.stringify(portId)}, _v${initId}_${portId});`)
+      : [];
+    if (trace) traceParamNames.init = [...splitParams(omParams), '_traceIdx', '_tr'];
     initCode = [
-      `(function(${omParams}) {`,
+      `(function(${omParams}${trace ? ', _traceIdx, _tr' : ''}) {`,
       ...scratchDecls,
       ...viewerHoistLines,
       ...preLoopValueLines,
       '  let _rs = _rngState[0] || 0x12345678;',
-      ...initBulkCopy,
-      '  for (let idx = 0; idx < total; idx++) {',
+      ...(trace ? [] : initBulkCopy),
+      ...(trace ? ['  {', '    const idx = _traceIdx;'] : ['  for (let idx = 0; idx < total; idx++) {']),
       '    const colorIdx = idx * 4;',
       ...decodeCoordLines(is3d, '    '),
+      // TRACE BUILD - the init root's bulk copy, per-cell (see the step's note).
+      ...(trace && !isAsync
+        ? cellAttrs.filter(a => !subAttrInfoById.get(a.id)).map(a => `    w_${a.id}[idx] = r_${a.id}[idx];`)
+        : []),
       `    const _v${initId}_x = _col;`,
       `    const _v${initId}_y = _row;`,
       `    const _v${initId}_maxX = W - 1;`,
@@ -2449,12 +2699,13 @@ export function compileGraph(
         `    const _v${initId}_z = _layer;`,
         `    const _v${initId}_maxZ = D - 1;`,
       ] : []),
+      ...initPortRecords,
       ...subAttrSyncCopyLines,
       ...valueLines,
       '',
       ...flowLines,
       '  }',
-      '  _rngState[0] = _rs;',
+      ...(trace ? [] : ['  _rngState[0] = _rs;']),
       '})',
     ].join('\n');
   }
@@ -2469,7 +2720,7 @@ export function compileGraph(
   let gridInitCode = '';
   if (gridInitNode) {
     const { valueLines, preLoopValueLines, flowLines, scratchNodes } = compileRoot(
-      gridInitNode, 'do', nodeMap, inputToSource, inputToSources, flowOutputToTargets, loopInvariant, fusion, graphNodes, graphEdges, model,
+      gridInitNode, 'do', nodeMap, inputToSource, inputToSources, flowOutputToTargets, loopInvariant, fusion, graphNodes, graphEdges, model, trace,
     );
     const scratchDecls = scratchNodes.map(s => buildScratchDecl(s, model));
     const gId = gridInitNode.id;
@@ -2477,8 +2728,10 @@ export function compileGraph(
     // / accumulators for "place N seeds", etc.). Not loop-wrapped, so the scalar
     // `let`s + array fills run ONCE.
     const gv = buildVariableJS(model.variables || []);
+    // TRACE BUILD - a GLOBAL root: no element index, so only `_tr` is appended.
+    if (trace) traceParamNames.gridInit = [...splitParams(omParams), '_tr'];
     gridInitCode = [
-      `(function(${omParams}) {`,
+      `(function(${omParams}${trace ? ', _tr' : ''}) {`,
       ...scratchDecls,
       ...gv.preLoop,
       ...gv.inLoopReset.map(l => '  ' + l.trimStart()),
@@ -2487,12 +2740,16 @@ export function compileGraph(
       `  const _v${gId}_width = W;`,
       `  const _v${gId}_height = H;`,
       ...(is3d ? [`  const _v${gId}_depth = D;`] : []),
+      ...(trace
+        ? ['width', 'height', ...(is3d ? ['depth'] : [])]
+          .map(portId => `  _tr.v(${JSON.stringify(gId)}, ${JSON.stringify(portId)}, _v${gId}_${portId});`)
+        : []),
       '  let _rs = _rngState[0] || 0x12345678;',
       ...preLoopValueLines,
       ...valueLines,
       '',
       ...flowLines,
-      '  _rngState[0] = _rs;',
+      ...(trace ? [] : ['  _rngState[0] = _rs;']),
       '})',
     ].join('\n');
   }
@@ -2508,17 +2765,18 @@ export function compileGraph(
   for (const gpNode of graphNodes.filter(n => n.data.nodeType === 'gridPeriodic')) {
     const { period, phase } = periodicParams(gpNode.data.config);
     const { valueLines, preLoopValueLines, flowLines, scratchNodes } = compileRoot(
-      gpNode, 'do', nodeMap, inputToSource, inputToSources, flowOutputToTargets, loopInvariant, fusion, graphNodes, graphEdges, model,
+      gpNode, 'do', nodeMap, inputToSource, inputToSources, flowOutputToTargets, loopInvariant, fusion, graphNodes, graphEdges, model, trace,
     );
     const scratchDecls = scratchNodes.map(s => buildScratchDecl(s, model));
     const pId = gpNode.id;
     // Local Variables (cell scope) as global scratch — the Grid Init Event's rule.
     // Not loop-wrapped, so the scalar `let`s + array fills run ONCE per firing.
     const pv = buildVariableJS(model.variables || []);
+    if (trace) traceParamNames[`gridPeriodic:${pId}`] = [...splitParams(omParams), '_tr'];
     gridPeriodicCodes.push({
       period, phase,
       code: [
-        `(function(${omParams}) {`,
+        `(function(${omParams}${trace ? ', _tr' : ''}) {`,
         ...scratchDecls,
         ...viewerHoistLines,
         ...pv.preLoop,
@@ -2531,12 +2789,16 @@ export function compileGraph(
         // `_generation` is guaranteed threaded: the root's presence makes
         // `cellUsesGeneration` true (generationUse.ts rule 3).
         `  const _v${pId}_stepIndex = Math.floor(_generation / ${period});`,
+        ...(trace
+          ? ['width', 'height', ...(is3d ? ['depth'] : []), 'stepIndex']
+            .map(portId => `  _tr.v(${JSON.stringify(pId)}, ${JSON.stringify(portId)}, _v${pId}_${portId});`)
+          : []),
         '  let _rs = _rngState[0] || 0x12345678;',
         ...preLoopValueLines,
         ...valueLines,
         '',
         ...flowLines,
-        '  _rngState[0] = _rs;',
+        ...(trace ? [] : ['  _rngState[0] = _rs;']),
         '})',
       ].join('\n'),
     });
@@ -2546,7 +2808,10 @@ export function compileGraph(
     ?? variegatedValidationError
     ?? (!stepNode ? 'No Step node found. Add a Step node as the entry point.' : undefined);
 
-  return { stepCode, initCode, gridInitCode, gridPeriodicCodes, inputColorCodes, outputMappingCodes, stopMessages, error };
+  return {
+    stepCode, initCode, gridInitCode, gridPeriodicCodes, inputColorCodes, outputMappingCodes, stopMessages, error,
+    ...(trace ? { trace: { paramNames: traceParamNames, origin: traceOrigin } } : {}),
+  };
 }
 
 // ===========================================================================
@@ -2621,6 +2886,8 @@ export interface AgentCompileResult {
    *  engine with NO new store lane, exactly like `stopMessages` / `_stopIdx`.
    *  Empty when the agent graph has no Divide Agent node. */
   dividePartitions: DividePartitionSpec[];
+  /** TRACE BUILD only (`opts.trace`) — see `CompileResult.trace`. */
+  trace?: TraceCompileMeta;
   error?: string;
 }
 
@@ -2778,8 +3045,14 @@ export function compileAgentGraph(
    *  cell and agent graphs. The agent graph's stop indices are offset by the cell
    *  graph's stop-message count so `[...cellStops, ...agentStops]` aligns 1-based. */
   stopIdxBase = 0,
+  opts?: CompileOptions,
 ): AgentCompileResult {
   if (!model) return { behaviourCode: '', initCode: '', periodicCodes: [], divisionCode: '', stopMessages: [], outputMappingCodes: [], inputMappingCodes: [], dividePartitions: [], error: 'Model required.' };
+
+  const trace = opts?.trace === true;
+  const traceOrigin: TraceOriginTable = {};
+  const traceParamNames: Record<string, string[]> = {};
+  const fold = (m?: Map<string, import('./traceOrigin').TraceOrigin>) => { if (trace) foldOriginMap(traceOrigin, m); };
 
   // Flatten macros, strip reroutes — same front-end pipeline the cell compiler runs.
   {
@@ -2787,6 +3060,7 @@ export function compileAgentGraph(
     if (expanded.error) return { behaviourCode: '', initCode: '', periodicCodes: [], divisionCode: '', stopMessages: [], outputMappingCodes: [], inputMappingCodes: [], dividePartitions: [], error: expanded.error };
     agentNodes = expanded.nodes;
     agentEdges = expanded.edges;
+    fold(expanded.origin);
   }
   // Same dangling-reference gate as the cell compiler — an agent graph pasted
   // from a model with different agent attributes / views must name what is
@@ -2804,41 +3078,42 @@ export function compileAgentGraph(
   // Neighbour State Census → the gather + one Count Matching per CONSUMED state
   // port (+ Array Length for `total`), so it reuses the existing emitters on every
   // target (no new emit). See censusExpand.ts.
-  ({ nodes: agentNodes, edges: agentEdges } = expandNeighbourCensus(agentNodes, agentEdges, model));
+  { const r = expandNeighbourCensus(agentNodes, agentEdges, model); agentNodes = r.nodes; agentEdges = r.edges; fold(r.origin); }
   // Neighbour Density with an ACTIVE Radius -> Get Nearby Agents(radius) + Array
   // Length, so an absolute-radius density reuses the existing emitters on every
   // target (no new emit). Radius unwired/0 keeps the engine reduction, so this is
   // a no-op for every existing model. See densityExpand.ts.
-  ({ nodes: agentNodes, edges: agentEdges } = expandDensityRadius(agentNodes, agentEdges, model));
+  { const r = expandDensityRadius(agentNodes, agentEdges, model); agentNodes = r.nodes; agentEdges = r.edges; fold(r.origin); }
   // Periodic Step roots → Get Generation + Math(%) + Compare + If/Then hung off
   // the single Behaviour Step, sequenced. Zero per-target emit — see
   // periodicExpand.ts. No-op when the graph has no Periodic Step.
-  ({ nodes: agentNodes, edges: agentEdges } = expandPeriodicSteps(agentNodes, agentEdges, model));
+  { const r = expandPeriodicSteps(agentNodes, agentEdges, model); agentNodes = r.nodes; agentEdges = r.edges; fold(r.origin); }
   // Apply Force To Agents (array broadcast) → For Each In Array → Apply Force To
   // Agent, so it reuses the single node's emitters on every target (no new emit).
-  ({ nodes: agentNodes, edges: agentEdges } = expandForceToAgents(agentNodes, agentEdges, model));
+  { const r = expandForceToAgents(agentNodes, agentEdges, model); agentNodes = r.nodes; agentEdges = r.edges; fold(r.origin); }
   // Multi-attribute slot expansion (agent scope) — see the cell compiler + multiAttrExpand.ts.
-  ({ nodes: agentNodes, edges: agentEdges } = expandMultiAttrs(agentNodes, agentEdges, model));
+  { const r = expandMultiAttrs(agentNodes, agentEdges, model); agentNodes = r.nodes; agentEdges = r.edges; fold(r.origin); }
   // FOV `facing` heading source → Get Self Attribute [vector] → Break Vector → wired
   // heading (BEFORE vector lowering, so the synthesized read is lowered). No-op unless
   // a Get Agents In View / Sense Hemifield uses a resolvable facing source.
-  ({ nodes: agentNodes, edges: agentEdges } = lowerFacingSource(agentNodes, agentEdges, model));
+  { const r = lowerFacingSource(agentNodes, agentEdges, model); agentNodes = r.nodes; agentEdges = r.edges; fold(r.origin); }
   // Vector stored-attribute lowering (agent scope) — see the cell compiler + vectorAttr.ts.
-  ({ nodes: agentNodes, edges: agentEdges, model } = lowerVectorAttrs(agentNodes, agentEdges, model));
-  ({ nodes: agentNodes, edges: agentEdges } = expandComposites(agentNodes, agentEdges, model));
+  { const r = lowerVectorAttrs(agentNodes, agentEdges, model); agentNodes = r.nodes; agentEdges = r.edges; model = r.model; fold(r.origin); }
+  { const r = expandComposites(agentNodes, agentEdges, model); agentNodes = r.nodes; agentEdges = r.edges; fold(r.origin); }
   // Agent Output Mappings: synthesize the LINKED colour passes and sequence them
   // with any user agentOutputMapping roots (the agent analogue of the cell
   // injectLinkedOutputMappings). After this the augmented graph carries one
   // agentOutputMapping root per agent mapping (user-placed or synthesized), which
   // the OM compile loop below turns into per-agent colour-pass fns. Runs BEFORE
   // CSE / adjacency so the synthesized nodes share every downstream analysis.
-  ({ nodes: agentNodes, edges: agentEdges } = injectAgentLinkedOutputMappings(agentNodes, agentEdges, model));
+  { const r = injectAgentLinkedOutputMappings(agentNodes, agentEdges, model); agentNodes = r.nodes; agentEdges = r.edges; fold(r.origin); }
   // D-ASYNC-CSE: accessor-CSE is sound only in SYNC agent mode. The DEFAULT agent
   // update mode is 'async' (single-buffered agent attrs — a getCellAttribute /
   // getAgentAttribute read can change after an intervening Set*Attribute write
   // within the same step), so gate CSE off there, mirroring the lattice async gate.
   const agentSync = model.centerBased?.agentUpdateMode === 'sync';
-  if (agentSync) agentEdges = canonicalizeAccessorEdges(agentNodes, agentEdges, model);
+  // TRACE BUILD: CSE OFF (see the header block).
+  if (agentSync && !trace) agentEdges = canonicalizeAccessorEdges(agentNodes, agentEdges, model);
 
   // FIX 2 — pre-resolve indicator ids to numeric indices over the AGENT graph
   // (compileGraph does this only for the cell graph). Without it get/set/update
@@ -2914,7 +3189,10 @@ export function compileAgentGraph(
 
   const { nodeMap, inputToSource, inputToSources, flowOutputToTargets } = buildAdjacency(agentNodes, agentEdges);
   const loopInvariant = classifyLoopInvariant(agentNodes, inputToSource);
-  const fusion = detectFusableConsumers(agentNodes, agentEdges, inputToSources, inputToSource, model, new Set<string>());
+  // TRACE BUILD: fusion OFF (the gather must materialise to be recordable).
+  const fusion = trace
+    ? detectFusableConsumers([], [], inputToSources, inputToSource, model, new Set<string>())
+    : detectFusableConsumers(agentNodes, agentEdges, inputToSources, inputToSource, model, new Set<string>());
 
   // --- Cross-agent OVERWRITE writes are async-only (the agent form of the CA
   // grid's Fundamental #4: sync units write only themselves). In SYNC agent mode
@@ -2970,7 +3248,7 @@ export function compileAgentGraph(
 
   const { valueLines, preLoopValueLines, flowLines, scratchNodes } = compileRoot(
     behaviourNode, 'do', nodeMap, inputToSource, inputToSources, flowOutputToTargets,
-    loopInvariant, fusion, agentNodes, agentEdges, model,
+    loopInvariant, fusion, agentNodes, agentEdges, model, trace,
   );
   const scratchDecls = scratchNodes.map(s => buildScratchDecl(s, model));
   const { params } = buildAgentLoopParams(model);
@@ -3022,15 +3300,27 @@ export function compileAgentGraph(
     ? 'Math.PI * 4 * _agentRadius[idx] * _agentRadius[idx]'
     : 'Math.PI * _agentRadius[idx] * _agentRadius[idx]';
 
+  // TRACE BUILD - the behaviour value-out preamble records, emitted AFTER the
+  // `const _v<bsId>_my*` declarations below (TDZ). `myVolume` is usage-gated, so
+  // its record is too - the guard is the SAME predicate that emits the const.
+  const bsPortRecords = trace
+    ? ['myX', 'myY', ...(is3d ? ['myZ'] : []), 'myRadius', 'myArea',
+       ...(rootPortConsumed(bsId, 'myVolume') ? ['myVolume'] : []), 'myBondDegree', 'myAge']
+      .map(portId => `    _tr.v(${JSON.stringify(bsId)}, ${JSON.stringify(portId)}, _v${bsId}_${portId});`)
+    : [];
+  if (trace) traceParamNames.agentBehaviour = [...splitParams(params), '_traceIdx', '_tr'];
   const behaviourCode = [
-    `(function(${params}) {`,
+    `(function(${params}${trace ? ', _traceIdx, _tr' : ''}) {`,
     ...scratchDecls,
     ...viewerHoistLines,   // FIX 3 — Set Cell Looks _isV_ hoist (once per step)
     ...variableBlocks.preLoop,
     ...preLoopValueLines,
     '  let _rs = _rngState[0] || 0x12345678;',
-    '  for (let idx = 0; idx < highWater; idx++) {',
-    '    if (!_alive[idx]) continue;',
+    // TRACE BUILD - ONE agent. `return` (not `continue`) because there is no loop
+    // to continue; a dead target simply produces an empty trace.
+    ...(trace
+      ? ['  {', '    const idx = _traceIdx;', '    if (!_alive[idx]) return;']
+      : ['  for (let idx = 0; idx < highWater; idx++) {', '    if (!_alive[idx]) continue;']),
     '    const colorIdx = idx * 4;', // Set Cell Looks colours the agent (s.colors)
     ...bondReqCursorDecl,
     ...variableBlocks.inLoopReset,
@@ -3049,11 +3339,12 @@ export function compileAgentGraph(
     // C9 SAFETY CATCH: `_agentAge` is dropped when the Lifespan field is gated
     // off (the gate is widened by a WIRED myAge, so this only fires unwired).
     `    const _v${bsId}_myAge = ${gates.age ? '_agentAge[idx]' : '0'};`,
+    ...bsPortRecords,
     ...valueLines,
     '',
     ...flowLines,
     '  }',
-    '  _rngState[0] = _rs;',
+    ...(trace ? [] : ['  _rngState[0] = _rs;']),
     '})',
   ].join('\n');
 
@@ -3063,7 +3354,7 @@ export function compileAgentGraph(
   if (divNode) {
     const dv = compileRoot(
       divNode, 'do', nodeMap, inputToSource, inputToSources, flowOutputToTargets,
-      loopInvariant, fusion, agentNodes, agentEdges, model,
+      loopInvariant, fusion, agentNodes, agentEdges, model, trace,
     );
     const divScratch = dv.scratchNodes.map(s => buildScratchDecl(s, model));
     const dId = divNode.id;
@@ -3076,8 +3367,10 @@ export function compileAgentGraph(
     // fn). The predicates are supersets of any flattening, so that holds.
     const divUsesSibling = agentUsesDivisionSibling(model);
     const divUsesRequests = agentUsesDivisionRequests(model);
+    // TRACE BUILD - division ALREADY takes `idx`, so only `_tr` is appended.
+    if (trace) traceParamNames.agentDivision = [...splitParams(buildDivisionParams(model)), '_tr'];
     divisionCode = [
-      `(function(${buildDivisionParams(model)}) {`,
+      `(function(${buildDivisionParams(model)}${trace ? ', _tr' : ''}) {`,
       ...divScratch,
       ...viewerHoistLines,   // FIX 3 — Set Cell Looks _isV_ hoist in the division fn too
       ...divVars.preLoop,
@@ -3103,12 +3396,18 @@ export function compileAgentGraph(
       `  const _v${dId}_myArea = ${areaExpr};`,
       // D2 — emitted only when something reads it; 0 in 2D (see volumeExpr).
       ...(rootPortConsumed(dId, 'myVolume') ? [`  const _v${dId}_myVolume = ${volumeExpr};`] : []),
+      ...(trace
+        ? ['daughterIndex', ...(divUsesSibling ? ['siblingId'] : []), 'axisDefaultX', 'axisDefaultY',
+           ...(is3d ? ['axisDefaultZ'] : []), 'myArea',
+           ...(rootPortConsumed(dId, 'myVolume') ? ['myVolume'] : [])]
+          .map(portId => `  _tr.v(${JSON.stringify(dId)}, ${JSON.stringify(portId)}, _v${dId}_${portId});`)
+        : []),
       '  let _rs = _rngState[0] || 0x12345678;',
       ...dv.preLoopValueLines,
       ...dv.valueLines,
       '',
       ...dv.flowLines,
-      '  _rngState[0] = _rs;',
+      ...(trace ? [] : ['  _rngState[0] = _rs;']),
       '})',
     ].join('\n');
   }
@@ -3119,13 +3418,15 @@ export function compileAgentGraph(
   if (initNode) {
     const iv = compileRoot(
       initNode, 'do', nodeMap, inputToSource, inputToSources, flowOutputToTargets,
-      loopInvariant, fusion, agentNodes, agentEdges, model,
+      loopInvariant, fusion, agentNodes, agentEdges, model, trace,
     );
     const initScratch = iv.scratchNodes.map(s => buildScratchDecl(s, model));
     const iId = initNode.id;
     const initVars = buildVariableJS(model.agentVariables || []);
+    // TRACE BUILD - a GLOBAL root (no self): only `_tr` is appended.
+    if (trace) traceParamNames.agentInit = [...splitParams(buildAgentInitParams(model)), '_tr'];
     initCode = [
-      `(function(${buildAgentInitParams(model)}) {`,
+      `(function(${buildAgentInitParams(model)}${trace ? ', _tr' : ''}) {`,
       ...initScratch,
       ...viewerHoistLines,            // FIX 3 — Set Cell Looks _isV_ hoist in init too
       ...initVars.preLoop,
@@ -3138,12 +3439,16 @@ export function compileAgentGraph(
       // W*H*D), so no init-ABI change. 2D hides the port, so no emit there.
       ...(is3d ? [`  const _v${iId}_worldDepth = (_fieldW > 0 && _fieldH > 0) ? Math.round(_fieldTotal / (_fieldW * _fieldH)) : 1;`] : []),
       `  const _v${iId}_seedIndexBase = _agentSeedBase;`,
+      ...(trace
+        ? ['worldWidth', 'worldHeight', ...(is3d ? ['worldDepth'] : []), 'seedIndexBase']
+          .map(portId => `  _tr.v(${JSON.stringify(iId)}, ${JSON.stringify(portId)}, _v${iId}_${portId});`)
+        : []),
       '  let _rs = _rngState[0] || 0x12345678;',
       ...iv.preLoopValueLines,
       ...iv.valueLines,
       '',
       ...iv.flowLines,
-      '  _rngState[0] = _rs;',
+      ...(trace ? [] : ['  _rngState[0] = _rs;']),
       '})',
     ].join('\n');
   }
@@ -3160,15 +3465,16 @@ export function compileAgentGraph(
     const { period, phase } = periodicParams(pNode.data.config);
     const pv = compileRoot(
       pNode, 'do', nodeMap, inputToSource, inputToSources, flowOutputToTargets,
-      loopInvariant, fusion, agentNodes, agentEdges, model,
+      loopInvariant, fusion, agentNodes, agentEdges, model, trace,
     );
     const pScratch = pv.scratchNodes.map(s => buildScratchDecl(s, model));
     const pId = pNode.id;
     const pVars = buildVariableJS(model.agentVariables || []);
+    if (trace) traceParamNames[`agentPeriodic:${pId}`] = [...splitParams(buildAgentInitParams(model)), '_tr'];
     periodicCodes.push({
       period, phase,
       code: [
-        `(function(${buildAgentInitParams(model)}) {`,
+        `(function(${buildAgentInitParams(model)}${trace ? ', _tr' : ''}) {`,
         ...pScratch,
         ...viewerHoistLines,
         ...pVars.preLoop,
@@ -3184,12 +3490,16 @@ export function compileAgentGraph(
         // `_generation` is guaranteed threaded: the root's presence makes
         // `agentUsesGeneration` true (generationUse.ts rule 3).
         `  const _v${pId}_stepIndex = Math.floor(_generation / ${period});`,
+        ...(trace
+          ? ['worldWidth', 'worldHeight', ...(is3d ? ['worldDepth'] : []), 'seedIndexBase', 'stepIndex']
+            .map(portId => `  _tr.v(${JSON.stringify(pId)}, ${JSON.stringify(portId)}, _v${pId}_${portId});`)
+          : []),
         '  let _rs = _rngState[0] || 0x12345678;',
         ...pv.preLoopValueLines,
         ...pv.valueLines,
         '',
         ...pv.flowLines,
-        '  _rngState[0] = _rs;',
+        ...(trace ? [] : ['  _rngState[0] = _rs;']),
         '})',
       ].join('\n'),
     });
@@ -3211,19 +3521,21 @@ export function compileAgentGraph(
       try {
         const r = compileRoot(
           omNode, 'do', nodeMap, inputToSource, inputToSources, flowOutputToTargets,
-          loopInvariant, fusion, agentNodes, agentEdges, model,
+          loopInvariant, fusion, agentNodes, agentEdges, model, trace,
         );
         const omScratch = r.scratchNodes.map(s => buildScratchDecl(s, model));
         const omVars = buildVariableJS(model.agentVariables || []);
+        if (trace) traceParamNames[`agentOutputMapping:${mappingId}`] = [...splitParams(omParams), '_traceIdx', '_tr'];
         const code = [
-          `(function(${omParams}) {`,
+          `(function(${omParams}${trace ? ', _traceIdx, _tr' : ''}) {`,
           ...omScratch,
           ...viewerHoistLines,
           ...omVars.preLoop,
           ...r.preLoopValueLines,
           '  let _rs = _rngState[0] || 0x12345678;',
-          '  for (let idx = 0; idx < highWater; idx++) {',
-          '    if (!_alive[idx]) continue;',
+          ...(trace
+            ? ['  {', '    const idx = _traceIdx;', '    if (!_alive[idx]) return;']
+            : ['  for (let idx = 0; idx < highWater; idx++) {', '    if (!_alive[idx]) continue;']),
           '    const colorIdx = idx * 4;',
           ...bondReqCursorDecl,
           ...omVars.inLoopReset,
@@ -3231,7 +3543,7 @@ export function compileAgentGraph(
           '',
           ...r.flowLines,
           '  }',
-          '  _rngState[0] = _rs;',
+          ...(trace ? [] : ['  _rngState[0] = _rs;']),
           '})',
         ].join('\n');
         outputMappingCodes.push({ mappingId, code });
@@ -3267,12 +3579,18 @@ export function compileAgentGraph(
         const imParams = isSpawner ? spawnerParams : editorParams;
         const r = compileRoot(
           imNode, 'do', nodeMap, inputToSource, inputToSources, flowOutputToTargets,
-          loopInvariant, fusion, agentNodes, agentEdges, model,
+          loopInvariant, fusion, agentNodes, agentEdges, model, trace,
         );
         const imScratch = r.scratchNodes.map(s => buildScratchDecl(s, model));
         const imVars = buildVariableJS(model.agentVariables || []);
+        // TRACE BUILD - the EDITOR kind already takes `idx`; the SPAWNER kind is
+        // global. Either way only `_tr` is appended.
+        if (trace) {
+          traceParamNames[`agentInputMapping:${mappingId}`] =
+            [...imResolved.channels.map(c => c.argName), ...splitParams(imParams), '_tr'];
+        }
         const code = [
-          `(function(${imResolved.channels.map(c => `${c.argName}, `).join('')}${imParams}) {`,
+          `(function(${imResolved.channels.map(c => `${c.argName}, `).join('')}${imParams}${trace ? ', _tr' : ''}) {`,
           ...imScratch,
           ...viewerHoistLines,
           ...imVars.preLoop,
@@ -3297,12 +3615,18 @@ export function compileAgentGraph(
           ...(isSpawner
             ? [`  ${brushPorts.map(p => `const _v${imNode.id}_${p.id} = ${p.argName};`).join(' ')}`]
             : []),
+          // The root's own value-outs (channels, and a spawner's brush geometry),
+          // recorded after their declarations.
+          ...(trace
+            ? [...imResolved.channels.map(c => c.portId), ...(isSpawner ? brushPorts.map(b => b.id) : [])]
+              .map(portId => `  _tr.v(${JSON.stringify(imNode.id)}, ${JSON.stringify(portId)}, _v${imNode.id}_${portId});`)
+            : []),
           '  let _rs = _rngState[0] || 0x12345678;',
           ...r.preLoopValueLines,
           ...r.valueLines,
           '',
           ...r.flowLines,
-          '  _rngState[0] = _rs;',
+          ...(trace ? [] : ['  _rngState[0] = _rs;']),
           '})',
         ].join('\n');
         // `channels` MUST come from the SAME `imResolved` the leading params were
@@ -3323,6 +3647,7 @@ export function compileAgentGraph(
 
   return {
     behaviourCode, initCode, periodicCodes, divisionCode, stopMessages, outputMappingCodes, inputMappingCodes, dividePartitions,
+    ...(trace ? { trace: { paramNames: traceParamNames, origin: traceOrigin } } : {}),
     error: omErrors.length > 0 ? omErrors.join('\n') : undefined,
   };
 }

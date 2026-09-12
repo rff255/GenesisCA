@@ -38,6 +38,7 @@
 
 import type { Attribute, CAModel, GraphNode, GraphEdge } from '../../../model/types';
 import type { PortDef } from '../types';
+import type { TraceOriginMap } from './traceOrigin';
 import { agentAttrsOf } from '../../../model/attributeScope';
 
 /** One selectable state of a census attribute: the port label + the numeric value
@@ -107,7 +108,7 @@ const COUNT_HANDLE = /^output_value_count_(\d+)$/;
 
 export function expandNeighbourCensus(
   nodes: GraphNode[], edges: GraphEdge[], model: CAModel,
-): { nodes: GraphNode[]; edges: GraphEdge[] } {
+): { nodes: GraphNode[]; edges: GraphEdge[]; origin?: TraceOriginMap } {
   let any = false;
   for (const nd of nodes) if (nd.data.nodeType === 'neighbourCensus') { any = true; break; }
   if (!any) return { nodes, edges };
@@ -117,6 +118,7 @@ export function expandNeighbourCensus(
   const remapSrc = new Map<string, { source: string; sourceHandle: string }>();
   const remapTgt = new Map<string, { target: string; targetHandle: string }>();
   const expandedIds = new Set<string>();
+  const origin: TraceOriginMap = new Map();   // Rule Trace (S2)
 
   for (const nd of nodes) {
     if (nd.data.nodeType !== 'neighbourCensus') { outNodes.push(nd); continue; }
@@ -145,6 +147,7 @@ export function expandNeighbourCensus(
 
     // ONE shared gather (the neighbour id array).
     const gatherId = `${nd.id}__cnG`;
+    origin.set(gatherId, { nodeId: nd.id });
     if (nearby) {
       const gCfg: Record<string, string | number | boolean> = {};
       const r = cfg['_port_radius'];
@@ -161,6 +164,7 @@ export function expandNeighbourCensus(
     // total is consumed, or when no attribute is configured yet.
     if (wantsTotal) {
       const lenId = `${nd.id}__cnLen`;
+      origin.set(lenId, { nodeId: nd.id, portId: 'total' });
       outNodes.push({ id: lenId, type: 'caNode', position: nd.position, data: { nodeType: 'arrayLength', config: {} } });
       outEdges.push({ id: `${nd.id}__cnEt`, source: gatherId, sourceHandle: 'output_value_agents', target: lenId, targetHandle: 'input_value_array' });
       remapSrc.set(`${nd.id} output_value_total`, { source: lenId, sourceHandle: 'output_value_length' });
@@ -172,6 +176,7 @@ export function expandNeighbourCensus(
     // every counter. `attr` is non-null here: wantedCounts is only non-empty when
     // the option list is (and the option list comes from the resolved attribute).
     const valsId = `${nd.id}__cnV`;
+    origin.set(valsId, { nodeId: nd.id });
     outNodes.push({
       id: valsId, type: 'caNode', position: nd.position,
       data: { nodeType: 'getAgentsAttribute', config: { attributeId: attr!.id } },
@@ -182,6 +187,10 @@ export function expandNeighbourCensus(
       const opt = options[i]!;
       const kId = `${nd.id}__cnK${i}`;
       const cId = `${nd.id}__cnC${i}`;
+      // Rule Trace (S2): the COUNTER is the census node's per-state count port;
+      // the constant it compares against is the same node, port-less.
+      origin.set(kId, { nodeId: nd.id });
+      origin.set(cId, { nodeId: nd.id, portId: censusCountPortId(i) });
       // The comparison operand: a tag constant carries the option INDEX; a bool
       // constant carries true/false (which getConstant emits as 1/0, matching the
       // agent SoA's 0/1 storage). Both are exact small integers on every target.
@@ -211,5 +220,5 @@ export function expandNeighbourCensus(
     });
   }
 
-  return { nodes: outNodes, edges: outEdges };
+  return { nodes: outNodes, edges: outEdges, origin };
 }

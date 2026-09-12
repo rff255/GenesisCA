@@ -19,13 +19,14 @@
  */
 
 import type { CAModel, GraphNode, GraphEdge } from '../../../model/types';
+import type { TraceOriginMap } from './traceOrigin';
 
 /** The inline force keys carried onto the synthesized single-agent node. */
 const FORCE_INLINE_KEYS = ['_port_fx', '_port_fy', '_port_fz'] as const;
 
 export function expandForceToAgents(
   nodes: GraphNode[], edges: GraphEdge[], _model: CAModel,
-): { nodes: GraphNode[]; edges: GraphEdge[] } {
+): { nodes: GraphNode[]; edges: GraphEdge[]; origin?: TraceOriginMap } {
   let any = false;
   for (const nd of nodes) if (nd.data.nodeType === 'applyForceToAgents') { any = true; break; }
   if (!any) return { nodes, edges };
@@ -35,6 +36,7 @@ export function expandForceToAgents(
   const remapSrc = new Map<string, { source: string; sourceHandle: string }>();
   const remapTgt = new Map<string, { target: string; targetHandle: string }>();
   const expandedIds = new Set<string>();
+  const origin: TraceOriginMap = new Map();   // Rule Trace (S2)
 
   for (const nd of nodes) {
     if (nd.data.nodeType !== 'applyForceToAgents') { outNodes.push(nd); continue; }
@@ -42,6 +44,9 @@ export function expandForceToAgents(
     // Deterministic ids (WASM/WebGPU recompiles stay byte-stable).
     const feId = `${nd.id}__afaFe`;
     const afId = `${nd.id}__afaAf`;
+    // Rule Trace (S2): both synthesized nodes ARE the user's broadcast node.
+    origin.set(feId, { nodeId: nd.id });
+    origin.set(afId, { nodeId: nd.id });
     // Copy the inline force values onto the single-agent node. A WIRED fx/fy/fz edge
     // (remapped below) overrides the inline in the compiler — exactly as it does on
     // the array node itself, so wired and inline forces behave identically.
@@ -80,5 +85,5 @@ export function expandForceToAgents(
     });
   }
 
-  return { nodes: outNodes, edges: outEdges };
+  return { nodes: outNodes, edges: outEdges, origin };
 }

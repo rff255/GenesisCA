@@ -1,0 +1,999 @@
+// RULE TRACE (P1) — the compiler's TRACE BUILD, the origin table and the
+// write-recording sandbox, checked by VALUE and negative-controlled.
+//
+// What this asserts — through the SHIPPED modules, never a re-implementation:
+//
+//   A. COVERAGE. For every library model the trace build compiles the SAME set of
+//      roots the normal build emits, and EVERY node id that appears in a record
+//      (`_tr.v("id"` / `_tr.f("id"` / `_tr.o("id"`) resolves through
+//      `resolveTraceOrigin` to a user node of the graph, a node inside a macro
+//      def, or the `linked:<mappingId>` sentinel. A lowered id with no origin is
+//      a DARK NODE — the failure this check exists to prevent (impact map I6).
+//
+//   B. VALUES. On deterministic sync models (Game of Life, Extended Wireworld,
+//      Life3D → the 3D path, Gray-Scott, plus a synthetic multi-attribute-slot
+//      graph) the trace of ONE cell, run against the PRE-step state inside the
+//      sandbox, produces own-cell writes EQUAL to what the real JS step wrote for
+//      that cell — and where it records no write, the real step left the value
+//      alone. That is the claim the whole feature rests on: the traced body IS
+//      the engine's body.
+//
+//   C. FLOW. On two synthetic models whose branch is known from the data (a
+//      conditional and a 3-case switch) the recorded `o` port is exactly the one
+//      the data selects, and the write that follows is that branch's write. On
+//      Game of Life the branch sets must be a FUNCTION of the pre-state (same
+//      inputs ⇒ same branches) and must discriminate (≥ 2 distinct sets).
+//
+//   D. ISOLATION (invariant I2). Every base buffer is hashed before and after a
+//      trace and must be byte-identical — the trace is a READER.
+//
+//   E. AGENTS. Boids' behaviour traced for one agent records the SAME force the
+//      real behaviour fn writes for it.
+//
+//   F. THE RUNNER. The event cap sets `truncated`; `.subarray` on a wrapped
+//      argument throws `TraceSandboxEscape`; a throwing fn is captured, not
+//      rethrown; the RNG cell is private and stable per (element, generation).
+//
+//   G. NEGATIVE CONTROLS. Three deliberate faults must each FAIL a NAMED check:
+//      (1) the record emission removed, (2) the shadow `set` trap broken (writes
+//      reaching the base array), (3) a pass's origin fold dropped. These mutate
+//      the ARTIFACT (the emitted code / the origin table / the wrapper) rather
+//      than the source tree: this harness bundles the real modules with esbuild,
+//      so mutating the tree underneath itself would be both racy and destructive.
+//      The claim is the same either way — the check detects the fault.
+//
+// Run from the repo root:  node scripts/test-rule-trace.mjs
+import { build } from 'esbuild';
+import { writeFileSync, readFileSync, readdirSync, mkdtempSync, rmSync } from 'fs';
+import { createHash } from 'crypto';
+import { tmpdir } from 'os';
+import { join, dirname, resolve } from 'path';
+import { fileURLToPath, pathToFileURL } from 'url';
+
+const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+const ENTRY = `
+export { compileGraph, compileAgentGraph, is3dModel, sparseSteppingEnabled } from '../src/modeler/vpl/compiler/compile.ts';
+export { resolveTraceOrigin } from '../src/modeler/vpl/compiler/traceOrigin.ts';
+export { runTrace, TraceSandboxEscape, traceRngSeed, TRACE_MAX_EVENTS } from '../src/simulator/engine/traceRunner.ts';
+export { migrateForHarness } from '../src/dev/compileHarness.ts';
+export { createAgentStore, computeAgentMaxHashBins, buildSpatialHash, seedAgents } from '../src/simulator/engine/agentEngine.ts';
+export { buildAgentAbiArgs } from '../src/modeler/vpl/compiler/agentAbi.ts';
+export { agentAttrsOf, bondAttrsOf, cellFieldAttrsOf } from '../src/model/attributeScope.ts';
+export { resolveAgentFieldGates } from '../src/model/agentFieldGating.ts';
+export { resolveKeyLabels, normalizeLookupTable } from '../src/modeler/vpl/compiler/variegation.ts';
+`;
+const dir = mkdtempSync(join(tmpdir(), 'gca-trace-'));
+const entryPath = join(ROOT, 'scripts', '__trace_entry.ts');
+writeFileSync(entryPath, ENTRY);
+const outPath = join(dir, 'bundle.mjs');
+await build({ entryPoints: [entryPath], bundle: true, format: 'esm', platform: 'node', outfile: outPath, logLevel: 'error', absWorkingDir: process.cwd() });
+const M = await import(pathToFileURL(outPath).href);
+
+let failures = 0;
+const check = (name, cond, detail = '') => {
+  if (cond) console.log(`  ok  ${name}`);
+  else { console.log(`FAIL  ${name}${detail ? ' — ' + detail : ''}`); failures++; }
+};
+const section = (t) => console.log(`\n== ${t} ==`);
+/** Run a check that is EXPECTED to fail (a negative control): the named check
+ *  must report a failure, and that failure must NOT count against the suite. */
+const expectFail = (name, fn) => {
+  const before = failures;
+  const silent = console.log;
+  console.log = () => {};
+  let threw = false;
+  try { fn(); } catch { threw = true; }
+  console.log = silent;
+  const detected = failures > before || threw;
+  failures = before;
+  check(`NEGATIVE CONTROL — ${name} is DETECTED`, detected,
+    detected ? '' : 'the check passed with the fault injected');
+};
+
+const sha = (s) => createHash('sha256').update(s ?? '').digest('hex').slice(0, 16);
+const hashArr = (a) => sha(Array.from(a).join(','));
+
+// ---------------------------------------------------------------------------
+// Cell-side state builder — the worker's buffer shapes, by PARAMETER NAME.
+//
+// Args are assembled from the emitted parameter list (the trace meta's
+// `paramNames`, and a regex over the normal fn's signature) rather than mirrored
+// positionally — the name-keyed `bufs` pattern `test-global-periodic.mjs` uses.
+// A parameter with no entry is a HARD failure, so a new ABI field cannot slip in
+// silently as `undefined`.
+// ---------------------------------------------------------------------------
+
+const sigParams = (code) => /\(\s*function\s*\(([^)]*)\)/.exec(code)[1].split(',').map(s => s.trim()).filter(Boolean);
+
+const ctorFor = (type) => (
+  type === 'bool' ? Uint8Array
+    : (type === 'integer' || type === 'tag' || type === 'neighborIndex') ? Int32Array
+      : Float64Array);
+
+const mix = (a, b) => {
+  let h = (Math.imul(a + 1, 0x9e3779b1) ^ Math.imul(b + 7, 0x85ebca6b)) >>> 0;
+  h ^= h >>> 15; h = Math.imul(h, 0x2545f491) >>> 0; h ^= h >>> 13;
+  return h >>> 0;
+};
+
+/** Deterministic seed value for one cell of one attribute. */
+function seedValue(attr, i, k) {
+  const h = mix(i, k);
+  if (attr.type === 'bool') return h % 2;
+  if (attr.type === 'tag') return h % Math.max(1, (attr.tagOptions || ['a']).length);
+  if (attr.type === 'integer') return h % 5;
+  if (attr.type === 'neighborIndex') return 0;
+  return (h % 1000) / 1000;
+}
+
+/** Replicates the worker's `buildNeighborIndices` (the NON-sparse branch) — the
+ *  per-cell `total × size` index table with `total` as the constant-boundary
+ *  sentinel. Sparse models are skipped by the caller (their table is a compact
+ *  packed-offset one and the emit decodes it inline). */
+function buildNbrTable(nbr, W, H, D, torus) {
+  const coords3d = D > 1 ? nbr.coords3d : null;
+  const size = coords3d ? coords3d.length : nbr.coords.length;
+  const total = W * H * D;
+  const idx = new Int32Array(total * size);
+  for (let layer = 0; layer < D; layer++) {
+    for (let row = 0; row < H; row++) {
+      for (let col = 0; col < W; col++) {
+        const cell = (layer * H + row) * W + col;
+        for (let n = 0; n < size; n++) {
+          const c = coords3d ? coords3d[n] : nbr.coords[n];
+          const dr = c[0], dc = c[1], dl = c[2] ?? 0;
+          let nl = layer + dl, nr = row + dr, nc = col + dc;
+          if (nl < 0 || nl >= D || nr < 0 || nr >= H || nc < 0 || nc >= W) {
+            if (torus) {
+              nl = ((nl % D) + D) % D; nr = ((nr % H) + H) % H; nc = ((nc % W) + W) % W;
+            } else { idx[cell * size + n] = total; continue; }
+          }
+          idx[cell * size + n] = (nl * H + nr) * W + nc;
+        }
+      }
+    }
+  }
+  return { idx, size };
+}
+
+/** Build every buffer a cell root can name, keyed by parameter name. */
+function buildCellBufs(model, W, H, D) {
+  const total = W * H * D;
+  const torus = (model.properties.boundaryTreatment ?? 'torus') === 'torus';
+  const cellAttrs = model.attributes.filter(a => !a.isModelAttribute);
+  const bufs = {
+    total, W, H, D, WH: W * H,
+    activeViewer: '', modelAttrs: {}, _linkedResults: {}, _lookupTables: {},
+    colors: new Uint8ClampedArray(total * 4),
+    _indicators: new Float64Array((model.indicators || []).length),
+    _rngState: new Uint32Array([0x12345678]),
+    _stopFlag: new Uint32Array(1),
+    glyphCodes: new Uint32Array(total), glyphColors: new Uint32Array(total),
+    r_orientation: new Int32Array(total + 1), w_orientation: new Int32Array(total + 1),
+    _facePatternLookup: new Int32Array(0),
+    order: new Int32Array(total).map((_, i) => i),
+    _skipped: new Uint8Array(total),
+    _activeList: null, _activeCount: 0,
+    _generation: 0,
+  };
+  // Model attributes (numbers; colour attrs split; lookup tables normalised).
+  for (const a of model.attributes) {
+    if (!a.isModelAttribute) continue;
+    if (a.type === 'color') {
+      bufs.modelAttrs[a.id + '_r'] = 10; bufs.modelAttrs[a.id + '_g'] = 20; bufs.modelAttrs[a.id + '_b'] = 30;
+    } else if (a.type === 'lookupTable') {
+      const rl = M.resolveKeyLabels(a.rowKeySource, model), cl = M.resolveKeyLabels(a.colKeySource, model);
+      bufs._lookupTables[a.id] = M.normalizeLookupTable(a.tableValues, rl, cl);
+    } else {
+      const v = parseFloat(String(a.defaultValue ?? '0'));
+      bufs.modelAttrs[a.id] = Number.isFinite(v) ? v : 0;
+    }
+  }
+  // Cell attribute r_/w_ pairs (+1 cell: the constant-boundary sentinel slot).
+  const attrTypeById = new Map(model.attributes.map(a => [a.id, a.type]));
+  const mkAttr = (id) => {
+    const t = attrTypeById.get(id) ?? 'float';
+    const C = ctorFor(t);
+    return { r: new C(total + 1), w: new C(total + 1) };
+  };
+  const attrs = {};
+  for (const a of cellAttrs) {
+    const pair = mkAttr(a.id);
+    attrs[a.id] = pair;
+    bufs['r_' + a.id] = pair.r;
+    bufs['w_' + a.id] = pair.w;
+  }
+  // Neighbourhood tables.
+  for (const nbr of model.neighborhoods || []) {
+    const { idx, size } = buildNbrTable(nbr, W, H, D, torus);
+    bufs['nIdx_' + nbr.id] = idx;
+    bufs['nSz_' + nbr.id] = size;
+  }
+  return { bufs, attrs, cellAttrs, total };
+}
+
+/** Seed the r_ buffers deterministically; leave w_ as the previous generation's. */
+function seedCells(model, st) {
+  st.cellAttrs.forEach((a, k) => {
+    const arr = st.attrs[a.id].r;
+    for (let i = 0; i < st.total; i++) arr[i] = seedValue(a, i, k);
+  });
+}
+
+/** Resolve an emitted parameter list against the bufs map; a missing name is a
+ *  failure, never a silent `undefined`. */
+function argsFor(params, bufs, label) {
+  const missing = params.filter(p => !(p in bufs) && p !== '_traceIdx' && p !== '_tr');
+  check(`${label}: every parameter resolves`, missing.length === 0, `unknown: ${missing.join(', ')}`);
+  return params.filter(p => p !== '_traceIdx' && p !== '_tr').map(p => bufs[p]);
+}
+
+// ===========================================================================
+section('A. Coverage — every library model, every recorded id resolves');
+// ===========================================================================
+
+const modelsDir = join(ROOT, 'public', 'models');
+const modelFiles = readdirSync(modelsDir).filter(f => f.endsWith('.gcaproj')).sort();
+const RECORD_ID = /_tr\.[vfo]\("((?:[^"\\]|\\.)*)"/g;
+
+/** Every id a user could click: the top-level graph plus every macro def's
+ *  internals (a record inside a macro resolves to an inner id + a macro path). */
+function userIdSet(model, kind) {
+  const ids = new Set();
+  const push = (ns) => { for (const n of ns || []) ids.add(n.id); };
+  push(kind === 'agents' ? model.agentGraphNodes : model.graphNodes);
+  for (const d of model.macroDefs || []) push(d.nodes);
+  return ids;
+}
+
+let totalRecords = 0, totalUnresolved = 0, paramProblems = [];
+const coverage = [];
+
+/** The P2 worker looks a root up by KEY and names its sandbox wrappers from the
+ *  parameter list, so every emitted root must carry one, every list must end with
+ *  `_tr`, and a list must match the emitted signature exactly. */
+function checkParamNames(f, meta, roots) {
+  for (const [key, code] of roots) {
+    if (!code) continue;
+    const names = meta.paramNames[key];
+    if (!names) { paramProblems.push(`${f}: no paramNames for root "${key}"`); continue; }
+    if (names[names.length - 1] !== '_tr') { paramProblems.push(`${f}/${key}: last param is ${names[names.length - 1]}`); continue; }
+    const declared = sigParams(code);
+    if (declared.join(',') !== names.join(',')) {
+      paramProblems.push(`${f}/${key}: paramNames != the emitted signature (${names.length} vs ${declared.length})`);
+    }
+  }
+}
+for (const f of modelFiles) {
+  const model = M.migrateForHarness(JSON.parse(readFileSync(join(modelsDir, f), 'utf8')));
+  let bad = [], records = 0;
+
+  const scan = (codes, kind, ids) => {
+    for (const code of codes) {
+      if (!code) continue;
+      RECORD_ID.lastIndex = 0;
+      let m;
+      while ((m = RECORD_ID.exec(code)) !== null) {
+        records++;
+        const id = m[1];
+        const o = M.resolveTraceOrigin(id, kind.origin);
+        const ok = ids.has(o.nodeId) || o.nodeId.startsWith('linked:');
+        if (!ok) bad.push(`${id} -> ${o.nodeId}`);
+      }
+    }
+  };
+
+  const norm = M.compileGraph(model.graphNodes, model.graphEdges, model);
+  const tr = M.compileGraph(model.graphNodes, model.graphEdges, model, { trace: true });
+  check(`${f}: cell trace build matches the normal build's roots`,
+    (!!norm.stepCode) === (!!tr.stepCode)
+    && (!!norm.initCode) === (!!tr.initCode)
+    && (!!norm.gridInitCode) === (!!tr.gridInitCode)
+    && norm.gridPeriodicCodes.length === tr.gridPeriodicCodes.length
+    && norm.inputColorCodes.length === tr.inputColorCodes.length
+    && norm.outputMappingCodes.length === tr.outputMappingCodes.length
+    && (norm.error ?? null) === (tr.error ?? null),
+    `normal error=${norm.error ?? '-'} trace error=${tr.error ?? '-'}`);
+  if (tr.trace) {
+    checkParamNames(f, tr.trace, [
+      ['step', tr.stepCode], ['init', tr.initCode], ['gridInit', tr.gridInitCode],
+      ...tr.gridPeriodicCodes.map((c, i) => [`gridPeriodic:${Object.keys(tr.trace.paramNames).filter(k => k.startsWith('gridPeriodic:'))[i]?.slice(13)}`, c.code]),
+      ...tr.inputColorCodes.map(c => [`inputColor:${c.mappingId}`, c.code]),
+      ...tr.outputMappingCodes.map(c => [`outputMapping:${c.mappingId}`, c.code]),
+    ]);
+    scan([tr.stepCode, tr.initCode, tr.gridInitCode,
+      ...tr.gridPeriodicCodes.map(c => c.code),
+      ...tr.inputColorCodes.map(c => c.code),
+      ...tr.outputMappingCodes.map(c => c.code)], tr.trace, userIdSet(model, 'cells'));
+  }
+
+  if (model.topologyMode?.agents) {
+    const an = M.compileAgentGraph(model.agentGraphNodes || [], model.agentGraphEdges || [], model, 0);
+    const at = M.compileAgentGraph(model.agentGraphNodes || [], model.agentGraphEdges || [], model, 0, { trace: true });
+    check(`${f}: agent trace build matches the normal build's roots`,
+      (!!an.behaviourCode) === (!!at.behaviourCode)
+      && (!!an.divisionCode) === (!!at.divisionCode)
+      && (!!an.initCode) === (!!at.initCode)
+      && an.periodicCodes.length === at.periodicCodes.length
+      && an.outputMappingCodes.length === at.outputMappingCodes.length
+      && an.inputMappingCodes.length === at.inputMappingCodes.length
+      && (an.error ?? null) === (at.error ?? null),
+      `normal error=${an.error ?? '-'} trace error=${at.error ?? '-'}`);
+    if (at.trace) {
+      checkParamNames(f, at.trace, [
+        ['agentBehaviour', at.behaviourCode], ['agentDivision', at.divisionCode], ['agentInit', at.initCode],
+        ...at.periodicCodes.map((c, i) => [Object.keys(at.trace.paramNames).filter(k => k.startsWith('agentPeriodic:'))[i], c.code]),
+        ...at.outputMappingCodes.map(c => [`agentOutputMapping:${c.mappingId}`, c.code]),
+        ...at.inputMappingCodes.map(c => [`agentInputMapping:${c.mappingId}`, c.code]),
+      ]);
+      scan([at.behaviourCode, at.divisionCode, at.initCode,
+        ...at.periodicCodes.map(c => c.code),
+        ...at.outputMappingCodes.map(c => c.code),
+        ...at.inputMappingCodes.map(c => c.code)], at.trace, userIdSet(model, 'agents'));
+    }
+  }
+
+  totalRecords += records;
+  totalUnresolved += bad.length;
+  coverage.push(`${f}: ${records} records` + (bad.length ? `  UNRESOLVED ${bad.length}` : ''));
+  if (bad.length) check(`${f}: every recorded id resolves to a user node`, false, bad.slice(0, 4).join(' | '));
+}
+check(`all ${modelFiles.length} models: every emitted root has a paramNames entry equal to its signature`,
+  paramProblems.length === 0, paramProblems.slice(0, 4).join(' | '));
+check(`all ${modelFiles.length} models: every recorded id resolves`, totalUnresolved === 0, `${totalUnresolved} dark ids`);
+check('the record scan actually saw records', totalRecords > 500, `${totalRecords} records`);
+console.log(`  (${totalRecords} records scanned across ${modelFiles.length} models)`);
+
+// ---------------------------------------------------------------------------
+// Synthetic graph builders (the conventions the other value harnesses use)
+// ---------------------------------------------------------------------------
+const mkGraph = () => {
+  let seq = 0;
+  const nid = (p) => `${p}${seq++}`;
+  const nodes = [], edges = [];
+  const n = (t, c = {}) => { const x = { id: nid('n'), type: 'caNode', position: { x: 0, y: 0 }, data: { nodeType: t, config: c } }; nodes.push(x); return x; };
+  const e = (s, sp, t, tp, cat) => edges.push({ id: nid('e'), source: s.id, target: t.id, sourceHandle: `output_${cat}_${sp}`, targetHandle: `input_${cat}_${tp}` });
+  return { nodes, edges, n, v: (s, sp, t, tp) => e(s, sp, t, tp, 'value'), f: (s, sp, t, tp) => e(s, sp, t, tp, 'flow') };
+};
+const attrDef = (id, type, dflt = '0', extra = {}) =>
+  ({ id, name: id, type, description: '', isModelAttribute: false, defaultValue: dflt, ...extra });
+const cellModel = (g, attributes, extra = {}) => M.migrateForHarness({
+  schemaVersion: 2,
+  properties: {
+    name: 'TR', description: '', topology: '2d-grid', boundaryTreatment: 'torus',
+    updateMode: 'synchronous', gridWidth: 8, gridHeight: 8, dimension: '2d', gridDepth: 1,
+    useWasm: false, ...(extra.properties ?? {}),
+  },
+  attributes, neighborhoods: [], mappings: [], indicators: [],
+  graphNodes: g.nodes, graphEdges: g.edges, macroDefs: [],
+  topologyMode: { gridCells: true, agents: false },
+  ...extra,
+});
+
+// ---------------------------------------------------------------------------
+// The shared "trace one cell and compare with the real step" driver
+// ---------------------------------------------------------------------------
+
+/** Deep-copy every typed array in `bufs` that the step can touch, so the state
+ *  can be restored to PRE-step before the traces run. */
+function snapshotBufs(st) {
+  const snap = {};
+  for (const a of st.cellAttrs) {
+    snap['r_' + a.id] = st.attrs[a.id].r.slice();
+    snap['w_' + a.id] = st.attrs[a.id].w.slice();
+  }
+  snap.colors = st.bufs.colors.slice();
+  snap._indicators = st.bufs._indicators.slice();
+  snap._rngState = st.bufs._rngState.slice();
+  snap._stopFlag = st.bufs._stopFlag.slice();
+  snap.glyphCodes = st.bufs.glyphCodes.slice();
+  snap.glyphColors = st.bufs.glyphColors.slice();
+  snap.r_orientation = st.bufs.r_orientation.slice();
+  snap.w_orientation = st.bufs.w_orientation.slice();
+  return snap;
+}
+function restoreBufs(st, snap) {
+  for (const k of Object.keys(snap)) st.bufs[k].set(snap[k]);
+}
+/** One hash over every base buffer — the isolation check (invariant I2). */
+function hashBufs(st) {
+  const parts = [];
+  for (const a of st.cellAttrs) { parts.push(hashArr(st.attrs[a.id].r), hashArr(st.attrs[a.id].w)); }
+  parts.push(hashArr(st.bufs.colors), hashArr(st.bufs._indicators), hashArr(st.bufs._rngState),
+    hashArr(st.bufs._stopFlag), hashArr(st.bufs.glyphCodes), hashArr(st.bufs.glyphColors));
+  return sha(parts.join('|'));
+}
+
+/** Trace `sampleCount` cells of `model` and assert the own-cell writes equal the
+ *  real JS step's post-state. Returns the per-cell trace results for callers that
+ *  want to assert on the flow records too. */
+function traceVsStep(label, model, dims, sampleCount = 20) {
+  const { W, H, D } = dims;
+  if (M.sparseSteppingEnabled(model)) { check(`${label}: not a sparse model`, false, 'sparse stepping on — the nbr table shape differs'); return null; }
+  if (model.properties.updateMode !== 'synchronous') { check(`${label}: synchronous`, false, model.properties.updateMode); return null; }
+
+  const st = buildCellBufs(model, W, H, D);
+  seedCells(model, st);
+
+  const norm = M.compileGraph(model.graphNodes, model.graphEdges, model);
+  const tr = M.compileGraph(model.graphNodes, model.graphEdges, model, { trace: true });
+  if (norm.error || !norm.stepCode) { check(`${label}: compiles`, false, norm.error ?? 'no step'); return null; }
+  if (tr.error || !tr.stepCode) { check(`${label}: trace build compiles`, false, tr.error ?? 'no step'); return null; }
+
+  const pre = snapshotBufs(st);
+  // --- the REAL step over the whole grid ---
+  const nParams = sigParams(norm.stepCode);
+  const nFn = (0, eval)(norm.stepCode);
+  nFn(...argsFor(nParams, st.bufs, `${label}/normal step`));
+  const post = {};
+  for (const a of st.cellAttrs) post[a.id] = st.attrs[a.id].w.slice();
+
+  // --- back to PRE, then trace one cell at a time ---
+  restoreBufs(st, pre);
+  const beforeHash = hashBufs(st);
+  const tParams = tr.trace.paramNames.step;
+  check(`${label}: the trace step's params end with _traceIdx, _tr`,
+    tParams[tParams.length - 2] === '_traceIdx' && tParams[tParams.length - 1] === '_tr',
+    tParams.slice(-3).join(', '));
+  const tFn = (0, eval)(tr.stepCode);
+  const tArgs = argsFor(tParams, st.bufs, `${label}/trace step`);
+
+  const results = [];
+  let mismatches = [], compared = 0;
+  const stride = Math.max(1, Math.floor(st.total / sampleCount));
+  for (let idx = 0; idx < st.total && results.length < sampleCount; idx += stride) {
+    const r = M.runTrace({ fn: tFn, args: tArgs, paramNames: tParams, elementIdx: idx, generation: 0 });
+    if (r.error) { mismatches.push(`cell ${idx} threw: ${r.error}`); break; }
+    results.push({ idx, r });
+    for (const a of st.cellAttrs) {
+      const w = r.writes.find(x => x.param === 'w_' + a.id && x.index === idx);
+      const want = post[a.id][idx];
+      compared++;
+      if (w === undefined) {
+        // No record ⇒ the rule left this cell's attribute alone ⇒ the real step
+        // must have carried the read buffer forward (the bulk copy).
+        if (pre['r_' + a.id][idx] !== want) mismatches.push(`cell ${idx} ${a.id}: no trace write but ${pre['r_' + a.id][idx]} -> ${want}`);
+      } else if (!Object.is(w.value, want) && Math.abs(w.value - want) > 1e-12) {
+        mismatches.push(`cell ${idx} ${a.id}: traced ${w.value} vs real ${want}`);
+      }
+    }
+  }
+  check(`${label}: traced own-cell writes EQUAL the real step (${compared} comparisons over ${results.length} cells)`,
+    mismatches.length === 0, mismatches.slice(0, 3).join(' | '));
+  check(`${label}: the sandbox left every engine buffer byte-identical`,
+    hashBufs(st) === beforeHash);
+  return { st, pre, post, results, tr, norm, tFn, tParams, tArgs };
+}
+
+// ===========================================================================
+section('B. VALUES — a traced cell equals the real step, on shipped models');
+// ===========================================================================
+
+const shipped = (name) => M.migrateForHarness(JSON.parse(readFileSync(join(modelsDir, name), 'utf8')));
+const clamp = (v, hi) => Math.max(2, Math.min(v || hi, hi));
+
+const golModel = shipped('Game Of Life.gcaproj');
+const gol = traceVsStep('Game of Life', golModel,
+  { W: clamp(golModel.properties.gridWidth, 24), H: clamp(golModel.properties.gridHeight, 24), D: 1 });
+
+const wwModel = shipped('Extended Wireworld.gcaproj');
+traceVsStep('Extended Wireworld', wwModel,
+  { W: clamp(wwModel.properties.gridWidth, 20), H: clamp(wwModel.properties.gridHeight, 20), D: 1 });
+
+const gsModel = shipped('Gray-Scott Reaction-Diffusion.gcaproj');
+traceVsStep('Gray-Scott', gsModel,
+  { W: clamp(gsModel.properties.gridWidth, 16), H: clamp(gsModel.properties.gridHeight, 16), D: 1 });
+
+// 3D — the `_layer` decode + the 10-bit NI codec path (the 2D/3D dual-impact rule).
+const l3dModel = shipped('Life3D.gcaproj');
+check('Life3D is a 3D model', M.is3dModel(l3dModel), `${l3dModel.properties.dimension}/${l3dModel.properties.gridDepth}`);
+traceVsStep('Life3D (3D)', l3dModel,
+  { W: clamp(l3dModel.properties.gridWidth, 10), H: clamp(l3dModel.properties.gridHeight, 10), D: clamp(l3dModel.properties.gridDepth, 6) });
+
+// A synthetic MULTI-ATTRIBUTE-SLOT graph: one Set Attribute writing two attrs.
+// The second slot is a LOWERED node (`<id>__ma1`), so this is the origin table
+// proving itself by VALUE — the write it produces must land on the right attr.
+{
+  const g = mkGraph();
+  const step = g.n('step');
+  const get = g.n('getCellAttribute', { attributeId: 'src' });
+  const dbl = g.n('arithmeticOperator', { operation: '*', _port_y: '2' });
+  g.v(get, 'value', dbl, 'x');
+  // Extra slots are 2-based (slot 1 IS the legacy `attributeId`) — see multiAttrSlotIndices.
+  const set = g.n('setAttribute', { attributeId: 'o1', attr_2: 'o2', extraCount: 1, _port_value_2: '9' });
+  g.f(step, 'do', set, 'do');
+  g.v(dbl, 'result', set, 'value');
+  const model = cellModel(g, [attrDef('src', 'float', '0'), attrDef('o1', 'float', '0'), attrDef('o2', 'float', '0')]);
+  const res = traceVsStep('Multi-attribute slots (synthetic)', model, { W: 6, H: 6, D: 1 }, 8);
+  if (res) {
+    const one = res.results[0];
+    const w1 = one.r.writes.find(x => x.param === 'w_o1' && x.index === one.idx);
+    const w2 = one.r.writes.find(x => x.param === 'w_o2' && x.index === one.idx);
+    check('multi-attr: BOTH slots produced a write', !!w1 && !!w2,
+      `o1=${w1?.value} o2=${w2?.value}`);
+    check('multi-attr: slot 2 wrote its own inline literal (9)', w2?.value === 9, String(w2?.value));
+    check('multi-attr: slot 1 wrote 2 x src', Math.abs((w1?.value ?? NaN) - 2 * res.pre.r_src[one.idx]) < 1e-12,
+      `${w1?.value} vs ${2 * res.pre.r_src[one.idx]}`);
+    // …and the lowered `__ma1` id resolves back to the node the user placed.
+    const maId = `${set.id}__ma2`;
+    const o = M.resolveTraceOrigin(maId, res.tr.trace.origin);
+    check('multi-attr: the lowered slot id resolves to the user node + slot port',
+      o.nodeId === set.id && o.portId === 'value_2', JSON.stringify(o));
+  }
+}
+
+// ===========================================================================
+section('C. FLOW — the recorded branch is the one the data selects');
+// ===========================================================================
+{
+  // if (src > 0.5) out = 1 else out = 2
+  const g = mkGraph();
+  const step = g.n('step');
+  const get = g.n('getCellAttribute', { attributeId: 'src' });
+  const cmp = g.n('statement', { operation: '>', compareType: 'numerical', _port_y: '0.5' });
+  g.v(get, 'value', cmp, 'x');
+  const cond = g.n('conditional');
+  g.f(step, 'do', cond, 'check');
+  g.v(cmp, 'result', cond, 'condition');
+  const sThen = g.n('setAttribute', { attributeId: 'out', _port_value: '1' });
+  const sElse = g.n('setAttribute', { attributeId: 'out', _port_value: '2' });
+  g.f(cond, 'then', sThen, 'do');
+  g.f(cond, 'else', sElse, 'do');
+  const model = cellModel(g, [attrDef('src', 'float', '0'), attrDef('out', 'float', '0')]);
+  const res = traceVsStep('Conditional (synthetic)', model, { W: 8, H: 8, D: 1 }, 16);
+  if (res) {
+    let bad = [], sawThen = false, sawElse = false;
+    for (const { idx, r } of res.results) {
+      const taken = r.events.filter(e => e[0] === 'o' && e[1] === cond.id).map(e => e[2]);
+      const want = res.pre.r_src[idx] > 0.5 ? 'then' : 'else';
+      if (want === 'then') sawThen = true; else sawElse = true;
+      if (taken.length !== 1 || taken[0] !== want) bad.push(`cell ${idx}: src=${res.pre.r_src[idx]} took [${taken}] want ${want}`);
+      const w = r.writes.find(x => x.param === 'w_out' && x.index === idx);
+      if ((w?.value ?? 0) !== (want === 'then' ? 1 : 2)) bad.push(`cell ${idx}: wrote ${w?.value} on the ${want} branch`);
+    }
+    check('conditional: the recorded branch is exactly the one the data selects', bad.length === 0, bad.slice(0, 3).join(' | '));
+    check('conditional: BOTH branches were exercised', sawThen && sawElse);
+    // The condition node's own value record must agree with the branch.
+    const one = res.results.find(x => res.pre.r_src[x.idx] > 0.5);
+    const v = one?.r.events.find(e => e[0] === 'v' && e[1] === cmp.id);
+    check('conditional: the condition node recorded a truthy value on the THEN cell',
+      !!v && !!v[3], JSON.stringify(v));
+  }
+}
+{
+  // A 3-case switch (conditions mode, first match only) over an integer attr.
+  const g = mkGraph();
+  const step = g.n('step');
+  const get = g.n('getCellAttribute', { attributeId: 'k' });
+  const sw = g.n('switch', { mode: 'conditions', firstMatchOnly: true, caseCount: 3 });
+  g.f(step, 'do', sw, 'check');
+  const sets = [];
+  for (let i = 0; i < 3; i++) {
+    const eq = g.n('statement', { operation: '==', compareType: 'numerical', _port_y: String(i) });
+    g.v(get, 'value', eq, 'x');
+    g.v(eq, 'result', sw, `case_${i}_cond`);
+    const s = g.n('setAttribute', { attributeId: 'out', _port_value: String(10 + i) });
+    g.f(sw, `case_${i}`, s, 'do');
+    sets.push(s);
+  }
+  const dflt = g.n('setAttribute', { attributeId: 'out', _port_value: '99' });
+  g.f(sw, 'default', dflt, 'do');
+  const model = cellModel(g, [attrDef('k', 'integer', '0'), attrDef('out', 'float', '0')]);
+  const res = traceVsStep('Switch (synthetic)', model, { W: 8, H: 8, D: 1 }, 16);
+  if (res) {
+    let bad = [];
+    const seen = new Set();
+    for (const { idx, r } of res.results) {
+      const k = res.pre.r_k[idx];
+      const want = k < 3 ? `case_${k}` : 'default';
+      seen.add(want);
+      const taken = r.events.filter(e => e[0] === 'o' && e[1] === sw.id).map(e => e[2]);
+      if (taken.length !== 1 || taken[0] !== want) bad.push(`cell ${idx}: k=${k} took [${taken}] want ${want}`);
+      const w = r.writes.find(x => x.param === 'w_out' && x.index === idx);
+      const wantV = k < 3 ? 10 + k : 99;
+      if (w?.value !== wantV) bad.push(`cell ${idx}: wrote ${w?.value} want ${wantV}`);
+    }
+    check('switch: the recorded case is exactly the one the value selects', bad.length === 0, bad.slice(0, 3).join(' | '));
+    check('switch: several cases AND the default were exercised', seen.size >= 3, [...seen].join(','));
+  }
+}
+if (gol) {
+  // On a real model the branch set must be a FUNCTION of the pre-state (same
+  // inputs ⇒ same branches) and must DISCRIMINATE (a record that never varies is
+  // not evidence of anything).
+  const sets = new Map();
+  let inconsistent = 0;
+  const nbr = golModel.neighborhoods[0];
+  const nIdx = gol.st.bufs['nIdx_' + nbr.id], nSz = gol.st.bufs['nSz_' + nbr.id];
+  const attr = gol.st.cellAttrs[0];
+  for (const { idx, r } of gol.results) {
+    const flow = r.events.filter(e => e[0] === 'f' || e[0] === 'o').map(e => e.join(':')).join('>');
+    // The cell's full input state: its own attrs + the neighbourhood it reads.
+    let key = gol.st.cellAttrs.map(a => gol.pre['r_' + a.id][idx]).join(',');
+    for (let k = 0; k < nSz; k++) key += '|' + gol.pre['r_' + attr.id][nIdx[idx * nSz + k]];
+    if (sets.has(key) && sets.get(key) !== flow) inconsistent++;
+    sets.set(key, flow);
+  }
+  check('Game of Life: the flow record is a FUNCTION of the pre-state', inconsistent === 0, `${inconsistent} inconsistent`);
+  check('Game of Life: the flow records DISCRIMINATE (> 1 distinct path)',
+    new Set(sets.values()).size > 1, `${new Set(sets.values()).size} distinct paths`);
+}
+
+// ===========================================================================
+section('D. ISOLATION — the sandbox is a reader');
+// ===========================================================================
+if (gol) {
+  // A second, blunter statement of I2: run every sampled cell again and hash the
+  // whole buffer set around the batch.
+  const before = hashBufs(gol.st);
+  for (let idx = 0; idx < gol.st.total; idx += 7) {
+    M.runTrace({ fn: gol.tFn, args: gol.tArgs, paramNames: gol.tParams, elementIdx: idx, generation: 3 });
+  }
+  check('Game of Life: 100+ traces leave every buffer byte-identical', hashBufs(gol.st) === before);
+  // …and the trace DID write somewhere (else the check above is vacuous).
+  const r = M.runTrace({ fn: gol.tFn, args: gol.tArgs, paramNames: gol.tParams, elementIdx: 0, generation: 3 });
+  check('…and a trace does record writes (the isolation check is not vacuous)', r.writes.length > 0, `${r.writes.length} writes`);
+}
+
+// ===========================================================================
+section('E. AGENTS — a traced agent records the force the real behaviour writes');
+// ===========================================================================
+{
+  const model = shipped('Boids - Flocking.gcaproj');
+  const cb = model.centerBased ?? {};
+  const norm = M.compileAgentGraph(model.agentGraphNodes, model.agentGraphEdges, model, 0);
+  const tr = M.compileAgentGraph(model.agentGraphNodes, model.agentGraphEdges, model, 0, { trace: true });
+  check('Boids: the agent graph compiles on both builds', !norm.error && !tr.error, `${norm.error ?? ''} ${tr.error ?? ''}`);
+
+  if (!norm.error && !tr.error) {
+    const W = model.properties.gridWidth || 100, H = model.properties.gridHeight || 100;
+    const attrSpecs = M.agentAttrsOf(model).map(a => ({ id: a.id, type: a.type, defaultValue: 0 }));
+    const bondSpecs = M.bondAttrsOf(model).map(a => ({ id: a.id, type: a.type, defaultValue: 0 }));
+    const s = M.createAgentStore(cb, attrSpecs, {
+      wasmBacked: false, syncAttrs: cb.agentUpdateMode === 'sync',
+      bondAttrSpecs: bondSpecs, fieldGates: M.resolveAgentFieldGates(model),
+    });
+    s.worldWidth = W; s.worldHeight = H; s.worldDepth = 1;
+    const r0 = typeof cb.defaultRadius === 'number' ? cb.defaultRadius : 0.5;
+    const N = 48, cols = Math.ceil(Math.sqrt(N));
+    M.seedAgents(s, Array.from({ length: N }, (_, i) => ({
+      x: 4 + (i % cols) * 2.2 * r0, y: 4 + Math.floor(i / cols) * 2.2 * r0, radius: r0,
+    })), r0);
+    for (const spec of attrSpecs) {
+      const a = s.attrRead[spec.id];
+      for (let i = 0; i < s.highWater; i++) a[i] = (i % 5) - 2;
+      if (s.attrWrite[spec.id] !== a) s.attrWrite[spec.id].set(a);
+    }
+    // Give the flock some spread in velocity so the alignment/cohesion terms bite.
+    for (let i = 0; i < s.highWater; i++) { s.vx[i] = ((i * 7) % 11) / 11 - 0.5; s.vy[i] = ((i * 13) % 7) / 7 - 0.5; }
+    const hash = M.buildSpatialHash(s);
+
+    const total = W * H;
+    const readAttrs = {};
+    for (const spec of M.cellFieldAttrsOf(model)) {
+      const arr = new Float64Array(total);
+      for (let i = 0; i < total; i++) arr[i] = ((i * 2654435761) % 997) / 997;
+      readAttrs[spec.id] = arr;
+    }
+    const shape = {
+      is3d: false, agentAttrs: s.attrSpecs, fieldAttrs: M.cellFieldAttrsOf(model),
+      hasLookupTables: model.attributes.some(a => a.isModelAttribute && a.type === 'lookupTable'),
+      bondAttrs: s.bondAttrSpecs, usesGeneration: true, gates: s.fieldGates,
+    };
+    const rt = {
+      hash, emptyI32: new Int32Array(0), modelAttrs: {}, viewer: '',
+      indicators: new Float64Array((model.indicators || []).length),
+      rngState: new Uint32Array([0x12345678]), stopFlag: new Uint32Array(1),
+      glyphCodes: new Uint32Array(1), glyphColors: new Uint32Array(1), lookupTables: {},
+      width: W, height: H, total, torus: model.properties.boundaryTreatment === 'torus',
+      fieldArray: (id) => readAttrs[id], generation: 0,
+      agentCreate: () => -1, agentAddToWorld: () => {},
+    };
+    const args = M.buildAgentAbiArgs('loop', shape, s, rt);
+    const tParams = tr.trace.paramNames.agentBehaviour;
+    // `params <= args` is the engine's documented direction (`_generation` is
+    // pushed unconditionally while its parameter is gated), so the declared count
+    // may be one SHORT of the arg list — the runner cuts to the declared count.
+    check('Boids: the trace behaviour params are the loop ABI + _traceIdx, _tr',
+      tParams.length - 2 <= args.length && tParams.length - 2 >= args.length - 1
+      && tParams[tParams.length - 2] === '_traceIdx' && tParams[tParams.length - 1] === '_tr',
+      `${tParams.length} params vs ${args.length} args`);
+
+    // --- the REAL behaviour, ISOLATED to one agent ---
+    // The whole-population run is NOT the reference: in async agent mode agent i's
+    // writes are visible to agent j > i within the same step, and a rule may apply
+    // force to ANOTHER agent — so `forceX[k]` after a full pass is the sum of every
+    // agent's contribution, which a single-agent trace cannot (and must not)
+    // reproduce. Lowering `highWater` runs the SHIPPED loop over agent 0 only; the
+    // spatial hash still holds the whole flock, so agent 0 sees its real neighbours.
+    // Boids DRAWS (Get Random), and the trace runs on a PRIVATE RNG stream seeded
+    // from (element, generation) — D1's "re-tracing the same element at the same
+    // generation gives the same answer". So the reference run is seeded with THAT
+    // seed through the shipped `traceRngSeed`, which makes the comparison exact
+    // instead of approximate. (The normal build writes `_rngState[0]` back, so the
+    // cell is re-armed before every run.)
+    const nFn = (0, eval)(norm.behaviourCode);
+    const fullHW = s.highWater;
+    s.forceX.fill(0); s.forceY.fill(0);
+    s.highWater = 1;
+    rt.rngState[0] = M.traceRngSeed(0, 0);
+    nFn(...M.buildAgentAbiArgs('loop', shape, s, rt));
+    const soloFX = s.forceX[0], soloFY = s.forceY[0];
+    s.highWater = fullHW;
+    s.forceX.fill(0); s.forceY.fill(0);
+    rt.rngState[0] = 0x12345678;
+    nFn(...args);
+    const realFX = s.forceX.slice(), realFY = s.forceY.slice();
+    check('Boids: the real behaviour produced non-zero forces',
+      realFX.some(v => v !== 0) || realFY.some(v => v !== 0));
+
+    // --- back to zero, then trace individual agents ---
+    s.forceX.fill(0); s.forceY.fill(0);
+    const beforeX = hashArr(s.forceX), beforeVX = hashArr(s.vx), beforeA = attrSpecs.map(sp => hashArr(s.attrRead[sp.id])).join('|');
+    const tFn = (0, eval)(tr.behaviourCode);
+    {
+      const r0 = M.runTrace({ fn: (0, eval)(tr.behaviourCode), args, paramNames: tParams, elementIdx: 0, generation: 0 });
+      const fx0 = r0.writes.find(w => w.param === '_agentForceX' && w.index === 0);
+      const fy0 = r0.writes.find(w => w.param === '_agentForceY' && w.index === 0);
+      check('Boids: the traced force EQUALS the isolated real behaviour (agent 0)',
+        Math.abs((fx0?.value ?? 0) - soloFX) < 1e-12 && Math.abs((fy0?.value ?? 0) - soloFY) < 1e-12,
+        `traced (${fx0?.value}, ${fy0?.value}) vs isolated (${soloFX}, ${soloFY}) vs full-pass (${realFX[0]}, ${realFY[0]})`);
+    }
+    let bad = [], traced = 0, forced = 0;
+    for (let id = 0; id < s.highWater; id += 5) {
+      const r = M.runTrace({ fn: tFn, args, paramNames: tParams, elementIdx: id, generation: 0 });
+      if (r.error) { bad.push(`agent ${id} threw: ${r.error}`); break; }
+      traced++;
+      // A self-force rule must write the TRACED agent's force lane and no other:
+      // a stray index would mean the single-element body ran for someone else.
+      for (const w of r.writes) {
+        if ((w.param === '_agentForceX' || w.param === '_agentForceY') && w.index !== id) {
+          bad.push(`agent ${id}: wrote ${w.param}[${w.index}]`);
+        }
+      }
+      if (r.writes.some(w => w.param === '_agentForceX' && w.index === id)) forced++;
+      if (r.events.length === 0) bad.push(`agent ${id}: empty event log`);
+    }
+    check(`Boids: every traced agent writes only ITS OWN force lane (${traced} agents)`, bad.length === 0, bad.slice(0, 3).join(' | '));
+    check('Boids: every traced agent produced a force write', forced === traced, `${forced}/${traced}`);
+    check('Boids: the agent store is untouched by the traces',
+      hashArr(s.forceX) === beforeX && hashArr(s.vx) === beforeVX
+      && attrSpecs.map(sp => hashArr(s.attrRead[sp.id])).join('|') === beforeA);
+  }
+}
+
+{
+  // A deterministic (RNG-free) agent rule: force from the agent's own attribute and
+  // position, plus a self attribute write. No cross-agent write and no draw, so the
+  // FULL-population run is a valid per-agent reference for every agent at once.
+  const g = mkGraph();
+  const bs = g.n('behaviourStep');
+  const getK = g.n('getCellAttribute', { attributeId: 'k' });
+  const fx = g.n('arithmeticOperator', { operation: '*', _port_y: '2' });
+  g.v(getK, 'value', fx, 'x');
+  const fy = g.n('arithmeticOperator', { operation: '*', _port_y: '0.5' });
+  g.v(bs, 'myX', fy, 'x');
+  const af = g.n('applyForce');
+  g.f(bs, 'do', af, 'do');
+  g.v(fx, 'result', af, 'fx');
+  g.v(fy, 'result', af, 'fy');
+  const inc = g.n('arithmeticOperator', { operation: '+', _port_y: '1' });
+  g.v(getK, 'value', inc, 'x');
+  const setK = g.n('setAttribute', { attributeId: 'k' });
+  g.f(af, 'next', setK, 'do');
+  g.v(inc, 'result', setK, 'value');
+
+  const model = M.migrateForHarness({
+    schemaVersion: 2,
+    properties: {
+      name: 'TRA', description: '', topology: '2d-grid', boundaryTreatment: 'torus',
+      updateMode: 'synchronous', gridWidth: 40, gridHeight: 40, dimension: '2d', gridDepth: 1, useWasm: false,
+    },
+    attributes: [], neighborhoods: [], mappings: [], indicators: [],
+    graphNodes: [], graphEdges: [], macroDefs: [],
+    agentGraphNodes: g.nodes, agentGraphEdges: g.edges,
+    agentAttributes: [{ id: 'k', name: 'k', type: 'float', description: '', defaultValue: '0' }],
+    topologyMode: { gridCells: false, agents: true },
+    centerBased: {
+      maxAgents: 64, seedCount: 0, seedPattern: 'none', worldWidth: 40, worldHeight: 40,
+      defaultRadius: 1, maxBonds: 0, agentUpdateMode: 'async',
+    },
+  });
+  const norm = M.compileAgentGraph(model.agentGraphNodes, model.agentGraphEdges, model, 0);
+  const tr = M.compileAgentGraph(model.agentGraphNodes, model.agentGraphEdges, model, 0, { trace: true });
+  check('synthetic agents: both builds compile', !norm.error && !tr.error, `${norm.error ?? ''} ${tr.error ?? ''}`);
+  if (!norm.error && !tr.error) {
+    const attrSpecs = M.agentAttrsOf(model).map(a => ({ id: a.id, type: a.type, defaultValue: 0 }));
+    const s = M.createAgentStore(model.centerBased, attrSpecs, {
+      wasmBacked: false, syncAttrs: false, bondAttrSpecs: [], fieldGates: M.resolveAgentFieldGates(model),
+    });
+    s.worldWidth = 40; s.worldHeight = 40; s.worldDepth = 1;
+    const N = 24;
+    M.seedAgents(s, Array.from({ length: N }, (_, i) => ({ x: 2 + (i % 6) * 3, y: 2 + Math.floor(i / 6) * 3, radius: 1 })), 1);
+    const kArr = s.attrRead['k'];
+    for (let i = 0; i < s.highWater; i++) kArr[i] = (i % 7) - 3;
+    const preK = kArr.slice(), preX = s.x.slice();
+    const shape = {
+      is3d: false, agentAttrs: s.attrSpecs, fieldAttrs: [], hasLookupTables: false,
+      bondAttrs: [], usesGeneration: true, gates: s.fieldGates,
+    };
+    const rt = {
+      hash: M.buildSpatialHash(s), emptyI32: new Int32Array(0), modelAttrs: {}, viewer: '',
+      indicators: new Float64Array(0), rngState: new Uint32Array([0x12345678]), stopFlag: new Uint32Array(1),
+      glyphCodes: new Uint32Array(1), glyphColors: new Uint32Array(1), lookupTables: {},
+      width: 40, height: 40, total: 1600, torus: true, fieldArray: () => new Float64Array(0),
+      generation: 0, agentCreate: () => -1, agentAddToWorld: () => {},
+    };
+    const args = M.buildAgentAbiArgs('loop', shape, s, rt);
+    s.forceX.fill(0); s.forceY.fill(0);
+    (0, eval)(norm.behaviourCode)(...args);
+    const realFX = s.forceX.slice(), realFY = s.forceY.slice(), realK = kArr.slice();
+    // Back to the pre-step state, then trace every agent.
+    kArr.set(preK); s.forceX.fill(0); s.forceY.fill(0);
+    const tParams = tr.trace.paramNames.agentBehaviour;
+    const tFn = (0, eval)(tr.behaviourCode);
+    const before = [hashArr(s.forceX), hashArr(kArr), hashArr(s.x)].join('|');
+    let bad = [];
+    for (let id = 0; id < s.highWater; id++) {
+      const r = M.runTrace({ fn: tFn, args, paramNames: tParams, elementIdx: id, generation: 0 });
+      if (r.error) { bad.push(`agent ${id} threw: ${r.error}`); break; }
+      const fxw = r.writes.find(w => w.param === '_agentForceX' && w.index === id);
+      const fyw = r.writes.find(w => w.param === '_agentForceY' && w.index === id);
+      const kw = r.writes.find(w => w.param === 'w_k' && w.index === id);
+      if (Math.abs((fxw?.value ?? 0) - realFX[id]) > 1e-12) bad.push(`agent ${id} fx: ${fxw?.value} vs ${realFX[id]}`);
+      if (Math.abs((fyw?.value ?? 0) - realFY[id]) > 1e-12) bad.push(`agent ${id} fy: ${fyw?.value} vs ${realFY[id]}`);
+      if (Math.abs((kw?.value ?? NaN) - realK[id]) > 1e-12) bad.push(`agent ${id} k: ${kw?.value} vs ${realK[id]}`);
+      if (Math.abs((fxw?.value ?? 0) - preK[id] * 2) > 1e-12) bad.push(`agent ${id} fx is not 2k: ${fxw?.value} vs ${preK[id] * 2}`);
+      if (Math.abs((fyw?.value ?? 0) - preX[id] * 0.5) > 1e-12) bad.push(`agent ${id} fy is not x/2: ${fyw?.value} vs ${preX[id] * 0.5}`);
+    }
+    check(`synthetic agents: EVERY traced agent's force + attribute write equals the real behaviour (${s.highWater} agents)`,
+      bad.length === 0, bad.slice(0, 3).join(' | '));
+    check('synthetic agents: the store is untouched by the traces',
+      [hashArr(s.forceX), hashArr(kArr), hashArr(s.x)].join('|') === before);
+  }
+}
+
+// ===========================================================================
+section('F. THE RUNNER — cap, escape, error capture, private RNG, shadow reads');
+// ===========================================================================
+{
+  const base = new Float64Array([1, 2, 3, 4, 5]);
+  const paramNames = ['arr', '_rngState', 'fn', '_traceIdx', '_tr'];
+  const rng = new Uint32Array([7]);
+  const stub = () => 42;
+
+  // Shadow read-after-write + no leak.
+  {
+    let readBack = null;
+    const fn = (arr, rs, f, idx, tr) => {
+      arr[1] = 99;
+      readBack = arr[1];
+      tr.v('n1', 'value', arr[1]);
+      tr.v('n1', 'arr', arr);
+    };
+    const r = M.runTrace({ fn, args: [base, rng, stub], paramNames, elementIdx: 1, generation: 0 });
+    check('runner: a read after a write sees the WRITE', readBack === 99, String(readBack));
+    check('runner: the base array is untouched', base[1] === 2, String(base[1]));
+    const w = r.writes.find(x => x.param === 'arr' && x.index === 1);
+    check('runner: the write is recorded with its previous value', w && w.value === 99 && w.prev === 2, JSON.stringify(w));
+    const arrEv = r.events.find(e => e[0] === 'v' && e[2] === 'arr');
+    check('runner: an array value is recorded as a bounded COPY with its true length',
+      arrEv && arrEv[3] && arrEv[3].len === 5 && arrEv[3].arr[1] === 99, JSON.stringify(arrEv?.[3]));
+  }
+  // Bulk writers are no-ops.
+  {
+    const other = new Float64Array([9, 9, 9, 9, 9]);
+    const fn = (arr) => { arr.set(other); arr.fill(7); };
+    M.runTrace({ fn, args: [base, rng, stub], paramNames, elementIdx: 0, generation: 0 });
+    check('runner: .set / .fill on a wrapped buffer are no-ops', base[0] === 1 && base[4] === 5);
+  }
+  // The escape guard.
+  {
+    let threw = null;
+    try {
+      M.runTrace({ fn: (arr) => arr.subarray(0, 2), args: [base, rng, stub], paramNames, elementIdx: 0, generation: 0 });
+    } catch (e) { threw = e; }
+    check('runner: .subarray on a wrapped buffer throws TraceSandboxEscape',
+      threw instanceof M.TraceSandboxEscape, String(threw));
+  }
+  // Errors are captured, never rethrown.
+  {
+    const r = M.runTrace({ fn: () => { throw new Error('boom'); }, args: [base, rng, stub], paramNames, elementIdx: 0, generation: 0 });
+    check('runner: a throwing trace is captured into result.error', r.error === 'boom', String(r.error));
+  }
+  // The event cap.
+  {
+    const fn = (arr, rs, f, idx, tr) => { for (let i = 0; i < M.TRACE_MAX_EVENTS + 500; i++) tr.f('n' + i); };
+    const r = M.runTrace({ fn, args: [base, rng, stub], paramNames, elementIdx: 0, generation: 0 });
+    check('runner: the event log is capped and flagged truncated',
+      r.truncated === true && r.events.length === M.TRACE_MAX_EVENTS, `${r.events.length} events`);
+  }
+  // The RNG cell is PRIVATE and stable per (element, generation).
+  {
+    const seen = [];
+    const fn = (arr, rs, f, idx, tr) => { seen.push(rs[0]); rs[0] = 12345; };
+    M.runTrace({ fn, args: [base, rng, stub], paramNames, elementIdx: 4, generation: 9 });
+    M.runTrace({ fn, args: [base, rng, stub], paramNames, elementIdx: 4, generation: 9 });
+    M.runTrace({ fn, args: [base, rng, stub], paramNames, elementIdx: 5, generation: 9 });
+    check('runner: the engine RNG cell is never touched', rng[0] === 7, String(rng[0]));
+    check('runner: the same (element, generation) draws the same seed', seen[0] === seen[1], seen.join(','));
+    check('runner: a different element draws a different seed', seen[2] !== seen[0], seen.join(','));
+    check('runner: the seed is never 0 (a dead xorshift stream)',
+      M.traceRngSeed(0, 0) !== 0 && M.traceRngSeed(-1, -1) !== 0);
+  }
+  // Host functions are stubbed and recorded.
+  {
+    let got;
+    const names = ['arr', '_rngState', '_agentCreate', '_traceIdx', '_tr'];
+    const fn = (arr, rs, create, idx, tr) => { got = create(1, 2, 3, 4); };
+    const r = M.runTrace({ fn, args: [base, rng, () => { throw new Error('the real closure ran'); }], paramNames: names, elementIdx: 0, generation: 0 });
+    check('runner: _agentCreate is stubbed to -1 (a trace must not spawn)', got === -1, String(got));
+    const q = r.events.find(e => e[0] === 'q');
+    check('runner: the stubbed call is recorded as a request event',
+      q && q[1] === '_agentCreate' && q[2][0] === 1, JSON.stringify(q));
+  }
+  // A GLOBAL root (no `_traceIdx` in the param list) gets ONLY `_tr`.
+  {
+    let arity = null;
+    const fn = function (a, b) { arity = arguments.length; };
+    M.runTrace({ fn, args: [base], paramNames: ['arr', '_tr'], generation: 0 });
+    check('runner: a global root receives exactly one trailing arg (_tr)', arity === 2, String(arity));
+  }
+}
+
+// ===========================================================================
+section('G. NEGATIVE CONTROLS — each fault must FAIL a named check');
+// ===========================================================================
+{
+  // (1) The record emission removed.
+  const tr = M.compileGraph(golModel.graphNodes, golModel.graphEdges, golModel, { trace: true });
+  const countRecords = (code) => (code.match(/_tr\.v\(/g) || []).length;
+  check('control: the Game of Life trace step DOES emit value records', countRecords(tr.stepCode) > 5, String(countRecords(tr.stepCode)));
+  expectFail('the _tr.v emission removed', () => {
+    const stripped = tr.stepCode.replace(/_tr\.v\([^;]*\);/g, '');
+    check('Game of Life: the trace step emits value records', countRecords(stripped) > 5, String(countRecords(stripped)));
+  });
+
+  // (2) The shadow `set` trap broken — writes reach the base array.
+  expectFail('the shadow set trap broken (writes reach the base buffer)', () => {
+    const base = new Float64Array([1, 2, 3]);
+    const before = hashArr(base);
+    // A deliberately BROKEN wrapper: pass the live array straight through.
+    const brokenArgs = [base];
+    ((arr) => { arr[0] = 42; })(...brokenArgs);
+    check('the sandbox left every engine buffer byte-identical', hashArr(base) === before);
+  });
+
+  // (3) A pass's origin fold dropped.
+  let lowered = null, model3 = null, tr3 = null;
+  for (const f of modelFiles) {
+    const m = M.migrateForHarness(JSON.parse(readFileSync(join(modelsDir, f), 'utf8')));
+    const t = M.compileGraph(m.graphNodes, m.graphEdges, m, { trace: true });
+    if (!t.trace) continue;
+    const ids = new Set();
+    RECORD_ID.lastIndex = 0;
+    let mm;
+    while ((mm = RECORD_ID.exec(t.stepCode || '')) !== null) ids.add(mm[1]);
+    const hit = [...ids].find(id => t.trace.origin[id]);
+    if (hit) { lowered = hit; model3 = m; tr3 = t; break; }
+  }
+  check('control: at least one shipped model records a LOWERED id', !!lowered, String(lowered));
+  if (lowered) {
+    const ids = userIdSet(model3, 'cells');
+    const o = M.resolveTraceOrigin(lowered, tr3.trace.origin);
+    check('control: with the origin table, that id resolves to a user node',
+      ids.has(o.nodeId) || o.nodeId.startsWith('linked:'), JSON.stringify(o));
+    expectFail('the origin fold dropped (an empty table)', () => {
+      const o2 = M.resolveTraceOrigin(lowered, {});
+      check('every recorded id resolves to a user node', ids.has(o2.nodeId) || o2.nodeId.startsWith('linked:'), JSON.stringify(o2));
+    });
+  }
+}
+
+// ===========================================================================
+rmSync(entryPath, { force: true });
+rmSync(dir, { recursive: true, force: true });
+console.log(failures === 0
+  ? '\nRULE TRACE (P1) ✓  (all checks passed)'
+  : `\n${failures} CHECK(S) FAILED ✗`);
+process.exit(failures === 0 ? 0 : 1);

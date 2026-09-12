@@ -51,6 +51,7 @@
 
 import type { Attribute, CAModel, GraphNode, GraphEdge } from '../../../model/types';
 import type { PortDef } from '../types';
+import type { TraceOriginMap } from './traceOrigin';
 
 /** Accessor nodes whose extra slots add value OUTPUTS. */
 export const MULTI_ATTR_GET_TYPES: ReadonlySet<string> = new Set([
@@ -185,7 +186,7 @@ const STALE_SLOT_HANDLE = /^(input|output)_value_(value|r|g|b|a)_\d+$/;
 
 export function expandMultiAttrs(
   nodes: GraphNode[], edges: GraphEdge[], model: CAModel,
-): { nodes: GraphNode[]; edges: GraphEdge[] } {
+): { nodes: GraphNode[]; edges: GraphEdge[]; origin?: TraceOriginMap } {
   let any = false;
   for (const nd of nodes) {
     if (MULTI_ATTR_TYPES.has(nd.data.nodeType) && multiAttrExtraCount(nd.data.config) > 0) { any = true; break; }
@@ -202,6 +203,8 @@ export function expandMultiAttrs(
   // clone gets a duplicate of the same source (one source node, N edges).
   const fanoutTgt = new Map<string, Array<{ target: string; targetHandle: string }>>();
   const expandedIds = new Set<string>();
+  // Rule Trace (S2): `<origId>__ma<i>` -> the slot PORT of the node the user placed.
+  const origin: TraceOriginMap = new Map();
 
   const addFan = (key: string, to: { target: string; targetHandle: string }): void => {
     const list = fanoutTgt.get(key);
@@ -239,6 +242,7 @@ export function expandMultiAttrs(
         const colorSlot = t === 'getModelAttribute' && isColorModelAttr(model, attrId);
         if (t === 'getModelAttribute') cfg.isColorAttr = colorSlot;
         const gid = `${nd.id}__ma${i}`;
+        origin.set(gid, { nodeId: nd.id, portId: slotPortId(i) });
         outNodes.push({ id: gid, type: 'caNode', position: nd.position, data: { nodeType: t, config: cfg } });
         if (colorSlot) {
           // r/g/b/a — must match `buildExtraSlotPorts`' colour-slot output list,
@@ -263,6 +267,7 @@ export function expandMultiAttrs(
         if (inline !== undefined) cfg._port_value = inline;
         else delete cfg._port_value; // slot 1's inline must not leak into the clone
         const sid = `${nd.id}__ma${i}`;
+        origin.set(sid, { nodeId: nd.id, portId: slotPortId(i) });
         outNodes.push({ id: sid, type: 'caNode', position: nd.position, data: { nodeType: t, config: cfg } });
         remapTgt.set(`${nd.id} input_value_${slotPortId(i)}`, { target: sid, targetHandle: 'input_value_value' });
         for (const fp of fanPorts) {
@@ -297,5 +302,5 @@ export function expandMultiAttrs(
     }
   }
 
-  return { nodes: outNodes, edges: outEdges };
+  return { nodes: outNodes, edges: outEdges, origin };
 }

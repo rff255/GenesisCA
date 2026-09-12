@@ -54,6 +54,7 @@
  */
 
 import type { CAModel, GraphNode, GraphEdge, MacroDef } from '../../../model/types';
+import type { TraceOriginMap } from './traceOrigin';
 
 /** The optional Radius input port on `neighbourDensity`. */
 export const DENSITY_RADIUS_PORT = 'radius';
@@ -135,7 +136,7 @@ export function agentGraphReadsEngineDensity(model: CAModel): boolean {
  *  Length. Hot-path no-op (same arrays) when none is active. */
 export function expandDensityRadius(
   nodes: GraphNode[], edges: GraphEdge[], _model: CAModel,
-): { nodes: GraphNode[]; edges: GraphEdge[] } {
+): { nodes: GraphNode[]; edges: GraphEdge[]; origin?: TraceOriginMap } {
   let any = false;
   for (const nd of nodes) {
     if (nd.data.nodeType === 'neighbourDensity'
@@ -147,6 +148,7 @@ export function expandDensityRadius(
   const outEdges: GraphEdge[] = [];
   const remapSrc = new Map<string, { source: string; sourceHandle: string }>();
   const remapTgt = new Map<string, { target: string; targetHandle: string }>();
+  const origin: TraceOriginMap = new Map();   // Rule Trace (S2)
   const expandedIds = new Set<string>();
 
   for (const nd of nodes) {
@@ -162,6 +164,10 @@ export function expandDensityRadius(
 
     const gatherId = `${nd.id}__dnG`;
     const lenId = `${nd.id}__dnLen`;
+    // Rule Trace (S2): the gather + the length both stand for the density node's
+    // `value` output (the count IS what the user's node reports).
+    origin.set(gatherId, { nodeId: nd.id });
+    origin.set(lenId, { nodeId: nd.id, portId: 'value' });
     // Carry the inline radius across; a WIRED radius overrides it, exactly as on
     // the density node itself (the remap below repoints that edge at the gather).
     const gCfg: Record<string, string | number | boolean> = {};
@@ -190,5 +196,5 @@ export function expandDensityRadius(
     });
   }
 
-  return { nodes: outNodes, edges: outEdges };
+  return { nodes: outNodes, edges: outEdges, origin };
 }
