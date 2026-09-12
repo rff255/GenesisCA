@@ -16,6 +16,17 @@ import { LookupTableEditor } from '../modeler/panels/LookupTableEditor';
 import { compileGraphWebGPU } from '../modeler/vpl/compiler/webgpu/compile';
 import { createSimWorker } from './createSimWorker';
 import { setSimLayoutApi } from './simLayoutState';
+import { setSimTransportApi } from './simTransportState';
+import { traceCodesFromCompile, type TraceCodes, type TraceTarget, type TraceReplyMsg } from './engine/traceProtocol';
+import {
+  setTraceTarget as storeSetTraceTarget, clearTrace as storeClearTrace, setTraceOrigin,
+  pushTrace as storePushTrace, setPaused as storeSetPaused, setLost as storeSetLost,
+  setTraceError as storeSetTraceError, breakpointLoweredIds, traceEveryGenWanted,
+  resetTraceSeq, subscribeTraceSession, getTraceSession, getTraceOrigin as getTraceOriginTable,
+  type TraceGraphKind,
+} from '../trace/traceState';
+import { resolveTraceOrigin } from '../modeler/vpl/compiler/traceOrigin';
+import { getNodeDef } from '../modeler/vpl/nodes/registry';
 import { LiveViewportBar } from '../live/LiveViewportBar';
 import {
   setLiveLayoutLocked, getLiveFocus, getLiveGraphDragging, subscribeLiveGraphDragging,
@@ -1836,6 +1847,22 @@ function withEffectiveNeighborhoods(model: CAModel): CAModel {
  *  the representation they always read, and an `'auto'` model that re-resolves
  *  after a graph edit reaches them correctly without any state write. Returns
  *  the same reference when neither transform applies (every legacy model). */
+/** RULE TRACE (P3) — the trace accent as a CANVAS colour.
+ *
+ *  The hue lives in ONE place (the `--color-trace` theme token, tuned per
+ *  theme); a 2D canvas needs a concrete string, so it is read from the computed
+ *  root style and cached until the theme attribute changes. Nothing in this file
+ *  hardcodes the colour. (The 3D renderer cannot read CSS at all — its two
+ *  literals in `gl3d.ts` name this token in their comments.) */
+let traceMarkColorCache: { theme: string; value: string } | null = null;
+function traceMarkColor(): string {
+  const theme = document.documentElement.getAttribute('data-theme') ?? '';
+  if (traceMarkColorCache?.theme === theme) return traceMarkColorCache.value;
+  const v = getComputedStyle(document.documentElement).getPropertyValue('--color-trace').trim();
+  traceMarkColorCache = { theme, value: v || '#d05ce3' };
+  return traceMarkColorCache.value;
+}
+
 function withPipelineModel(model: CAModel): CAModel {
   return withResolvedEngine(withEffectiveNeighborhoods(model));
 }
@@ -2948,6 +2975,30 @@ export function SimulatorView({ visible = true, activeTab = true, live = false, 
   const cancelFollowRef = useRef(cancelFollow);
   cancelFollowRef.current = cancelFollow;
 
+  // ── RULE TRACE (P3) — the TARGET, and why the refs lead ──────────────────
+  //
+  // One element per rule graph: a flat CELL index (dimension-blind — 2D and 3D
+  // are one path) and an AGENT slot id. The REFS lead and the React state
+  // mirrors them, the `followAgentIdRef` discipline: the draw loop, the worker
+  // message handler and `initWorkerWithDimensions` all read the target outside
+  // React's render cycle, and a target set during a pointer gesture must be
+  // visible to the very next frame. The STATE exists so the inspectors' chips,
+  // the Live bar chip and the inspect subscriptions re-render.
+  //
+  // The store (`src/trace/traceState.ts`) is the source of truth for the OTHER
+  // React trees (P4's graph editor, P5's panel); it is written in the same
+  // statement block as these, the mirror-invariant discipline.
+  const traceCellTargetRef = useRef<number | null>(null);
+  const traceAgentTargetRef = useRef<number | null>(null);
+  const [traceCellTarget, setTraceCellTargetState] = useState<number | null>(null);
+  const [traceAgentTarget, setTraceAgentTargetState] = useState<number | null>(null);
+  /** The node label a breakpoint paused on (null = not paused) — resolved from
+   *  the LOWERED id the worker reports, so the chip can name it. */
+  const [tracePausedAt, setTracePausedAt] = useState<string | null>(null);
+  /** The last `traceTargetLost` reason — a transient notice on the Live bar. */
+  const [traceLost, setTraceLostNotice] = useState<string | null>(null);
+  const traceLostTimerRef = useRef<number | null>(null);
+
   // GIF / WebM recording state
   const [recording, setRecording] = useState(false);
   const recordingRef = useRef(false);
@@ -3449,20 +3500,38 @@ export function SimulatorView({ visible = true, activeTab = true, live = false, 
   }, [agentPopovers, agentSweepPopover]);
   const agentInspectIdsRef = useRef<number[]>([]);
   agentInspectIdsRef.current = agentInspectIds;
+  /** RULE TRACE (P3) — the ids whose STATE must keep flowing: every open
+   *  inspector PLUS the traced agent.
+   *
+   *  ⚠ Deliberately a SECOND list rather than merging the target into
+   *  `agentInspectIds`: that list also drives the white inspect RINGS (2D and
+   *  3D), and the traced agent has its own magenta mark — merging would draw
+   *  both on one agent and blur the very distinction the mark exists to make.
+   *  So the target joins the DATA terms (the ~3 Hz `getAgentState` poll and the
+   *  agent UI-sync want-set — tracing is a state-reading feature) and nothing
+   *  else. */
+  const agentStateIds = useMemo(() => (
+    traceAgentTarget != null && !agentInspectIds.includes(traceAgentTarget)
+      ? [...agentInspectIds, traceAgentTarget]
+      : agentInspectIds
+  ), [agentInspectIds, traceAgentTarget]);
+  const agentStateIdsRef = useRef<number[]>([]);
+  agentStateIdsRef.current = agentStateIds;
   useEffect(() => {
-    if (agentInspectIds.length === 0) return;
+    if (agentStateIds.length === 0) return;
     const poll = setInterval(() => {
-      for (const id of agentInspectIds) workerRef.current?.postMessage({ type: 'getAgentState', id });
+      for (const id of agentStateIds) workerRef.current?.postMessage({ type: 'getAgentState', id });
     }, 333);
     return () => clearInterval(poll);
-  }, [agentInspectIds]);
-  // Drop cached state for agents whose popover just closed.
+  }, [agentStateIds]);
+  // Drop cached state for agents whose popover just closed (the traced agent
+  // keeps its entry — its values are still being read).
   useEffect(() => {
-    const live = new Set(agentInspectIds);
+    const live = new Set(agentStateIds);
     for (const k of Array.from(agentStatesRef.current.keys())) {
       if (!live.has(k)) agentStatesRef.current.delete(k);
     }
-  }, [agentInspectIds]);
+  }, [agentStateIds]);
   // BOND inspector — the same low-Hz live refresh (~3 Hz) as the agent one, and
   // for the same reason: bonds BREAK and their slots COMPACT, so a pinned
   // popover must learn that its edge is gone (`live: false` → "Bond no longer
@@ -5322,6 +5391,45 @@ export function SimulatorView({ visible = true, activeTab = true, live = false, 
       drawBrushIcon(hlCtx, shapeIconName(brushShapeRef.current), p.x, p.y, BRUSH_CURSOR_ICON_SIZE);
     }
 
+    // ── RULE TRACE (P3) — the traced CELL's mark ──
+    // An outline in the trace accent around the target cell, on the COLOURED
+    // highlight layer (the negative-composited silhouette layer could not hold a
+    // stable hue). Drawn here, before the agents-only early return, so a
+    // lattice-only model gets it too; re-glued on every scene draw because
+    // `draw()` calls this function after stashing a fresh transform. One copy
+    // per visible tile under the infinity canvas, exactly like the brush
+    // silhouette above — a mark that vanished on a tiled copy would read as "the
+    // trace stopped".
+    {
+      const traceIdx = traceCellTargetRef.current;
+      if (traceIdx !== null && traceIdx >= 0 && w > 0 && h > 0) {
+        const wh = w * h;
+        const rem = traceIdx - Math.floor(traceIdx / wh) * wh;   // 2D: layer is 0
+        const trRow = Math.floor(rem / w), trCol = rem - trRow * w;
+        const bx = ox + trCol * scale, by = oy + trRow * scale;
+        hlCtx.save();
+        hlCtx.strokeStyle = traceMarkColor();
+        hlCtx.lineWidth = 2;
+        const inset = Math.min(1, scale / 4);
+        const stroke = (dx: number, dy: number) => {
+          hlCtx.strokeRect(bx + dx + inset, by + dy + inset,
+            Math.max(1, scale - inset * 2), Math.max(1, scale - inset * 2));
+        };
+        if (infinity && scaledW > 0 && scaledH > 0) {
+          for (let ty = tyMin - 1; ty <= tyMax + 1; ty++) {
+            for (let tx = txMin - 1; tx <= txMax + 1; tx++) {
+              const rx = bx + tx * scaledW, ry = by + ty * scaledH;
+              if (rx + scale < 0 || rx > parentW || ry + scale < 0 || ry > parentH) continue;
+              stroke(tx * scaledW, ty * scaledH);
+            }
+          }
+        } else {
+          stroke(0, 0);
+        }
+        hlCtx.restore();
+      }
+    }
+
     // ── Agent brush cursor + highlights ──
     if (!isAgentModelRef.current) return;
     const snap = agentsRef.current;
@@ -5376,6 +5484,21 @@ export function SimulatorView({ visible = true, activeTab = true, live = false, 
           hlCtx.strokeStyle = 'rgba(240, 240, 245, 0.9)';
           hlCtx.lineWidth = 2; hlCtx.stroke();
         }
+      }
+      // RULE TRACE (P3) — the traced AGENT's mark: a DASHED ring in the trace
+      // accent, one step further out than the inspect ring so both are legible
+      // on an agent that is inspected AND traced. Dashed because the solid rings
+      // are already spoken for (cyan hover, white inspect, amber follow).
+      const traceId = traceAgentTargetRef.current;
+      if (traceId !== null && traceId >= 0 && traceId < hw && aal![traceId]) {
+        const cx = ox + ax![traceId]! * scale, cy = oy + ay![traceId]! * scale;
+        const rad = Math.max(2, ar![traceId]! * scale) + 7;
+        hlCtx.beginPath(); hlCtx.arc(cx, cy, rad, 0, Math.PI * 2);
+        hlCtx.strokeStyle = traceMarkColor();
+        hlCtx.lineWidth = 2;
+        hlCtx.setLineDash([5, 4]);
+        hlCtx.stroke();
+        hlCtx.setLineDash([]);
       }
     }
     // Selected-BOND highlight (2D) — one accent stroke per OPEN bond inspector,
@@ -5788,7 +5911,10 @@ export function SimulatorView({ visible = true, activeTab = true, live = false, 
     const want =
       !playingRef.current
       || recordingRef.current
-      || agentInspectIdsRef.current.length > 0
+      // Every open inspector — AND the traced agent (Rule Trace re-evaluates its
+      // behaviour against the CPU store every frame, so it is a state-reading
+      // feature exactly like an inspector; see `agentStateIds`).
+      || agentStateIdsRef.current.length > 0
       // A BOND inspector polls getBondState AND draws a highlight derived from
       // the live snapshot — both need fresh CPU agent state.
       || bondInspectKeysRef.current.length > 0
@@ -6361,6 +6487,34 @@ export function SimulatorView({ visible = true, activeTab = true, live = false, 
       r.setBrushPlane(plane3dEnabledRef.current ? { axis: plane3dRef.current.axis, pos: plane3dRef.current.pos } : null);
       r.setHoverCells(plane3dEnabledRef.current ? hoverCells3dRef.current : EMPTY_HOVER_CELLS);
       r.setInspectCells(inspectHighlight3dRef.current);
+      // RULE TRACE (P3) — the traced CELL and the traced AGENT, in the trace
+      // accent. Both are published EVERY frame (null included) so stopping the
+      // trace clears the mark on the next render, and both go through their OWN
+      // renderer slots: the inspect highlight is a hover response derived from
+      // the open popovers, the trace mark outlives every popover.
+      {
+        const tIdx = traceCellTargetRef.current;
+        if (tIdx !== null && tIdx >= 0 && w3 > 0 && h3 > 0) {
+          const wh3 = w3 * h3;
+          const tLayer = Math.floor(tIdx / wh3);
+          const tRem = tIdx - tLayer * wh3;
+          const tRow = Math.floor(tRem / w3);
+          r.setTraceCell({ layer: tLayer, row: tRow, col: tRem - tRow * w3 });
+        } else {
+          r.setTraceCell(null);
+        }
+        const tAgent = traceAgentTargetRef.current;
+        const tSnap = agentsRef.current;
+        if (tAgent !== null && tSnap && tAgent >= 0 && tAgent < tSnap.highWater && tSnap.alive[tAgent]) {
+          r.setTraceAgent({
+            x: tSnap.x[tAgent]!, y: tSnap.y[tAgent]!,
+            z: tSnap.z.length > 0 ? tSnap.z[tAgent]! : 0,
+            radius: tSnap.radius[tAgent]!,
+          });
+        } else {
+          r.setTraceAgent(null);
+        }
+      }
       // Brush footprint OUTLINE cursor — a bounded analytic wireframe on the
       // interaction plane, for the grid brush AND the agent brush. Shown only when
       // the plane is on, the cursor toggle is on, and a plane cell is hovered.
@@ -7588,6 +7742,55 @@ export function SimulatorView({ visible = true, activeTab = true, live = false, 
       // replicates). Id-matched for the same reason the bar is.
       const waiter = stateLoadWaitersRef.current.get(msg.reqId as number);
       if (waiter) { stateLoadWaitersRef.current.delete(msg.reqId as number); waiter(); }
+      return;
+    }
+    // --- RULE TRACE (P3) - the worker's four replies ------------------------
+    if (msg.type === 'trace') {
+      storePushTrace(msg as TraceReplyMsg);
+      return;
+    }
+    if (msg.type === 'traceBreak') {
+      // I4: the worker has ALREADY cut its batch and posted `stepped`. The play
+      // loop treats any `stepped` as "my batch finished" and issues the next one,
+      // so without pausing HERE the run would walk one generation per break.
+      // Routed through the ordinary `playing` seam (the same state the Pause
+      // button sets), so `useEffect([playing])` posts its usual `cancelStep`,
+      // the transport glyph flips and every other pause consumer follows. The
+      // extra `cancelStep` is harmless - the batch it would shorten is over.
+      playingRef.current = false;
+      setPlaying(false);
+      const kind: TraceGraphKind = String(msg.root).startsWith('agent') ? 'agents' : 'cells';
+      storeSetPaused({ root: msg.root, gen: msg.gen, nodeId: msg.nodeId });
+      setTracePausedAt(traceNodeLabelRef.current(msg.nodeId, kind));
+      return;
+    }
+    if (msg.type === 'traceTargetLost') {
+      // The worker cleared its own side (a dead agent, a cell outside a resized
+      // grid) and kept its fns. Mirror it locally WITHOUT posting - and drop the
+      // kind the message is about, inferred from which target can still be
+      // valid, because the reason string is prose meant for the user.
+      //
+      // The message names the KIND it dropped (`'both'` = a sandbox breach, which
+      // ends the whole session worker-side); the reason is prose for the user.
+      const reason = String(msg.reason ?? 'the traced element no longer exists');
+      const lostKind = (msg as { kind?: 'cell' | 'agent' | 'both' }).kind ?? 'both';
+      if (lostKind !== 'agent') dropTraceTargetLocalRef.current('cells');
+      if (lostKind !== 'cell') dropTraceTargetLocalRef.current('agents');
+      storeSetLost(reason);
+      noteTraceLostRef.current(reason);
+      setTracePausedAt(null);
+      return;
+    }
+    if (msg.type === 'traceCompileErrors') {
+      // A trace build that fails to EVAL is a compiler bug, not a user error, so
+      // it is surfaced rather than swallowed - loudly in the console, quietly on
+      // the bar (the engine itself is unaffected and still running).
+      const errs = (msg.errors as Array<{ root: string; message: string }>) || [];
+      console.warn('[trace] the worker could not evaluate the trace build:', errs);
+      const first = errs[0];
+      const text = first ? `Rule Trace: ${first.root} failed to load (${first.message})` : 'Rule Trace: the trace build failed to load.';
+      storeSetTraceError(text);
+      noteTraceLostRef.current(text);
       return;
     }
     if (msg.type === 'inspectCellsData') {
@@ -8901,6 +9104,17 @@ export function SimulatorView({ visible = true, activeTab = true, live = false, 
     if (inspectCellIdxsRef.current.length > 0) {
       worker.postMessage({ type: 'setInspectCells', cellIdxs: inspectCellIdxsRef.current });
     }
+    // RULE TRACE (P3): re-publish the trace session to the FRESH worker, WITH
+    // codes - a new worker has no trace fns at all. The model effect has already
+    // decided what survives a rebuild (the cell target iff it is still a cell of
+    // this grid; the agent target never, the population is re-seeded), so this
+    // only has to ship whatever is still set. `resetTraceSeq` because the new
+    // worker's `seq` restarts at 1 and the ordering guard would otherwise drop
+    // every reply until it caught up.
+    if (traceCellTargetRef.current !== null || traceAgentTargetRef.current !== null) {
+      resetTraceSeq();
+      postSetTraceRef.current(buildTraceCodesRef.current());
+    }
     if (import.meta.env?.DEV) (window as unknown as { __simWorker?: Worker }).__simWorker = worker;
     generationRef.current = 0;
     lastGenSetTime.current = 0;
@@ -9057,6 +9271,298 @@ export function SimulatorView({ visible = true, activeTab = true, live = false, 
     window.addEventListener('genesis-capture-sim-state', captureState);
     return () => window.removeEventListener('genesis-capture-sim-state', captureState);
   }, [activeViewer, brushColor, brushW, brushH, brushShape, brushRadius, brushRingWidth, brushLineWidth, brushMapping, targetFps, unlimitedFps, gensPerFrame, unlimitedGens, setSimulationState, runtimeModelAttrs, model.properties.boundaryTreatment]);
+
+  // =========================================================================
+  // RULE TRACE (P3) - the main-thread half of the protocol
+  //
+  // WHAT RUNS WHERE. The worker owns the evaluation (P2); this owns the TARGET,
+  // the TRACE BUILD (a second JS compile of both graphs, run ONLY while a target
+  // exists), the origin tables, the canvas marks and the lifecycle. The store
+  // (src/trace/traceState.ts) owns what the OTHER React trees read.
+  //
+  // THE THREE THINGS THAT MUST NOT DRIFT
+  //  1. `setTrace.target` is the COMPLETE intent, never a delta - it is always
+  //     built from BOTH refs, so clearing one kind can never clear the other by
+  //     accident.
+  //  2. The worker marks its trace fns STALE on every `recompile` and stays
+  //     quiet until a `setTrace` carrying fresh `codes` arrives, so every arm
+  //     that posts a `recompile` must post one of those too.
+  //  3. The trace build compiles from the SAME model object the engine's compile
+  //     uses (`dimsModelNow`), or the trace would explain a rule the engine is
+  //     not running.
+  // =========================================================================
+
+  /** The model the compilers see: `withPipelineModel` plus the LIVE dims a
+   *  simulator Resize / image import set WITHOUT touching model state. Extracted
+   *  so the model effect's soft-recompile arm and the trace build are ONE
+   *  definition rather than two copies free to drift. */
+  const dimsModelNow = useCallback((): CAModel => {
+    const curW = gridWidth.current, curH = gridHeight.current, curD = gridDepth.current;
+    const modelDepth = model.properties.dimension === '3d' ? Math.max(1, model.properties.gridDepth ?? 1) : 1;
+    const eff = withPipelineModel(model);
+    return (model.properties.gridWidth === curW && model.properties.gridHeight === curH && modelDepth === curD)
+      ? eff
+      : { ...eff, properties: { ...eff.properties, gridWidth: curW, gridHeight: curH, gridDepth: curD, dimension: curD > 1 ? '3d' as const : eff.properties.dimension } };
+  }, [model]);
+
+  /** Is anything traced right now? Reads the REFS (they lead the state). */
+  const traceArmedNow = useCallback(
+    () => traceCellTargetRef.current !== null || traceAgentTargetRef.current !== null, []);
+
+  /** Compile the TRACE BUILD of both rule graphs, publish their origin tables,
+   *  and return the `setTrace` codes payload (null when nothing compiled).
+   *
+   *  Guarded like `safeCompileGraph`: a half-wired graph is a SUPPORTED state in
+   *  Live and a throw out of here would unmount the app. A failed trace build
+   *  simply leaves that graph untraced - the engine's own compile has already
+   *  reported the error through the chip. */
+  const buildTraceCodes = useCallback((dm?: CAModel): TraceCodes | null => {
+    const m = dm ?? dimsModelNow();
+    let cellRes: CompileResult | null = null;
+    if (m.topologyMode?.gridCells !== false) {
+      try {
+        cellRes = compileGraph(m.graphNodes, m.graphEdges, m, { trace: true });
+      } catch (e) { console.warn('[trace] the cell trace build failed:', e); }
+    }
+    let agentRes: ReturnType<typeof compileAgentGraph> | null = null;
+    if (m.topologyMode?.agents) {
+      try {
+        // The SAME stop-index base the engine's agent compile uses: the cell
+        // graph's stop messages come first, so an agent stop event's index has
+        // to start after them or the two collide in the worker's table.
+        agentRes = compileAgentGraph(m.agentGraphNodes || [], m.agentGraphEdges || [], m,
+          cellRes?.stopMessages.length ?? 0, { trace: true });
+      } catch (e) { console.warn('[trace] the agent trace build failed:', e); }
+    }
+    setTraceOrigin('cells', cellRes?.trace?.origin);
+    setTraceOrigin('agents', agentRes?.trace?.origin);
+    const codes = traceCodesFromCompile(cellRes, agentRes);
+    return (codes.cell || codes.agent) ? codes : null;
+  }, [dimsModelNow]);
+
+  /** Post `setTrace` with the COMPLETE intent (both kinds, the resolved
+   *  breakpoint ids, the cadence). `codes` omitted = the worker keeps the fns it
+   *  has, which is what makes a breakpoint / cadence change free. */
+  const postSetTrace = useCallback((codes?: TraceCodes | null) => {
+    const worker = workerRef.current;
+    if (!worker) return;
+    const targets: TraceTarget[] = [];
+    if (traceCellTargetRef.current !== null) targets.push({ kind: 'cell', idx: traceCellTargetRef.current });
+    if (traceAgentTargetRef.current !== null) targets.push({ kind: 'agent', id: traceAgentTargetRef.current });
+    worker.postMessage({
+      type: 'setTrace',
+      target: targets.length === 0 ? null : targets,
+      ...(codes ? { codes } : {}),
+      // The main thread owns the origin table, so breakpoints are resolved to
+      // LOWERED ids here; the worker only ever does set membership.
+      breakpoints: [...breakpointLoweredIds('cells'), ...breakpointLoweredIds('agents')],
+      everyGen: traceEveryGenWanted(),
+    });
+  }, []);
+
+  // Latest-ref mirrors: `initWorkerWithDimensions` is a `useCallback` declared
+  // ABOVE this block, so it cannot take these in its dependency array (a TDZ
+  // error at render time) - it reaches them through the refs instead.
+  const buildTraceCodesRef = useRef(buildTraceCodes);
+  buildTraceCodesRef.current = buildTraceCodes;
+  const postSetTraceRef = useRef(postSetTrace);
+  postSetTraceRef.current = postSetTrace;
+
+  /** Clear one kind LOCALLY (refs + mirror state + store) without posting - for
+   *  `traceTargetLost`, where the worker has already dropped it. */
+  const dropTraceTargetLocal = useCallback((kind: TraceGraphKind) => {
+    if (kind === 'cells') { traceCellTargetRef.current = null; setTraceCellTargetState(null); }
+    else { traceAgentTargetRef.current = null; setTraceAgentTargetState(null); }
+    storeSetTraceTarget(kind, null);
+  }, []);
+  const dropTraceTargetLocalRef = useRef(dropTraceTargetLocal);
+  dropTraceTargetLocalRef.current = dropTraceTargetLocal;
+
+  /** POINT the trace at one element (null clears that kind).
+   *
+   *  The refs lead; the mirror state and the store follow in the same statement
+   *  block; the worker is told the complete intent. Compiling the trace build
+   *  HERE - rather than on every recompile whether or not anything is traced -
+   *  is what keeps the feature free when it is off. */
+  const setTraceTargetOf = useCallback((kind: TraceGraphKind, id: number | null) => {
+    const ref = kind === 'cells' ? traceCellTargetRef : traceAgentTargetRef;
+    if (ref.current === id) return;
+    ref.current = id;
+    if (kind === 'cells') setTraceCellTargetState(id); else setTraceAgentTargetState(id);
+    storeSetTraceTarget(kind, id);
+    if (id !== null) { setTracePausedAt(null); setTraceLostNotice(null); }
+    const worker = workerRef.current;
+    if (!traceArmedNow()) {
+      // The LAST kind was just cleared: drop the whole session (the worker frees
+      // its fns, the store its timeline) rather than leaving armed machinery
+      // behind a target nobody is watching.
+      worker?.postMessage({ type: 'clearTrace' });
+      storeClearTrace();
+      setTracePausedAt(null);
+    } else {
+      postSetTrace(buildTraceCodes());
+      worker?.postMessage({ type: 'requestTrace' });
+    }
+    // The mark lives on the cursor-highlight layer, which repaints on a scene
+    // draw or a pointer move - a target set while PAUSED would otherwise not
+    // appear until something else happened.
+    scheduleCursorDraw();
+    if (visibleRef.current) drawRef.current();
+  }, [buildTraceCodes, postSetTrace, traceArmedNow, scheduleCursorDraw]);
+
+  const toggleTraceCell = useCallback((idx: number) => {
+    setTraceTargetOf('cells', traceCellTargetRef.current === idx ? null : idx);
+  }, [setTraceTargetOf]);
+  const toggleTraceAgent = useCallback((id: number) => {
+    setTraceTargetOf('agents', traceAgentTargetRef.current === id ? null : id);
+  }, [setTraceTargetOf]);
+
+  /** The Live bar chip's X - stop tracing EVERYTHING. Always enabled while the
+   *  chip is up: it is the one way out of a session whose inspector was closed. */
+  const stopTracing = useCallback(() => {
+    if (!traceArmedNow()) return;
+    traceCellTargetRef.current = null;
+    traceAgentTargetRef.current = null;
+    setTraceCellTargetState(null);
+    setTraceAgentTargetState(null);
+    setTracePausedAt(null);
+    setTraceLostNotice(null);
+    workerRef.current?.postMessage({ type: 'clearTrace' });
+    storeClearTrace();
+    scheduleCursorDraw();
+    if (visibleRef.current) drawRef.current();
+  }, [traceArmedNow, scheduleCursorDraw]);
+  const stopTracingRef = useRef(stopTracing);
+  stopTracingRef.current = stopTracing;
+
+  /** Name the node a LOWERED id stands for, for the pause chip: resolve it
+   *  through the origin table, then find that node in the graph it belongs to (a
+   *  macro-scoped origin lives in a `macroDefs` node list, which is why every
+   *  list is scanned). Falls back to the node TYPE's label and then the raw id -
+   *  the chip must always be able to say something. */
+  const traceNodeLabel = useCallback((loweredId: string, kind: TraceGraphKind): string => {
+    const o = resolveTraceOrigin(loweredId, getTraceOriginTable(kind));
+    if (o.nodeId.startsWith('linked:')) return 'a linked colour pass';
+    const lists: CAModel['graphNodes'][] = [
+      model.graphNodes || [],
+      (model.agentGraphNodes || []) as CAModel['graphNodes'],
+    ];
+    for (const def of model.macroDefs || []) lists.push((def.nodes || []) as CAModel['graphNodes']);
+    for (const nodes of lists) {
+      const n = nodes.find(nn => nn.id === o.nodeId);
+      if (!n) continue;
+      const userLabel = (n.data as { label?: string } | undefined)?.label;
+      if (userLabel) return userLabel;
+      const d = getNodeDef((n.data as { nodeType?: string } | undefined)?.nodeType ?? '');
+      // Resolved from the GRAPH the record came from, never from the editor's
+      // open sub-tab: `displayNodeLabel` reads a module global, and the chip must
+      // not re-word itself because the user switched tabs.
+      if (d) return (kind === 'agents' && d.agentLabel) ? d.agentLabel : d.label;
+      return o.nodeId;
+    }
+    return o.nodeId;
+  }, [model]);
+  const traceNodeLabelRef = useRef(traceNodeLabel);
+  traceNodeLabelRef.current = traceNodeLabel;
+
+  /** Show a transient `traceTargetLost` notice on the Live bar (the chip itself
+   *  is already gone by then - the target was cleared). */
+  const noteTraceLost = useCallback((reason: string) => {
+    setTraceLostNotice(reason);
+    if (traceLostTimerRef.current != null) window.clearTimeout(traceLostTimerRef.current);
+    traceLostTimerRef.current = window.setTimeout(() => {
+      traceLostTimerRef.current = null;
+      setTraceLostNotice(null);
+    }, 4000);
+  }, []);
+  const noteTraceLostRef = useRef(noteTraceLost);
+  noteTraceLostRef.current = noteTraceLost;
+
+  /** What the Live bar chip says. NULL ⇒ nothing is traced ⇒ no chip at all.
+   *  A grid+agents model can trace one of each, and the chip names BOTH — a
+   *  half-reported session is how a user loses track of a target whose inspector
+   *  they closed. The cell is spelled in the coordinates the inspector uses (a
+   *  3D model adds the layer), never as the flat index the protocol carries. */
+  const traceChipLabel = useMemo(() => {
+    const parts: string[] = [];
+    if (traceCellTarget != null) {
+      const w = gridWidth.current, h = gridHeight.current;
+      const wh = Math.max(1, w * h);
+      const layer = Math.floor(traceCellTarget / wh);
+      const rem = traceCellTarget - layer * wh;
+      const row = Math.floor(rem / Math.max(1, w));
+      const col = rem - row * Math.max(1, w);
+      parts.push(gridDepth.current > 1
+        ? `Tracing cell (layer ${layer}, ${row}, ${col})`
+        : `Tracing cell (${row}, ${col})`);
+    }
+    if (traceAgentTarget != null) parts.push(`Tracing agent #${traceAgentTarget}`);
+    return parts.length === 0 ? null : parts.join(' · ');
+  }, [traceCellTarget, traceAgentTarget]);
+
+  // BREAKPOINTS changed (P4's context menu, P5's list, the DEV hook) - re-post
+  // the resolved ids + the cadence. NO codes: the worker keeps its fns, so a
+  // breakpoint toggle costs one message and no compile. Subscribed INTO A REF
+  // rather than through `useSyncExternalStore`, because this component must not
+  // re-render for it.
+  const traceBreakpointsRef = useRef(getTraceSession().breakpoints);
+  useEffect(() => subscribeTraceSession(() => {
+    const bps = getTraceSession().breakpoints;
+    if (bps === traceBreakpointsRef.current) return;
+    traceBreakpointsRef.current = bps;
+    if (traceArmedNow()) postSetTrace();
+  }), [postSetTrace, traceArmedNow]);
+
+  // The `]` key past the END of a trace means "show me the next generation" -
+  // the transport's own Step. `App` binds the key (once) and cannot reach
+  // `handleStep`, so the seam is registered here, the `simLayoutApi` pattern.
+  const handleStepRef = useRef<() => void>(() => {});
+  useEffect(() => {
+    setSimTransportApi({ stepGeneration: () => handleStepRef.current() });
+    return () => setSimTransportApi(null);
+  }, []);
+
+  // LIVE EXIT clears the session. DECISION (P3): tracing is a LIVE-only feature
+  // - the chip that stops it and the graph that shows it both live in Live - so
+  // a target surviving the exit would be machinery the user can neither see nor
+  // stop, still paying for a trace build on every recompile. The inspectors keep
+  // their popovers; only the trace stops.
+  useEffect(() => {
+    if (live) return;
+    stopTracingRef.current();
+  }, [live]);
+
+  // A different MODEL (File > Load / New - the `modelVersion` seam the inspect
+  // popovers already use) invalidates a cell index and an agent slot alike.
+  //
+  // ⚠ And the BREAKPOINTS with them, which is the one place they are dropped:
+  // they are keyed by USER NODE ID, and node ids are minted per model from the
+  // same `n4`, `n5`, `n6` sequence — so a breakpoint left over from the previous
+  // model does not merely go stale, it lands on whatever node of the NEW graph
+  // happens to wear that id and pauses a run the user never marked. (Everywhere
+  // else they deliberately survive: they are the user's marks on a graph that is
+  // still the same graph.)
+  useEffect(() => {
+    stopTracingRef.current();
+    storeClearTrace(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [modelVersion]);
+
+  // A RESUME ends the pause. Found in the P3 verification round: the breakpoint
+  // pause is reported by the worker, but nothing was reporting the other edge —
+  // so after pressing Play the chip went on reading "⏸ paused at If / Then /
+  // Else" while the simulation ran, which is the enabled-control-that-lies
+  // failure wearing a readout's clothes. `playing` going true IS the resume,
+  // whichever path set it (the button, Enter, the Trace panel's transport).
+  useEffect(() => {
+    if (!playing) return;
+    setTracePausedAt(null);
+    storeSetPaused(null);
+  }, [playing]);
+
+  useEffect(() => () => {
+    if (traceLostTimerRef.current != null) window.clearTimeout(traceLostTimerRef.current);
+  }, []);
 
   // Smart init vs recompile: compare previous model to decide.
   // Full reinit for structural changes (grid size, attributes, neighborhoods, mappings, update mode).
@@ -9249,6 +9755,32 @@ export function SimulatorView({ visible = true, activeTab = true, live = false, 
       const snapH = snapJustChanged
         ? (model.simulationState?.gridHeight ?? model.simulationState?.height ?? model.properties.gridHeight)
         : model.properties.gridHeight;
+      // RULE TRACE (P3) — what survives a REBUILD.
+      //
+      // The CELL target is a flat index into a grid that is about to be rebuilt:
+      // it is kept iff it is still a cell of the new one, and dropped with a
+      // reason otherwise (the same judgement the popover auto-close makes, and
+      // the same one the worker's own `traceCellIdx` guard would make one frame
+      // later — doing it here means the fresh worker is never told about a cell
+      // that cannot exist). The AGENT target is a SLOT ID of a population that is
+      // re-seeded from scratch, so slot 7 of the new run is a different agent
+      // wearing the old one's number: it is always dropped. Whatever survives is
+      // re-posted (with codes) by `initWorkerWithDimensions` below.
+      {
+        const newD = model.properties.dimension === '3d' ? Math.max(1, model.properties.gridDepth ?? 1) : 1;
+        const newTotal = snapW * snapH * newD;
+        const cellIdx = traceCellTargetRef.current;
+        if (cellIdx !== null && (model.topologyMode?.gridCells === false || cellIdx >= newTotal)) {
+          dropTraceTargetLocalRef.current('cells');
+          noteTraceLostRef.current(`Tracing stopped: the traced cell (index ${cellIdx}) is outside the rebuilt grid.`);
+        }
+        if (traceAgentTargetRef.current !== null) {
+          dropTraceTargetLocalRef.current('agents');
+          noteTraceLostRef.current('Tracing stopped: the agent population was re-seeded by the rebuild.');
+        }
+        setTracePausedAt(null);
+        storeSetPaused(null);
+      }
       // The worker now HAS this model: advance the applied baseline (and clear
       // any Live prompt — this is the rebuild the prompt was asking for).
       appliedModelRef.current = model;
@@ -9264,19 +9796,14 @@ export function SimulatorView({ visible = true, activeTab = true, live = false, 
       // and only the first N rows of the resized grid get computed (the
       // "top stripe" symptom). JS / WASM are tolerant (total is a runtime
       // arg there); only WebGPU exhibits the bug.
-      const curW = gridWidth.current;
-      const curH = gridHeight.current;
-      // 3D Grid CA: also carry the live DEPTH. A simulator-panel depth-resize
-      // sets gridDepth.current WITHOUT touching model.properties.gridDepth, so on
-      // a soft recompile the model's depth is stale — WebGPU would bake
-      // total = W*H*staleDepth and freeze every layer past it. Mirror the
-      // full-reinit dimsModel (W/H + gridDepth + dimension).
-      const curD = gridDepth.current;
-      const modelDepth = model.properties.dimension === '3d' ? Math.max(1, model.properties.gridDepth ?? 1) : 1;
-      const effModel = withPipelineModel(model);
-      let dimsModel = (model.properties.gridWidth === curW && model.properties.gridHeight === curH && modelDepth === curD)
-        ? effModel
-        : { ...effModel, properties: { ...effModel.properties, gridWidth: curW, gridHeight: curH, gridDepth: curD, dimension: curD > 1 ? '3d' as const : effModel.properties.dimension } };
+      // 3D Grid CA: the dims model also carries the live DEPTH. A simulator-panel
+      // depth-resize sets gridDepth.current WITHOUT touching
+      // model.properties.gridDepth, so on a soft recompile the model's depth is
+      // stale — WebGPU would bake total = W*H*staleDepth and freeze every layer
+      // past it. `dimsModelNow` is the ONE definition (the Rule Trace build
+      // compiles from the same object, so the trace can never explain a rule the
+      // engine is not running).
+      let dimsModel = dimsModelNow();
       // Bond-Graph Agents (PR5 — independent targets): the grid target flows
       // through unmodified for agent models too. The old `useWebGPU = false`
       // force-disable hack is GONE — the worker's WebGPU step branch bridges the
@@ -9485,6 +10012,16 @@ export function SimulatorView({ visible = true, activeTab = true, live = false, 
           // branch — turning direct render back off.
           draw();
         }
+      }
+      // RULE TRACE (P3): the worker marked its trace fns STALE the moment it
+      // handled that `recompile` and will stay quiet until fresh `codes` arrive,
+      // so a live trace session has to be re-armed here — AFTER the recompile
+      // post, deliberately: the engine must never wait on the trace compile, and
+      // the trace build is a second full JS compile of both graphs. Nothing is
+      // compiled at all while no target exists, which is what makes the feature
+      // free when it is off.
+      if (traceCellTargetRef.current !== null || traceAgentTargetRef.current !== null) {
+        postSetTraceRef.current(buildTraceCodesRef.current(dimsModel));
       }
       // If user has the model toggle on, ensure useWasm is set (recompile doesn't carry useWasm by default).
       // PR5: the grid target now flows through for agent models too (the
@@ -11117,7 +11654,7 @@ export function SimulatorView({ visible = true, activeTab = true, live = false, 
   // `agentHoverNeedsState` reads their REFS, which only catch up on the next
   // render — without this an Alt+wheel mode cycle (or the Inspect toggle) into a
   // state-reading mode would not arm the snapshot until the next pointer move.
-  useEffect(() => { updateAgentUiSync(); }, [playing, recording, agentInspectIds, bondInspectKeys, editTargetId, agentMetaballs.enabled, agentBrushMode, inspectMode, brushTarget, updateAgentUiSync]);
+  useEffect(() => { updateAgentUiSync(); }, [playing, recording, agentStateIds, bondInspectKeys, editTargetId, agentMetaballs.enabled, agentBrushMode, inspectMode, brushTarget, updateAgentUiSync]);
   // L1: the GRID sibling — re-evaluate the voxel UI-sync on every state signal that
   // needs the CPU colours mirror. `alpha3d` is the ONLY remaining FRAME-MODE-ONLY
   // visual (the WGSL pass does not back-to-front sort): turning it on pins UI-sync
@@ -11300,6 +11837,11 @@ export function SimulatorView({ visible = true, activeTab = true, live = false, 
     const ids = sweepIdx != null && !pinnedIds.includes(sweepIdx)
       ? [...pinnedIds, sweepIdx]
       : pinnedIds;
+    // RULE TRACE (P3): the TRACED cell is subscribed too, so its current values
+    // keep flowing after its popover is closed - the trace explains what the
+    // rule does to a cell, and the panel (P5) shows that against what the cell
+    // holds NOW. Merged into the same post, so it costs no extra message.
+    if (traceCellTarget != null && !ids.includes(traceCellTarget)) ids.push(traceCellTarget);
     inspectCellIdxsRef.current = ids;
     // Drop stale rect entries so the hover overlay doesn't anchor to a
     // popover that was just closed.
@@ -11320,7 +11862,7 @@ export function SimulatorView({ visible = true, activeTab = true, live = false, 
     // L1: an open inspect popover needs the CPU colours mirror (its RGB swatch +
     // the gl3d frame render), so it pins the grid UI-sync ON.
     updateGridUiSync();
-  }, [inspectPopovers, sweepInspector?.cellIdx, updateGridUiSync]);
+  }, [inspectPopovers, sweepInspector?.cellIdx, traceCellTarget, updateGridUiSync]);
   // Auto-close popovers whose cell is out of bounds after a grid resize.
   useEffect(() => {
     const w = model.properties.gridWidth;
@@ -13423,6 +13965,11 @@ export function SimulatorView({ visible = true, activeTab = true, live = false, 
     pendingStep.current = true;
     workerRef.current?.postMessage({ type: 'step', count: 1, activeViewer });
   };
+  // RULE TRACE (P3): `]` past the last node of a trace steps ONE generation, and
+  // it must be THIS function — a second "post a step" would be free to drift from
+  // the Overseer guard, the `pendingStep` latch and the active-viewer argument.
+  // Assigned every render (it closes over `playing` / `activeViewer`).
+  handleStepRef.current = handleStep;
 
   /** The transport bar's ONE play/pause TOGGLE. Derived once so the glyph, the
    *  tooltip and the accessible name can never disagree about which state the
@@ -16167,6 +16714,10 @@ export function SimulatorView({ visible = true, activeTab = true, live = false, 
             rebuildOutcome={resetDefaultMode === 'restore'
               ? 'the saved board'
               : 'a fresh seed from the Init Events'}
+            traceLabel={traceChipLabel}
+            tracePausedAt={tracePausedAt}
+            traceLost={traceLost}
+            onStopTrace={stopTracing}
           />
         )}
         <canvas ref={canvasRef} className={styles.canvas} style={is3D ? { display: 'none' } : undefined} />
@@ -16604,6 +17155,9 @@ export function SimulatorView({ visible = true, activeTab = true, live = false, 
             totalOpen={agentPopovers.length}
             following={followAgentId === p.id}
             onToggleFollow={() => setFollowAgent(followAgentIdRef.current === p.id ? null : p.id)}
+            traceable={live}
+            tracing={traceAgentTarget === p.id}
+            onToggleTrace={() => toggleTraceAgent(p.id)}
             onClose={() => closeAgentPopover(p.id)}
             onCloseAll={closeAllAgentPopovers}
             onFocus={() => setFocusedAgentPopoverId(p.id)}
@@ -18253,6 +18807,9 @@ export function SimulatorView({ visible = true, activeTab = true, live = false, 
           color={inspectColorsRef.current.get(p.cellIdx) ?? null}
           orientation={inspectOrientationsRef.current.get(p.cellIdx) ?? null}
           is3d={model.properties.dimension === '3d' && (model.properties.gridDepth ?? 1) > 1}
+          traceable={live}
+          tracing={traceCellTarget === p.cellIdx}
+          onToggleTrace={() => toggleTraceCell(p.cellIdx)}
           pulse={pulseInspectIdx === p.cellIdx}
           focused={focusedInspectIdx === p.cellIdx}
           totalOpen={inspectPopovers.length}

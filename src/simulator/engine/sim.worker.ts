@@ -7448,7 +7448,7 @@ function installTraceCodes(codes: TraceCodes): void {
  *  change) and say why, so the UI can drop its chip and its marks. */
 function loseTraceTarget(kind: 'cell' | 'agent', reason: string): void {
   if (kind === 'cell') traceCellTarget = null; else traceAgentTarget = null;
-  self.postMessage({ type: 'traceTargetLost', reason });
+  self.postMessage({ type: 'traceTargetLost', kind, reason });
 }
 
 /** Is the cell target still a cell of this grid? Posts + clears if not. */
@@ -7556,7 +7556,7 @@ function traceRootSync(
       traceFns.clear();
       traceCellTarget = null; traceAgentTarget = null;
       self.postMessage({ type: 'error', message: '[trace] ' + e.message });
-      self.postMessage({ type: 'traceTargetLost', reason: 'the trace sandbox was breached (see the error above)' });
+      self.postMessage({ type: 'traceTargetLost', kind: 'both', reason: 'the trace sandbox was breached (see the error above)' });
       return null;
     }
     throw e;

@@ -18,6 +18,26 @@ interface Props {
    *  `resetDefaultMode` — the prompt has to name it, because "re-seed" and
    *  "restore the saved board" are very different outcomes. */
   rebuildOutcome: string;
+  /** RULE TRACE (P3) — what is being traced, already worded by the simulator
+   *  (`Tracing cell (12, 34)`, `Tracing agent #7`, both joined with ` · `).
+   *  NULL ⇒ nothing is traced and the whole chip is ABSENT: tracing is started
+   *  from an inspector, so a chip with nothing to stop would be an enabled
+   *  control that does nothing (the doctrine's hide arm). */
+  traceLabel?: string | null;
+  /** The node label a BREAKPOINT paused on, already resolved through the origin
+   *  table (`Set Attribute`). Non-null ⇒ paused.
+   *
+   *  ⚠ Deliberately the LABEL rather than the `boolean` + a second label prop the
+   *  plan sketched: two props for one fact can disagree, and only the simulator
+   *  can resolve a LOWERED id to a node name (it owns the origin table and the
+   *  model). One prop, one source. */
+  tracePausedAt?: string | null;
+  /** The last `traceTargetLost` reason — a transient notice beside the chip.
+   *  The simulator auto-clears it after a few seconds. */
+  traceLost?: string | null;
+  /** Stop tracing EVERYTHING (both kinds). Always enabled while the chip is
+   *  rendered — a stop that cannot be pressed is how a session gets stuck. */
+  onStopTrace?: () => void;
 }
 
 /** The chip's four states. `ok` reads as a quiet confirmation; the other three
@@ -98,6 +118,7 @@ const POLICY_TITLE =
  */
 export function LiveViewportBar({
   locked, ruleStatus, ruleMessage, onApply, rebuildOutcome,
+  traceLabel = null, tracePausedAt = null, traceLost = null, onStopTrace,
 }: Props) {
   const layout = useSyncExternalStore(subscribeLiveLayout, getLiveLayout);
   // ONE popover open at a time (`layout` | `policy`), the SimulatorView
@@ -235,6 +256,50 @@ export function LiveViewportBar({
           </div>
         )}
       </div>
+      {/* RULE TRACE (P3) — the session chip. Rendered ONLY while something is
+          traced: tracing is armed from an inspector's Trace chip, so with no
+          target there is nothing here to enable, disable or explain. The ✕ is
+          always enabled (it is the way out), and the pause / lost states are
+          shown ON the chip rather than as a separate control, because neither is
+          something the user acts on here. */}
+      {(traceLabel || traceLost) && (
+        <>
+          <div className={styles.sep} />
+          {traceLabel && <div
+            className={`${styles.chip} ${styles.chipTrace}`}
+            data-live-trace-chip
+            title={tracePausedAt
+              ? `Rule Trace — paused at a breakpoint on "${tracePausedAt}". `
+                + 'The generation has NOT run: the board shows what the rule read. Press Play to run it.'
+              : 'Rule Trace — this element\'s rule is re-evaluated every frame and shown in the graph. '
+                + '] / [ step the cursor through it.'}
+            aria-live="polite"
+          >
+            <span className={styles.chipDot}>◉</span>
+            <span className={styles.traceText}>{traceLabel}</span>
+            {tracePausedAt && (
+              <span className={styles.tracePaused}>{'⏸'} paused at {tracePausedAt}</span>
+            )}
+            {onStopTrace && (
+              <button
+                type="button"
+                className={styles.traceStop}
+                onClick={onStopTrace}
+                title="Stop tracing"
+                aria-label="Stop tracing"
+              >&#10005;</button>
+            )}
+          </div>}
+          {/* ⚠ The notice is rendered OUTSIDE the chip's own condition, and that
+              is the whole point: the case it exists for — the traced agent died,
+              the traced cell fell outside a rebuilt grid — is precisely the case
+              where the TARGET is already gone, so a notice nested inside
+              `traceLabel &&` would never be seen once (measured in the P3
+              verification round: the rebuild dropped an out-of-range cell target
+              and the reason vanished with the chip). */}
+          {traceLost && <span className={styles.traceLost} role="status">{traceLost}</span>}
+        </>
+      )}
       <div className={styles.sep} />
       <div className={styles.menuWrap} ref={openMenu === 'layout' ? menuWrapRef : undefined}>
         <button

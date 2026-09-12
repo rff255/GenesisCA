@@ -90,6 +90,38 @@
   color: var(--color-accent);
 }
 
+/* RULE TRACE (P3) — the Trace toggle (cell + agent inspector headers). The same
+   22px chip as .followBtn / .closeBtn so the header stays one row of equals; the
+   ACTIVE state uses --color-trace, the one hue the canvas mark, the Live bar chip
+   and (P4) the lit graph path all share, so "this element is the traced one"
+   reads the same wherever it appears. */
+.traceBtn {
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: 1px solid var(--color-widget-border);
+  border-radius: var(--radius-sm);
+  color: var(--color-text-tertiary);
+  cursor: pointer;
+  flex: none;
+}
+
+.traceBtn:hover {
+  border-color: var(--color-border-muted);
+  color: var(--color-text-secondary);
+}
+
+.traceBtnActive,
+.traceBtnActive:hover {
+  background: var(--color-trace-soft);
+  border-color: var(--color-trace);
+  color: var(--color-trace);
+}
+
 .closeAllBtn {
   height: 22px;
   padding: 0 var(--space-3);

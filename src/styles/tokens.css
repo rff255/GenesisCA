@@ -52,6 +52,14 @@
   --color-accent-soft:    rgba(71, 114, 179, 0.18);
   --color-accent-strong:  rgba(71, 114, 179, 0.45);
 
+  /* ----- Rule Trace (magenta — the ONE hue for "this is the traced element":
+   *       the target mark on the canvas, the inspector chip, the Live bar chip,
+   *       the lit path and the cursor pulse. Deliberately distinct from the
+   *       accent (Follow / selection) and from the breakpoint red, and NOTHING
+   *       may hardcode it — it is a token so both themes can tune it. ----- */
+  --color-trace:          #c85ce0;
+  --color-trace-soft:     rgba(200, 92, 224, 0.28);
+
   /* ----- Semantic ----- */
   --color-danger:         #c95151;
   --color-danger-hover:   #e06b6b;
@@ -237,6 +245,12 @@
   --color-accent-hover:   #f2b255;
   --color-accent-soft:    rgba(232, 161, 58, 0.16);
   --color-accent-strong:  rgba(232, 161, 58, 0.42);
+
+  /* ----- Rule Trace — a touch lighter here: Nocturne's accent is a warm amber,
+   *       so the trace magenta is pushed towards violet to stay unmistakably a
+   *       DIFFERENT signal at a glance on a dark warm ground. ----- */
+  --color-trace:          #d071ec;
+  --color-trace-soft:     rgba(208, 113, 236, 0.26);
 
   /* ----- Semantic (info kept a distinct calm blue, not the amber accent) - */
   --color-danger:         #d65a5a;

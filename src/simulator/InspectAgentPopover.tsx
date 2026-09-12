@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { Attribute } from '../model/types';
 import type { AgentCapabilities } from '../model/types';
 import { decodeVectorFromValues } from '../modeler/vpl/compiler/vectorAttr';
+import { TraceChip } from './InspectCellPopover';
 import styles from './InspectCellPopover.module.css';
 
 /** One pinned (or transient-sweep) agent inspector. Mirrors the cell inspector's
@@ -47,6 +48,13 @@ interface Props {
    *  popover is about to be discarded, so following it would be pointless). */
   following?: boolean;
   onToggleFollow?: () => void;
+  /** RULE TRACE (P3): may this popover offer the Trace chip? True only in LIVE
+   *  and only for a PINNED popover (the Follow precedent — a transient sweep
+   *  inspector is about to be discarded, so tracing from it would be pointless). */
+  traceable?: boolean;
+  /** Is THIS agent the traced one? */
+  tracing?: boolean;
+  onToggleTrace?: () => void;
   onClose: () => void;
   onCloseAll: () => void;
   onFocus: () => void;
@@ -84,6 +92,7 @@ function decodeAgentAttr(attr: Attribute, attrs: Record<string, number>): string
 export function InspectAgentPopover({
   popover, state, agentAttributes, bondAttributes, capProfile, transient = false,
   focused, totalOpen, following = false, onToggleFollow,
+  traceable = false, tracing = false, onToggleTrace,
   onClose, onCloseAll, onFocus, onDragEnd,
 }: Props) {
   const rootRef = useRef<HTMLDivElement>(null);
@@ -162,6 +171,9 @@ export function InspectAgentPopover({
               : 'Follow this agent with the camera'}
             aria-pressed={following}
           >&#9678;</button>
+        )}
+        {traceable && onToggleTrace && (
+          <TraceChip tracing={tracing} onToggle={onToggleTrace} what="agent" />
         )}
         {!transient && totalOpen > 1 && (
           <button

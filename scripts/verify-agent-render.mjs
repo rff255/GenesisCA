@@ -1375,6 +1375,60 @@ const counters = async () => { const p = once('__e1bCounters'); w.postMessage({ 
 `);
 }
 
+// ---------------------------------------------------------------------------
+// RULE TRACE (P3) — the trace MARKS must not disturb the inspect ring path.
+//
+// The traced agent gets a magenta ring and the traced cell a magenta cube, and
+// the cheap way to draw either would have been to push it into the arrays the
+// INSPECT highlight already uses. That is precisely what must not happen: the
+// inspect rings are derived per frame from the OPEN popovers (`agent-render.md`
+// — draw() is the one writer), so a trace target merged into them would (a)
+// paint a white inspect ring on an agent nobody inspected and (b) survive as an
+// inspect artefact when the popover closes. The trace therefore owns its own
+// renderer slots, and the target joins the agent UI-sync want-set through the
+// DATA list (`agentStateIds`), never through the ring list.
+{
+  const sv = readSrc('simulator/SimulatorView.tsx');
+  const gl = readSrc('simulator/render/gl3d.ts');
+
+  check('gl3d carries SEPARATE trace slots (setTraceCell / setTraceAgent) [trace]',
+    /setTraceCell\(cell: \{ layer: number; row: number; col: number \} \| null\)/.test(gl)
+    && /setTraceAgent\(agent: \{ x: number; y: number; z: number; radius: number \} \| null\)/.test(gl));
+
+  // The INSPECT ring/cube code paths are untouched: the same two setters, the
+  // same two colour literals, still fed from the same sources.
+  const rings = blockAfter(gl, /private renderAgentRings\(\): void/);
+  check('the white INSPECT ring still draws from this.inspectAgents [trace]',
+    /for \(const a of this\.inspectAgents\) ring\(a, \[0\.95, 0\.97, 1\.0\]\);/.test(rings));
+  check('the trace ring is a SEPARATE draw in the trace colour [trace]',
+    /if \(this\.traceAgent\) \{/.test(rings) && /0\.82, 0\.36, 0\.90/.test(rings));
+  const cubes = blockAfter(gl, /private renderHoverCells\(\): void/);
+  check('the white INSPECT cube still draws from this.inspectCells [trace]',
+    /for \(const c of this\.inspectCells\) this\.pushCellCube\(v, c, \[0\.95, 0\.97, 1\.0\], 0\.6\);/.test(cubes));
+  check('the trace cube is a SEPARATE draw in the trace colour [trace]',
+    /if \(this\.traceCell\) this\.pushCellCube\(v, this\.traceCell, \[0\.82, 0\.36, 0\.90\]/.test(cubes));
+
+  // The 2D overlay: the inspected-agent ring loop still reads agentInspectIdsRef
+  // (the POPOVER list), and the trace ring is its own dashed stroke.
+  const cursor = blockAfter(sv, /const drawCursorLayer = useCallback\(/);
+  check('the 2D inspect rings still iterate agentInspectIdsRef (popovers only) [trace]',
+    /for \(const id of agentInspectIdsRef\.current\) \{/.test(cursor));
+  check('the 2D trace ring is its own DASHED stroke in the trace colour [trace]',
+    /traceAgentTargetRef\.current/.test(cursor) && /setLineDash\(\[5, 4\]\)/.test(cursor));
+  check('the 2D trace CELL mark reads the token, never a hardcoded hue [trace]',
+    /hlCtx\.strokeStyle = traceMarkColor\(\);/.test(cursor)
+    && /getPropertyValue\('--color-trace'\)/.test(sv));
+
+  // The UI-sync want-term: the traced agent is a STATE-reading feature, and it
+  // arrives through the data list, not the ring list.
+  const want = blockAfter(sv, /const updateAgentUiSync = useCallback\(/);
+  check('the traced agent joins the UI-sync want-set via agentStateIds [trace]',
+    /agentStateIdsRef\.current\.length > 0/.test(want)
+    && !/agentInspectIdsRef\.current\.length > 0/.test(want));
+  check('agentStateIds = the inspectors PLUS the traced agent [trace]',
+    /const agentStateIds = useMemo\(\(\) => \(\s*\n\s*traceAgentTarget != null && !agentInspectIds\.includes\(traceAgentTarget\)/.test(sv));
+}
+
 section('RESULT');
 if (failures === 0) console.log('AGENT RENDER-LAYER INVARIANTS ✓');
 else console.log(`${failures} FAILURE(S)`);

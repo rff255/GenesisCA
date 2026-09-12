@@ -111,6 +111,69 @@
   background: var(--color-overlay-hover-weak);
 }
 
+/* --- RULE TRACE (P3) — the session chip --------------------------------- */
+
+/* The one hue the canvas mark, the inspector chip and (P4) the lit graph path
+   share. It is a READOUT with one action (the ✕), not a button, so unlike the
+   transport chip it carries no hover affordance of its own. */
+.chipTrace {
+  color: var(--color-trace);
+  border-color: var(--color-trace);
+  background: var(--color-trace-soft);
+  gap: var(--space-2);
+}
+
+/* The label can name BOTH targets on a grid+agents model, and this bar has to
+   survive a 231 px viewport pane — so it ellipsises rather than pushing the
+   layout menu off the end. The full text is in the title. */
+.traceText {
+  max-width: 190px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tracePaused {
+  padding-left: var(--space-2);
+  border-left: 1px solid var(--color-trace);
+  color: var(--color-warning);
+  max-width: 170px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.traceStop {
+  width: 15px;
+  height: 15px;
+  padding: 0;
+  margin-left: var(--space-1);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-sm);
+  color: inherit;
+  font-size: 10px;
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0.75;
+}
+
+.traceStop:hover { opacity: 1; background: var(--color-overlay-hover-medium); }
+
+/* The transient `traceTargetLost` notice (the agent died, the grid shrank).
+   Plain text, not a chip: it reports something that already happened. */
+.traceLost {
+  color: var(--color-warning);
+  font-size: var(--font-2xs);
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .sep {
   width: 1px;
   align-self: stretch;

@@ -234,6 +234,10 @@ export interface TraceBreakMsg {
  *  worker clears the target and keeps the fns. */
 export interface TraceTargetLostMsg {
   type: 'traceTargetLost';
+  /** WHICH target was dropped. `'both'` only for a sandbox breach, which ends
+   *  the whole session. Explicit, so the main thread never has to infer the
+   *  kind from the prose `reason`. */
+  kind: 'cell' | 'agent' | 'both';
   reason: string;
 }
 

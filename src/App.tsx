@@ -24,7 +24,12 @@ import {
   getOverseerRunning, subscribeOverseerRunning, LIVE_OVERSEER_BUSY_REASON,
   resetLiveFullscreenIntent,
 } from './live/liveState';
-import { claimLiveFocus } from './live/liveKeyboard';
+import { claimLiveFocus, isTypingTarget, overlayOwnsKeyboard } from './live/liveKeyboard';
+import {
+  getTraceSession, selectedEntry, stepCursor, requestCursorRestart, type TraceGraphKind,
+} from './trace/traceState';
+import { getActiveGraphKind } from './modeler/vpl/graphState';
+import { simTransportApi } from './simulator/simTransportState';
 import { simLayoutApi } from './simulator/simLayoutState';
 import type { CAModel } from './model/types';
 import styles from './App.module.css';
@@ -240,6 +245,48 @@ function AppInner() {
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, []);
+  // RULE TRACE (P3) — `]` = step node, `[` = back one node.
+  //
+  // Bound ONCE, here, and only in Live: `SimulatorView` is always mounted and
+  // `GraphEditor` binds its own keys, so a key bound in both would fire twice in
+  // Live (the `Ctrl+C/V/X` double-binding lesson). It works from EITHER pane on
+  // purpose — the cursor walks a recorded log, it acts on no surface, so making
+  // it follow the focus owner would only make it feel broken half the time.
+  //
+  // The stand-down set is the Phase-4 discipline: a text field, an open
+  // dialog/menu, and the capture-review modal (which carries no `role="dialog"`
+  // of its own — see `data-capture-review` there). `]` / `[` have no native
+  // meaning in a `<select>`, so that one is NOT stood down, exactly as `Enter`
+  // and `Ctrl+Enter` are not.
+  useEffect(() => {
+    if (!isLive) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== ']' && e.key !== '[') return;
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
+      const s = getTraceSession();
+      if (s.target.cell === null && s.target.agent === null) return;   // nothing traced
+      if (isTypingTarget()) return;
+      if (overlayOwnsKeyboard()) return;
+      if (document.querySelector('[data-capture-review]')) return;
+      // The graph pane decides WHICH trace is being stepped (the user is looking
+      // at one graph); a model that traces only the other kind still steps, so
+      // the key is never inert while a trace is on screen.
+      const kind: TraceGraphKind = getActiveGraphKind() === 'agents' ? 'agents' : 'cells';
+      const entry = selectedEntry(kind) ?? selectedEntry(kind === 'cells' ? 'agents' : 'cells');
+      e.preventDefault();
+      const moved = stepCursor(e.key === ']' ? 1 : -1, entry);
+      // Past the LAST node there is nothing more in this trace — the honest next
+      // thing to show is the next generation, which is the transport's own Step.
+      // The cursor restarts at the first node of the trace that arrives.
+      if (!moved && e.key === ']') {
+        requestCursorRestart();
+        simTransportApi?.stepGeneration();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [isLive]);
+
   /** Shared post-load flow: land in the Simulator, confirm the load. */
   const afterLoad = (modelName: string) => {
     setMode('simulator');

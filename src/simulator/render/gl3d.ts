@@ -1365,6 +1365,8 @@ export class Gl3DRenderer {
   private brushOutline: Float32Array | null = null;
   /** Inspected cells to highlight (e.g. on inspect-dialog hover). Empty = none. */
   private inspectCells: ReadonlyArray<{ layer: number; row: number; col: number }> = [];
+  /** RULE TRACE (P3) — the one TRACED cell (null = not tracing a cell). */
+  private traceCell: { layer: number; row: number; col: number } | null = null;
   /** Canvas clear colour [r,g,b,a] 0..1. Default transparent (shows the page). */
   private bgColor: [number, number, number, number] = [0, 0, 0, 0];
   /** Line overlay (axes/grid/bounds) + gizmo pipeline. */
@@ -1398,6 +1400,8 @@ export class Gl3DRenderer {
   /** Hovered / inspected agent ids (compacted instance indices) to ring. */
   private hoverAgents: ReadonlyArray<{ x: number; y: number; z: number; radius: number }> = [];
   private inspectAgents: ReadonlyArray<{ x: number; y: number; z: number; radius: number }> = [];
+  /** RULE TRACE (P3) — the one TRACED agent (null = not tracing an agent). */
+  private traceAgent: { x: number; y: number; z: number; radius: number } | null = null;
   /** Visible agent count (= ALIVE agents uploaded). DEV/verification. */
   agentInstanceCount = 0;
   // --- Agent SPRITES (3D billboard pass). ---
@@ -1815,6 +1819,13 @@ export class Gl3DRenderer {
   setBrushOutline(pts: Float32Array | null): void { this.brushOutline = pts; }
   /** Set the inspected cells to highlight (white cube). Pass [] to clear. */
   setInspectCells(cells: ReadonlyArray<{ layer: number; row: number; col: number }>): void { this.inspectCells = cells; }
+  /** RULE TRACE (P3) — the TRACED cell's mark, in the trace magenta.
+   *  A separate slot from `setInspectCells` on purpose: the inspect highlight is
+   *  a HOVER response that comes and goes with the pointer, while the trace mark
+   *  stands for as long as the session does, and the two must be distinguishable
+   *  when they land on the same cell (the trace cube is drawn slightly larger,
+   *  so it frames the white one instead of z-fighting it). */
+  setTraceCell(cell: { layer: number; row: number; col: number } | null): void { this.traceCell = cell; }
   /** Canvas background. `null` → transparent (page shows through). */
   setBackgroundColor(c: [number, number, number, number] | null): void { this.bgColor = c ?? [0, 0, 0, 0]; }
 
@@ -2263,6 +2274,12 @@ export class Gl3DRenderer {
    *  Pass [] to clear. Drawn as wireframe rings with depth OFF (always visible). */
   setHoverAgents(agents: ReadonlyArray<{ x: number; y: number; z: number; radius: number }>): void { this.hoverAgents = agents; }
   setInspectAgents(agents: ReadonlyArray<{ x: number; y: number; z: number; radius: number }>): void { this.inspectAgents = agents; }
+  /** RULE TRACE (P3) — the TRACED agent's ring, in the trace magenta. A separate
+   *  slot from `setInspectAgents` for the same reason as `setTraceCell`: the
+   *  inspect rings are derived per frame from the OPEN popovers, and the trace
+   *  outlives every one of them. Drawn wider so it frames an inspect ring on the
+   *  same agent rather than replacing it. */
+  setTraceAgent(agent: { x: number; y: number; z: number; radius: number } | null): void { this.traceAgent = agent; }
 
   /** Compact the ALIVE agents from the render snapshot into the per-instance
    *  buffer ([x,y,z,radius,r,g,b,a]) and (re)build the bond endpoint line list.
@@ -2855,7 +2872,7 @@ export class Gl3DRenderer {
    *  in the camera plane, drawn with depth OFF so they read as an always-visible
    *  cursor / highlight (mirrors renderHoverCells for voxels). */
   private renderAgentRings(): void {
-    if (this.hoverAgents.length === 0 && this.inspectAgents.length === 0) return;
+    if (this.hoverAgents.length === 0 && this.inspectAgents.length === 0 && !this.traceAgent) return;
     const gl = this.gl;
     const hx = (this.W - 1) / 2, hy = (this.H - 1) / 2, hz = (this.D - 1) / 2;
     const v: number[] = [];
@@ -2876,6 +2893,13 @@ export class Gl3DRenderer {
     };
     for (const a of this.hoverAgents) ring(a, [1.0, 0.85, 0.2]);
     for (const a of this.inspectAgents) ring(a, [0.95, 0.97, 1.0]);
+    // RULE TRACE (P3): the traced agent, magenta and one ring further out (the
+    // `ring` helper sizes from the radius, so a slightly grown radius is what
+    // puts it OUTSIDE an inspect ring on the same agent).
+    if (this.traceAgent) {
+      const t = this.traceAgent;
+      ring({ x: t.x, y: t.y, z: t.z, radius: t.radius * 1.22 + 0.18 }, [0.82, 0.36, 0.90]);
+    }
     gl.disable(gl.DEPTH_TEST);
     this.drawLines(new Float32Array(v), gl.LINES, this.mvp);
     gl.enable(gl.DEPTH_TEST);
@@ -3193,11 +3217,14 @@ export class Gl3DRenderer {
    *  would affect) + the inspected cells (white). Drawn with depth test OFF so
    *  they read as an always-visible cursor / highlight. */
   private renderHoverCells(): void {
-    if (this.hoverCells.length === 0 && this.inspectCells.length === 0) return;
+    if (this.hoverCells.length === 0 && this.inspectCells.length === 0 && !this.traceCell) return;
     const gl = this.gl;
     const v: number[] = [];
     for (const c of this.hoverCells) this.pushCellCube(v, c, [1.0, 0.85, 0.2]);     // amber brush cursor
     for (const c of this.inspectCells) this.pushCellCube(v, c, [0.95, 0.97, 1.0], 0.6); // white inspect highlight
+    // RULE TRACE (P3): the traced cell, magenta (--color-trace) and a touch
+    // LARGER than the inspect cube so the two frame each other on one cell.
+    if (this.traceCell) this.pushCellCube(v, this.traceCell, [0.82, 0.36, 0.90], 0.68);
     gl.disable(gl.DEPTH_TEST);
     this.drawLines(new Float32Array(v), gl.LINES, this.mvp);
     gl.enable(gl.DEPTH_TEST);

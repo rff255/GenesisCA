@@ -34,6 +34,15 @@
 //      argument throws `TraceSandboxEscape`; a throwing fn is captured, not
 //      rethrown; the RNG cell is private and stable per (element, generation).
 //
+//   H. SCOPE MAPPING (P3). `originInScope` decides, for one resolved origin and
+//      the macro scope the editor is showing, whether the record is visible here
+//      and WHICH node of THIS scope lights up — the rule that makes "a macro
+//      instance lights when anything inside it ran" and "entering the instance
+//      shows the inner path" one function. Checked against hand-built origins at
+//      the root, one level deep, two levels deep, and across two instances of the
+//      SAME macro def (whose inner ids are identical — the case a naive
+//      "strip the prefix" rule gets wrong).
+//
 //   G. NEGATIVE CONTROLS. Three deliberate faults must each FAIL a NAMED check:
 //      (1) the record emission removed, (2) the shadow `set` trap broken (writes
 //      reaching the base array), (3) a pass's origin fold dropped. These mutate
@@ -54,6 +63,7 @@ const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const ENTRY = `
 export { compileGraph, compileAgentGraph, is3dModel, sparseSteppingEnabled } from '../src/modeler/vpl/compiler/compile.ts';
 export { resolveTraceOrigin } from '../src/modeler/vpl/compiler/traceOrigin.ts';
+export { originInScope } from '../src/trace/traceOrigin.ts';
 export { runTrace, TraceSandboxEscape, traceRngSeed, TRACE_MAX_EVENTS } from '../src/simulator/engine/traceRunner.ts';
 export { migrateForHarness } from '../src/dev/compileHarness.ts';
 export { createAgentStore, computeAgentMaxHashBins, buildSpatialHash, seedAgents } from '../src/simulator/engine/agentEngine.ts';
@@ -1007,9 +1017,109 @@ section('G. NEGATIVE CONTROLS — each fault must FAIL a named check');
 }
 
 // ===========================================================================
+// ===========================================================================
+section('H. SCOPE MAPPING — originInScope (P3)');
+// ===========================================================================
+{
+  const inScope = M.originInScope;
+  const at = (nodeId, ...macroPath) => (macroPath.length ? { nodeId, macroPath } : { nodeId });
+
+  // --- the ROOT scope -----------------------------------------------------
+  {
+    const r = inScope(at('n1'), []);
+    check('scope []: a top-level node is visible AS ITSELF', r.visible && r.nodeId === 'n1', JSON.stringify(r));
+  }
+  {
+    const r = inScope(at('inner1', 'instA'), []);
+    check('scope []: a node inside a macro rolls up to the INSTANCE node',
+      r.visible && r.nodeId === 'instA', JSON.stringify(r));
+  }
+  {
+    const r = inScope(at('deep', 'instA', 'instB'), []);
+    check('scope []: a node two levels deep rolls up to the OUTERMOST instance',
+      r.visible && r.nodeId === 'instA', JSON.stringify(r));
+  }
+
+  // --- INSIDE one instance ------------------------------------------------
+  {
+    const r = inScope(at('inner1', 'instA'), ['instA']);
+    check('scope [instA]: its own inner node is visible AS ITSELF',
+      r.visible && r.nodeId === 'inner1', JSON.stringify(r));
+  }
+  {
+    const r = inScope(at('n1'), ['instA']);
+    check('scope [instA]: a TOP-LEVEL node is NOT visible', !r.visible, JSON.stringify(r));
+  }
+  {
+    const r = inScope(at('inner1', 'instC'), ['instA']);
+    check('scope [instA]: another instance is NOT visible', !r.visible, JSON.stringify(r));
+  }
+  {
+    const r = inScope(at('deep', 'instA', 'instB'), ['instA']);
+    check('scope [instA]: a nested node lights the NESTED INSTANCE (one level down)',
+      r.visible && r.nodeId === 'instB', JSON.stringify(r));
+  }
+
+  // --- NESTED scope -------------------------------------------------------
+  {
+    const r = inScope(at('deep', 'instA', 'instB'), ['instA', 'instB']);
+    check('scope [instA,instB]: the node itself', r.visible && r.nodeId === 'deep', JSON.stringify(r));
+  }
+  {
+    const r = inScope(at('deep', 'instA', 'instB'), ['instA', 'instX']);
+    check('scope [instA,instX]: a different nested instance is NOT visible', !r.visible, JSON.stringify(r));
+  }
+  {
+    const r = inScope(at('inner1', 'instA'), ['instA', 'instB']);
+    check('a SHALLOWER origin is not visible in a DEEPER scope', !r.visible, JSON.stringify(r));
+  }
+
+  // --- the SAME def instanced twice: identical inner ids, different paths ---
+  {
+    const a = inScope(at('sharedInner', 'instA'), ['instA']);
+    const b = inScope(at('sharedInner', 'instB'), ['instA']);
+    check('two instances of ONE macro def stay apart (same inner id, different path)',
+      a.visible && a.nodeId === 'sharedInner' && !b.visible, `${JSON.stringify(a)} / ${JSON.stringify(b)}`);
+    const rootA = inScope(at('sharedInner', 'instA'), []);
+    const rootB = inScope(at('sharedInner', 'instB'), []);
+    check('…and at the root they light their OWN instance node',
+      rootA.nodeId === 'instA' && rootB.nodeId === 'instB', `${rootA.nodeId} / ${rootB.nodeId}`);
+  }
+
+  // --- through the REAL resolver ------------------------------------------
+  // The origins above are hand-built; this proves the pair composes on a table
+  // of the shape `expandMacros` actually folds (a macro-prefixed lowered id).
+  {
+    const table = { 'minstA_inner1': { nodeId: 'inner1', macroPath: ['instA'] } };
+    const resolved = M.resolveTraceOrigin('minstA_inner1', table);
+    const root = inScope(resolved, []);
+    const inner = inScope(resolved, ['instA']);
+    check('resolveTraceOrigin → originInScope composes (root ⇒ instance, inside ⇒ inner)',
+      root.visible && root.nodeId === 'instA' && inner.visible && inner.nodeId === 'inner1',
+      `${JSON.stringify(root)} / ${JSON.stringify(inner)}`);
+  }
+
+  // NEGATIVE CONTROL: the "strip the scope prefix and take what is left" rule a
+  // scope mapping is usually written as — it lights the LAST element instead of
+  // the next one down, so a two-level path lights the wrong node at the root.
+  expectFail('a scope rule that takes the LAST path element instead of the next one', () => {
+    const naive = (o) => ({ visible: true, nodeId: (o.macroPath ?? []).at(-1) ?? o.nodeId });
+    const r = naive(at('deep', 'instA', 'instB'));
+    check('scope []: a node two levels deep rolls up to the OUTERMOST instance',
+      r.visible && r.nodeId === 'instA', JSON.stringify(r));
+  });
+  // NEGATIVE CONTROL: no prefix test at all — every instance would light.
+  expectFail('a scope rule with no prefix test (every instance lights)', () => {
+    const naive = (o, scope) => ({ visible: true, nodeId: (o.macroPath ?? [])[scope.length] ?? o.nodeId });
+    const r = naive(at('inner1', 'instC'), ['instA']);
+    check('scope [instA]: another instance is NOT visible', !r.visible, JSON.stringify(r));
+  });
+}
+
+// ===========================================================================
 rmSync(entryPath, { force: true });
 rmSync(dir, { recursive: true, force: true });
 console.log(failures === 0
-  ? '\nRULE TRACE (P1) ✓  (all checks passed)'
+  ? '\nRULE TRACE (P1+P3) ✓  (all checks passed)'
   : `\n${failures} CHECK(S) FAILED ✗`);
 process.exit(failures === 0 ? 0 : 1);

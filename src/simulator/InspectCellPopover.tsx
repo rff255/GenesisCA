@@ -22,6 +22,12 @@ interface Props {
   orientation: number | null;
   /** 3D Grid CA: decode neighborIndex attribute values with the 3-axis codec. */
   is3d?: boolean;
+  /** RULE TRACE (P3): may this popover offer the Trace chip at all? True only
+   *  in LIVE and only for a PINNED popover — see `TraceChip`. */
+  traceable?: boolean;
+  /** Is THIS cell the traced one? */
+  tracing?: boolean;
+  onToggleTrace?: () => void;
   pulse: boolean;
   focused: boolean;
   totalOpen: number;
@@ -37,6 +43,42 @@ interface Props {
 const ORIENTATION_NAMES = ['N', 'E', 'S', 'W'] as const;
 
 const DRAG_MARGIN = 8;
+
+/** RULE TRACE (P3) — the Trace chip's glyph (decision A1): three dots on a
+ *  STEPPED path — a rule walked node by node. Deliberately NOT a filled circle,
+ *  which reads as Follow's `◎` at 22px. Defined once here and imported by the
+ *  agent inspector so the two chips can never drift apart. */
+export const TRACE_GLYPH = (
+  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+    strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <path d="M4 18h5v-6h6V6h5" />
+    <circle cx="4" cy="18" r="1.7" fill="currentColor" stroke="none" />
+    <circle cx="12" cy="12" r="1.7" fill="currentColor" stroke="none" />
+    <circle cx="20" cy="6" r="1.7" fill="currentColor" stroke="none" />
+  </svg>
+);
+
+/** The Trace chip, shared by both inspectors (same size / placement / wording).
+ *  Rendered ONLY where tracing is actually reachable — in Live, on a PINNED
+ *  popover — so it is never an enabled control that cannot work (the doctrine's
+ *  "structurally impossible ⇒ hide" arm; outside Live there is no graph pane to
+ *  show the trace in, and a transient sweep popover is about to be discarded). */
+export function TraceChip(
+  { tracing, onToggle, what }: { tracing: boolean; onToggle: () => void; what: 'cell' | 'agent' },
+) {
+  return (
+    <button
+      className={tracing ? `${styles.traceBtn} ${styles.traceBtnActive}` : styles.traceBtn}
+      onClick={onToggle}
+      onMouseDown={e => e.stopPropagation()}
+      title={tracing
+        ? `Tracing this ${what} — click to stop`
+        : `Trace this ${what}'s rule in the graph (Live)`}
+      aria-pressed={tracing}
+      aria-label={tracing ? `Stop tracing this ${what}` : `Trace this ${what}'s rule in the graph`}
+    >{TRACE_GLYPH}</button>
+  );
+}
 
 function rgbToHex(r: number, g: number, b: number): string {
   const clamp = (v: number) => Math.max(0, Math.min(255, v | 0));
@@ -109,7 +151,9 @@ function parentMatches(parent: Attribute, parentValue: number | undefined, paren
 }
 
 export function InspectCellPopover({
-  popover, cellAttrs, values, color, orientation, is3d = false, pulse, focused, totalOpen,
+  popover, cellAttrs, values, color, orientation, is3d = false,
+  traceable = false, tracing = false, onToggleTrace,
+  pulse, focused, totalOpen,
   onClose, onCloseAll, onFocus, onDragEnd, onHoverEnter, onHoverLeave, onRectMeasure,
 }: Props) {
   const rootRef = useRef<HTMLDivElement>(null);
@@ -207,6 +251,9 @@ export function InspectCellPopover({
         onMouseDown={onHeaderMouseDown}
       >
         <span className={styles.coord}>Cell ({popover.row}, {popover.col})</span>
+        {traceable && onToggleTrace && (
+          <TraceChip tracing={tracing} onToggle={onToggleTrace} what="cell" />
+        )}
         <button
           className={styles.closeAllBtn}
           onClick={onCloseAll}

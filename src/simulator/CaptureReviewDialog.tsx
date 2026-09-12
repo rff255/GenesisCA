@@ -116,7 +116,13 @@ export function CaptureReviewDialog({ capture, onSave, onCopy, onCancel, onFinis
   return (
     // Deliberately NO backdrop-click dismissal: a recording's bytes are gone
     // the moment this closes, and a stray click outside is not a decision.
-    <div className={styles.backdrop}>
+    // `data-capture-review` is how a keyboard handler OUTSIDE this tree knows the
+    // review is up. `SimulatorView` has `captureReviewRef` for its own handler,
+    // but `App` binds the Rule Trace keys (`]` / `[`) and can reach neither that
+    // ref nor `overlayOwnsKeyboard()` (this dialog deliberately carries no
+    // `role="dialog"` — it manages its own capture-phase Escape, and giving it
+    // the role would hand every other global key handler a new owner).
+    <div className={styles.backdrop} data-capture-review>
       <div className={styles.dialog}>
         <div className={styles.title}>{title}</div>
         <div className={styles.body}>
