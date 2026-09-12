@@ -7522,6 +7522,59 @@ function traceFirstBreak(events: TraceEvent[]): string | null {
   return null;
 }
 
+/** RULE TRACE (P5) — the traced element's CURRENT state, at the trace point.
+ *
+ *  The Values tab is a `current → next` table: `writes` supply NEXT, and this
+ *  supplies CURRENT. It is read HERE, beside the trace, rather than from a
+ *  later `getState`, because a trace taken before generation N must be paired
+ *  with the state generation N's rule actually read — the two would drift by a
+ *  generation the moment the simulation is playing.
+ *
+ *  Deliberately mirrors the two on-demand inspector readers so there is one
+ *  vocabulary for "the element's state": `postInspectCellsData` for a cell
+ *  (every cell attribute + `orientation` when variegated) and the
+ *  `getAgentState` case for an agent (every agent attribute + the engine
+ *  fields, gated ones falling back to their typed default exactly as there).
+ *
+ *  ⚠ FRESHNESS IS THE CALLER'S (I3). Every trace site already runs behind
+ *  `traceFreshFor` / the `ensureCpuAttrsFresh` + `ensureAgentStoreFresh`
+ *  one-shots, so the mirrors this reads are the ones the trace itself read. It
+ *  never triggers a readback of its own — that would be a per-generation GPU
+ *  cost for a presentation field.
+ *
+ *  A GLOBAL root (grid init, a periodic event) has no element: it returns
+ *  undefined and the reply simply carries no snapshot. */
+function traceSnapshot(target: TraceTarget): Record<string, number> | undefined {
+  if (target.kind === 'cell') {
+    const idx = target.idx;
+    if (idx < 0 || idx >= total) return undefined;
+    const out: Record<string, number> = {};
+    for (const attr of cellAttrs) {
+      const arr = readAttrs[attr.id];
+      if (arr) out[attr.id] = arr[idx]!;
+    }
+    if (orientationReadView) out.orientation = orientationReadView[idx]!;
+    return out;
+  }
+  const s = agentStore;
+  const id = target.id;
+  if (!s || id < 0 || id >= s.highWater || !s.alive[id]) return undefined;
+  const out: Record<string, number> = {};
+  for (const spec of s.attrSpecs) { const a = s.attrRead[spec.id]; if (a) out[spec.id] = a[id]!; }
+  out.x = s.x[id]!; out.y = s.y[id]!;
+  out.vx = s.vx[id]!; out.vy = s.vy[id]!;
+  if (s.worldDepth > 1) { out.z = s.z[id]!; out.vz = s.vz[id]!; }
+  out.radius = s.radius[id]!;
+  // A gated-OFF field is a zero-length array, so the read is `undefined` —
+  // report the typed default rather than shipping a NaN (the `getAgentState`
+  // safety catch, same reasoning).
+  if (s.targetRadius.length > 0) out.targetRadius = s.targetRadius[id] ?? 0;
+  out.age = s.age[id] ?? 0;
+  out.bondDegree = s.bondCount[id] ?? 0;
+  out.density = s.density[id] ?? 0;
+  return out;
+}
+
 /** Run ONE root and post its trace. SYNCHRONOUS on purpose: several call sites
  *  (Reset's init roots, a paint's input mapping, a division) must trace the
  *  PRE-state, and an `await` there would let the real run happen first. The
@@ -7563,9 +7616,14 @@ function traceRootSync(
   }
   const events = result.events as TraceEvent[];
   const writes = result.writes as TraceWrite[];
+  // Read AFTER the run, never before: the sandbox writes nothing to the live
+  // buffers (I2), so the two orders agree — and reading here keeps the snapshot
+  // out of the path of a root that bails early.
+  const snapshot = traceSnapshot(target);
   self.postMessage({
     type: 'trace', seq: ++traceSeq, root: rootKey, gen: generation, target,
     events, writes, truncated: result.truncated, approximate: traceApproximate(entry),
+    ...(snapshot !== undefined ? { snapshot } : {}),
     ...(result.error !== undefined ? { error: result.error } : {}),
   });
   return traceFirstBreak(events);

@@ -22,6 +22,7 @@ import type { QuickAddPayload } from './vpl/graphState';
 import { modelerUiState } from './modelerUiState';
 import { getLiveFocus, dispatchCanvasFullscreen } from '../live/liveState';
 import { overlayOwnsKeyboard } from '../live/liveKeyboard';
+import { TracePanel } from '../trace/TracePanel';
 import { IndicatorsPanelContent } from './panels/IndicatorsPanelContent';
 import { OPEN_MODELER_PANEL_EVENT, type OpenModelerPanelDetail } from './panels/propertiesWidgets';
 import styles from './ModelerView.module.css';
@@ -410,7 +411,14 @@ export function ModelerView({ live = false }: { live?: boolean } = {}) {
           </PanelShell>
         )}
         <div className={styles.graphArea}>
-          <GraphEditorInner />
+          <div className={styles.graphEditorSlot}>
+            <GraphEditorInner />
+          </div>
+          {/* RULE TRACE (P5) — the bottom drawer. LIVE ONLY (doctrine HIDE: the
+              graph the panel annotates is only on screen here), and the panel
+              itself returns null while nothing is traced, so an idle Live
+              session pays no height. */}
+          {live && <TracePanel />}
           {!activePanel && (
             <button
               className={styles.leftPanelExpandBtn}

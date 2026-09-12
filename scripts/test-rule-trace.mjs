@@ -43,6 +43,14 @@
 //      SAME macro def (whose inner ids are identical — the case a naive
 //      "strip the prefix" rule gets wrong).
 //
+//   J. VALUES (P5). The Trace panel's numbers-to-sentences layer: a raw write
+//      (a parameter name, a flat index, a value and what was there) back into
+//      "this attribute changed" / "that write was aimed at the cell above" /
+//      "a Form Between was queued", plus the root-label vocabulary and the
+//      element label. The load-bearing claim is that NOTHING the trace wrote is
+//      invisible: every write is claimed by exactly one row builder and the rest
+//      surface as generic rows.
+//
 //   G. NEGATIVE CONTROLS. Three deliberate faults must each FAIL a NAMED check:
 //      (1) the record emission removed, (2) the shadow `set` trap broken (writes
 //      reaching the base array), (3) a pass's origin fold dropped. These mutate
@@ -72,6 +80,7 @@ export { buildAgentAbiArgs } from '../src/modeler/vpl/compiler/agentAbi.ts';
 export { agentAttrsOf, bondAttrsOf, cellFieldAttrsOf } from '../src/model/attributeScope.ts';
 export { resolveAgentFieldGates } from '../src/model/agentFieldGating.ts';
 export { resolveKeyLabels, normalizeLookupTable } from '../src/modeler/vpl/compiler/variegation.ts';
+export { approximateReason, buildTraceRows, indexWrites, cellCoords, shortestDelta, neighbourOffset, formatOffset, traceTargetLabel, traceRootLabel, traceChipLabel, isResetRoot, decodeBondRequest, bondRequestText, formatNumber, formatNI } from '../src/trace/traceValues.ts';
 `;
 const dir = mkdtempSync(join(tmpdir(), 'gca-trace-'));
 const entryPath = join(ROOT, 'scripts', '__trace_entry.ts');
@@ -1292,9 +1301,289 @@ section('I. THE EDITOR MAP — reroute chains, the value cone, the two id spaces
 }
 
 // ===========================================================================
+section('J. VALUES (P5) — raw writes back into the sentences the panel shows');
+// ===========================================================================
+// The Trace panel renders what `traceValues.ts` returns and decides nothing
+// about what a write MEANS, so this section IS the panel's correctness: a
+// parameter name, a flat index and two numbers must come back out as "this
+// attribute changed", "that write was aimed at the neighbour above", "a Form
+// Between was queued" — and NOTHING the trace wrote may go missing on the way.
+{
+  const W = 10, H = 10;
+  const dims2d = { W, H, D: 1 };
+  const dims3d = { W: 4, H: 4, D: 4 };
+  const idx = 55;                       // (r 5, c 5) on a 10x10 grid
+  const attrs = [
+    { id: 'alive', name: 'alive', type: 'bool' },
+    { id: 'age', name: 'age', type: 'integer' },
+    { id: 'energy', name: 'energy', type: 'float' },
+  ];
+  const cellTarget = { kind: 'cell', idx };
+  const rowsOf = (writes, extra = {}) => M.buildTraceRows({
+    target: cellTarget, writes, events: [], attrs, dims: dims2d,
+    snapshot: { alive: 1, age: 3, energy: 4.25 }, ...extra,
+  });
+  const rowFor = (res, key) => res.rows.find(r => r.key === key);
+
+  // --- current → next, and the accent ------------------------------------
+  {
+    const res = rowsOf([
+      { param: 'w_alive', index: idx, value: 0, prev: 1 },
+      { param: 'w_age', index: idx, value: 0, prev: 3 },
+    ]);
+    const alive = rowFor(res, 'attr:alive');
+    check('a written attribute reads current -> next and is marked CHANGED',
+      alive?.current?.v === 1 && alive?.next?.v === 0 && alive.changed === true,
+      JSON.stringify(alive));
+    const energy = rowFor(res, 'attr:energy');
+    check('an UNwritten attribute mirrors current and is marked unchanged',
+      energy?.current?.v === 4.25 && energy?.next?.v === 4.25
+      && energy.changed === false && energy.unchanged === true,
+      JSON.stringify(energy));
+    check('rows keep DECLARATION order (A6 — a changed row is accented, never re-sorted)',
+      res.rows.slice(0, 3).map(r => r.key).join(',') === 'attr:alive,attr:age,attr:energy',
+      res.rows.map(r => r.key).join(','));
+    check('a write that lands on the SAME value is not accented',
+      rowFor(rowsOf([{ param: 'w_age', index: idx, value: 3, prev: 3 }]), 'attr:age').changed === false);
+  }
+
+  // --- neighbour writes ---------------------------------------------------
+  {
+    // idx 55 = (5,5); idx 45 = (4,5) -> (dr -1, dc 0).
+    const res = rowsOf([{ param: 'w_energy', index: 45, value: 4.65, prev: 4.25 }]);
+    const nbr = rowFor(res, 'nbr:energy:45');
+    check('a write at ANOTHER index becomes a neighbour row with the right offset',
+      nbr?.name === '(-1, 0) energy' && nbr.note === 'write to another cell',
+      JSON.stringify(nbr));
+    check('the traced cell own-attribute row is NOT consumed by the neighbour write',
+      rowFor(res, 'attr:energy').unchanged === true);
+    // The torus edge: row 0 writing row 9 of a 10-row grid is `dr -1`, not `dr +9`.
+    const wrapped = M.neighbourOffset(5, 95, dims2d);
+    check('a wrapped neighbour write reads as the SHORT offset, not the long way round',
+      wrapped.dr === -1 && wrapped.dc === 0, JSON.stringify(wrapped));
+    // 3D: the layer axis.
+    const o3 = M.neighbourOffset(1 * 16 + 1 * 4 + 1, 2 * 16 + 1 * 4 + 1, dims3d);
+    check('3D: a write one layer up decodes as (dr, dc, dl) with dl = +1',
+      o3.dr === 0 && o3.dc === 0 && o3.dl === 1 && M.formatOffset(o3, true) === '(0, 0, 1)',
+      JSON.stringify(o3));
+  }
+
+  // --- colour, indicators, stop -------------------------------------------
+  {
+    const res = rowsOf([
+      { param: 'colors', index: idx * 4, value: 32, prev: 0 },
+      { param: 'colors', index: idx * 4 + 1, value: 32, prev: 0 },
+      { param: 'colors', index: idx * 4 + 2, value: 32, prev: 0 },
+      { param: 'colors', index: idx * 4 + 3, value: 255, prev: 255 },
+      { param: '_indicators', index: 1, value: 7, prev: 6 },
+      { param: '_stopFlag', index: 0, value: 2, prev: 0 },
+    ], { indicatorNames: ['births', 'deaths'], stopMessage: 'All cells died' });
+    const col = rowFor(res, 'colour');
+    check('the Output Mapping colour is read off the colors run as an RGB triple',
+      col?.next?.kind === 'hex' && col.next.rgb.join(',') === '32,32,32', JSON.stringify(col));
+    const ind = rowFor(res, 'indicator:1');
+    check('an indicator write is NAMED from the model order (index 1 = deaths)',
+      ind?.name === 'deaths' && ind.current.v === 6 && ind.next.v === 7, JSON.stringify(ind));
+    check('a raised stop flag shows the RESOLVED message, not the flag index',
+      rowFor(res, 'stop')?.next?.text === 'All cells died');
+    check('a stop flag the panel could not resolve still says it was raised',
+      M.buildTraceRows({
+        target: cellTarget, writes: [{ param: '_stopFlag', index: 0, value: 1, prev: 0 }],
+        events: [], attrs, dims: dims2d,
+      }).rows.find(r => r.key === 'stop')?.next?.text === 'raised');
+    check('the alpha byte is claimed, not shown as a mystery write', res.unknownCount === 0);
+  }
+
+  // --- NOTHING THE TRACE WROTE MAY BE INVISIBLE ---------------------------
+  {
+    const res = rowsOf([{ param: '_someFutureLane', index: 4, value: 9, prev: 0 }]);
+    const raw = rowFor(res, 'raw:_someFutureLane:4');
+    check('a write NO builder claims still surfaces as a generic param[index] row',
+      raw?.name === '_someFutureLane[4]' && raw.next.v === 9 && res.unknownCount === 1,
+      JSON.stringify(raw));
+  }
+
+  // --- vectors -------------------------------------------------------------
+  {
+    const vecAttrs = [{ id: 'vel', name: 'vel', type: 'vector', vectorDims: 2 }];
+    const res = M.buildTraceRows({
+      target: cellTarget, events: [], attrs: vecAttrs, dims: dims2d,
+      snapshot: { vel_vx: 1, vel_vy: 2 },
+      writes: [{ param: 'w_vel_vy', index: idx, value: 5, prev: 2 }],
+    });
+    const row = res.rows.find(r => r.key === 'attr:vel');
+    check('a vector attribute is recombined from its lowered components',
+      row?.current?.v.join(',') === '1,2' && row.next.v.join(',') === '1,5' && row.changed === true,
+      JSON.stringify(row));
+    check('a vector component write is claimed by its vector row', res.unknownCount === 0);
+  }
+
+  // --- agents ---------------------------------------------------------------
+  {
+    const id = 7;
+    const agentAttrs = [{ id: 'energy', name: 'energy', type: 'float' }];
+    const agentRows = (writes, events = []) => M.buildTraceRows({
+      target: { kind: 'agent', id }, writes, events, attrs: agentAttrs, dims: dims2d,
+      snapshot: { energy: 4.2, x: 184.2, y: 96.7, vx: 0.81, vy: -0.34, radius: 1.8, age: 5 },
+      bondReqSlots: 2,
+    });
+    const res = agentRows([
+      { param: '_agentVX', index: id, value: 0.79, prev: 0.81 },
+      { param: '_agentForceX', index: id, value: -0.02, prev: 0 },
+      { param: '_agentForceY', index: id, value: 0.53, prev: 0.5 },
+      { param: '_divideRequest', index: id, value: 1, prev: 0 },
+      { param: 'w_energy', index: id, value: 3.7, prev: 4.2 },
+    ]);
+    const rowK = (k) => res.rows.find(r => r.key === k);
+    check('velocity reads from the ABI\'s UPPER-case axis params (_agentVX)',
+      rowK('velocity')?.next?.v[0] === 0.79 && rowK('velocity').changed === true,
+      JSON.stringify(rowK('velocity')));
+    // The accumulator is shared with the engine's own force pass, so the rule's
+    // contribution is value − prev, not the absolute cell.
+    const f = rowK('force');
+    check('Force applied is the DELTA this rule added, not the accumulator total',
+      Math.abs(f.next.v[0] - (-0.02)) < 1e-12 && Math.abs(f.next.v[1] - 0.03) < 1e-12,
+      JSON.stringify(f));
+    check('a divide request is shown as QUEUED, not applied',
+      rowK('req:divide')?.next?.text === 'Divide' && rowK('req:divide').note === 'queued, not applied');
+    check('an agent attribute still reads current -> next', rowK('attr:energy')?.next?.v === 3.7);
+    check('every agent write above is claimed', res.unknownCount === 0, String(res.unknownCount));
+
+    const q = agentRows([], [['q', '_agentCreate', [1]]]);
+    check('Create Agent is a HOST call, so it arrives as a q event and still gets a row',
+      q.rows.some(r => r.next?.text === 'Create Agent'));
+
+    // Bond verbs: the queue entry for slot 0 of agent 7 is index 7*2 + 0 = 14.
+    const bond = agentRows([
+      { param: '_bondBreakReq', index: 14, value: -(3 + 2), prev: 0 },
+      { param: '_bondFormReq', index: 14, value: 9 + 2, prev: 0 },
+      { param: '_bondFormL', index: 14, value: 0, prev: 0 },
+      { param: '_bondFormK', index: 14, value: 0, prev: 0 },
+    ]);
+    check('a Form Between entry decodes into "Form bond #3 <-> #9"',
+      bond.rows.some(r => r.next?.text === 'Form bond #3 ↔ #9'),
+      JSON.stringify(bond.rows.filter(r => r.name === 'Request')));
+    check('the form-half parameter cells are claimed by the request row',
+      bond.unknownCount === 0, String(bond.unknownCount));
+  }
+
+  // --- the bond-lane truth table (the mirror of bondRequestEmitJS) ---------
+  {
+    const B = 2, NONE = 1;
+    const cases = [
+      ['form', [NONE, 5 + B], 'form', 5],
+      ['break', [5 + B, NONE], 'break', 5],
+      ['rewire', [3 + B, 9 + B], 'rewire', 3],
+      ['form between', [-(3 + B), 9 + B], 'formBetween', 3],
+      ['break between', [-(3 + B), -(9 + B)], 'breakBetween', 3],
+      ['transfer', [3 + B, -(9 + B)], 'transfer', 3],
+    ];
+    for (const [name, [b, f], verb, a] of cases) {
+      const r = M.decodeBondRequest(b, f);
+      check(`bond lanes (${b}, ${f}) decode as ${name}`, r?.verb === verb && r.a === a, JSON.stringify(r));
+    }
+    check('an entry that was never appended decodes as nothing',
+      M.decodeBondRequest(0, 0) === null);
+    check('an unresolvable endpoint is NAMED, never printed as #-1',
+      M.bondRequestText({ verb: 'form', a: -1, b: -1 }) === 'Form bond → unresolved');
+  }
+
+  // --- labels ---------------------------------------------------------------
+  {
+    const names = {
+      mapping: id => (id === 'm1' ? 'Heat' : undefined),
+      agentMapping: id => (id === 'a1' ? 'Species' : undefined),
+      periodicNode: id => (id === 'n9' ? 'Rain' : undefined),
+    };
+    const L = (k) => M.traceRootLabel(k, names);
+    check('the root vocabulary names every shipped root',
+      L('step') === 'Step' && L('init') === 'Init' && L('gridInit') === 'Grid Init'
+      && L('agentBehaviour') === 'Behaviour' && L('agentInit') === 'Agent Init'
+      && L('agentDivision') === 'Division'
+      && L('outputMapping:m1') === 'Output Mapping (Heat)'
+      && L('inputColor:m1') === 'Brush (Heat)'
+      && L('agentOutputMapping:a1') === 'Agent View (Species)'
+      && L('agentInputMapping:a1') === 'Agent Brush (Species)'
+      && L('gridPeriodic:n9') === 'Periodic (Rain)',
+      [L('step'), L('outputMapping:m1'), L('gridPeriodic:n9')].join(' | '));
+    check('a mapping whose name cannot be resolved still reads as its KIND',
+      L('outputMapping:gone') === 'Output Mapping');
+    check('a RESET-time root shows "Reset", not "gen 0"',
+      M.traceChipLabel('init', 0, names) === 'Reset · Init'
+      && M.isResetRoot('gridInit') && M.isResetRoot('agentInit') && !M.isResetRoot('step'));
+    check('a generation root shows its generation',
+      M.traceChipLabel('step', 412, names) === 'gen 412 · Step');
+    check('the element label carries the LAYER in 3D and omits it in 2D',
+      M.traceTargetLabel({ kind: 'cell', idx: 55 }, dims2d) === 'Cell (5, 5)'
+      && M.traceTargetLabel({ kind: 'cell', idx: 2 * 16 + 1 * 4 + 3 }, dims3d) === 'Cell (2, 1, 3)'
+      && M.traceTargetLabel({ kind: 'agent', id: 1487 }, dims2d) === 'Agent #1487');
+    check('numbers print compactly (an integer bare, a decimal trimmed)',
+      M.formatNumber(3) === '3' && M.formatNumber(4.25) === '4.25'
+      && M.formatNumber(1 / 3) === '0.3333');
+    check('an offset prints with the layer axis only in 3D',
+      M.formatOffset({ dr: -1, dc: 0, dl: 0 }, false) === '(-1, 0)'
+      && M.formatOffset({ dr: -1, dc: 0, dl: 2 }, true) === '(-1, 0, 2)');
+    check('a flat index decodes to (layer, row, col) the way the engine does',
+      JSON.stringify(M.cellCoords(2 * 16 + 1 * 4 + 3, dims3d)) === JSON.stringify({ l: 2, r: 1, c: 3 }),
+      JSON.stringify(M.cellCoords(2 * 16 + 1 * 4 + 3, dims3d)));
+    check('shortestDelta is the identity on an axis that cannot wrap',
+      M.shortestDelta(0, 3, 1) === 3 && M.shortestDelta(1, 2, 10) === 1);
+  }
+
+  // --- the approximate caveat ---------------------------------------------
+  {
+    const R = (o) => M.approximateReason({
+      asyncCells: false, agentsAsync: false, agentsWriteField: false,
+      usesRng: false, webgpu: false, kind: 'cells', ...o,
+    });
+    check('asynchronous cells is named first, because it changes the answer most',
+      R({ asyncCells: true, usesRng: true }) === 'approximate under asynchronous updates');
+    check('an agent trace names the agent update mode, not the cell one',
+      R({ kind: 'agents', agentsAsync: true, asyncCells: true })
+        === 'approximate — agent attributes update asynchronously');
+    check('a cell rule under running agents names the FIELD deposit',
+      R({ agentsWriteField: true }) === 'approximate — agents deposit into the field after this trace',
+      R({ agentsWriteField: true }));
+    check('the field term is a CELL-side reason only',
+      R({ kind: 'agents', agentsWriteField: true, usesRng: true })
+        === 'approximate — the rule draws random numbers');
+    check('a reason the panel cannot name still points at the badge',
+      /badge/.test(R({})), R({}));
+  }
+
+  // NEGATIVE CONTROL: a neighbour offset computed as a plain difference — the
+  // naive reading — puts a torus-edge write nine rows away instead of one.
+  expectFail('a neighbour offset that does not take the short way round a wrap', () => {
+    const naive = (from, to, d) => ({ dr: Math.floor(to / d.W) - Math.floor(from / d.W), dc: 0, dl: 0 });
+    const o = naive(5, 95, dims2d);
+    check('a wrapped neighbour write reads as the SHORT offset, not the long way round',
+      o.dr === -1 && o.dc === 0, JSON.stringify(o));
+  });
+
+  // NEGATIVE CONTROL: a decoder that reads only the MAGNITUDES of the two lanes
+  // — a Form Between (negative break lane) then reads as a Rewire, i.e. the
+  // panel would tell the user their rule broke a bond it never touched.
+  expectFail('a bond decoder that ignores the lane SIGNS', () => {
+    const signless = (b, f) => ({ verb: (Math.abs(b) === 1 ? 'form' : 'rewire'), a: Math.abs(b) - 2 });
+    const r = signless(-(3 + 2), 9 + 2);
+    check('bond lanes (-5, 11) decode as form between', r.verb === 'formBetween', JSON.stringify(r));
+  });
+
+  // NEGATIVE CONTROL: a row builder that emits only the writes it RECOGNISES —
+  // the failure mode the `claimed` set exists to prevent, where the panel
+  // quietly omits something the rule did.
+  expectFail('a values table that drops the writes it does not recognise', () => {
+    const dropped = { rows: [], unknownCount: 0 };
+    const raw = dropped.rows.find(r => r.key === 'raw:_someFutureLane:4');
+    check('a write NO builder claims still surfaces as a generic param[index] row',
+      raw?.name === '_someFutureLane[4]', 'the write vanished from the table');
+  });
+}
+
+// ===========================================================================
 rmSync(entryPath, { force: true });
 rmSync(dir, { recursive: true, force: true });
 console.log(failures === 0
-  ? '\nRULE TRACE (P1+P3+P4) ✓  (all checks passed)'
+  ? '\nRULE TRACE (P1+P3+P4+P5) ✓  (all checks passed)'
   : `\n${failures} CHECK(S) FAILED ✗`);
 process.exit(failures === 0 ? 0 : 1);

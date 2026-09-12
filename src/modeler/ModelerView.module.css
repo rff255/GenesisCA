@@ -3,11 +3,28 @@
   height: 100%;
 }
 
+/* RULE TRACE (P5): a COLUMN flex, so the Trace panel can be a real sibling
+   BELOW the editor rather than an overlay on top of it — the graph genuinely
+   shrinks and React Flow re-fits itself, which is what makes a drawer a drawer.
+   It stays `position: relative` for the two expand ears, which are `top`-
+   anchored and therefore unaffected by the axis. */
 .graphArea {
   flex: 1;
+  display: flex;
+  flex-direction: column;
   position: relative;
   overflow: hidden;
   background: var(--color-bg-canvas);
+}
+
+/* The editor's own slot. `GraphEditorInner`'s root is `height: 100%`, which
+   resolves against THIS box — so the drawer's height comes straight off the
+   editor's and nothing overflows. `min-height: 0` is what lets a flex item
+   shrink below its content at all. */
+.graphEditorSlot {
+  flex: 1 1 auto;
+  min-height: 0;
+  position: relative;
 }
 
 /* Closed-state expand ears flanking the graph area. Mirror the

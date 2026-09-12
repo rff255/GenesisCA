@@ -30,7 +30,10 @@ import type { TraceValue } from '../simulator/engine/traceRunner';
 import { getNodeDef } from '../modeler/vpl/nodes/registry';
 import { getEffectivePorts } from '../modeler/vpl/effectivePorts';
 import { displayNodeLabel } from '../modeler/vpl/graphState';
-import { unpackNI, unpackNI3, INVALID_NI } from '../modeler/vpl/compiler/niCodec';
+// `formatNumber` / `formatNI` live in the DOM-free `traceValues.ts` (P5) so the
+// hover tooltip and the Trace panel's values table print a value identically —
+// and so the harness can pin both spellings without a browser.
+import { formatNumber, formatNI } from './traceValues';
 import { subscribeTrace } from './traceState';
 import type { TraceWireOrigin } from './traceGraphMap';
 import styles from './TraceTooltip.module.css';
@@ -97,27 +100,9 @@ interface Props {
 
 const ARRAY_SHOWN = 8;
 
-function formatNumber(v: number): string {
-  if (!Number.isFinite(v)) return String(v);
-  if (v === Math.trunc(v)) return String(v);
-  const fixed = v.toFixed(4);
-  return fixed.replace(/0+$/, '').replace(/\.$/, '');
-}
-
 function attrOf(model: CAModel, id: unknown): Attribute | undefined {
   if (typeof id !== 'string' || !id) return undefined;
   return model.attributes.find(a => a.id === id);
-}
-
-function formatNI(n: number, is3d: boolean): string {
-  const packed = n | 0;
-  if (packed === INVALID_NI) return 'no neighbour';
-  if (is3d) {
-    const { dr, dc, dl } = unpackNI3(packed);
-    return `(${dr}, ${dc}, ${dl})`;
-  }
-  const { dr, dc } = unpackNI(packed);
-  return `(${dr}, ${dc})`;
 }
 
 /** Decode ONE recorded value for display.

@@ -210,6 +210,22 @@ export interface TraceReplyMsg {
   events: unknown[];
   writes: unknown[];
   truncated: boolean;
+  /** RULE TRACE (P5) — THE ELEMENT'S CURRENT STATE, read at the trace point.
+   *
+   *  The event log says what the rule COMPUTED and `writes` say what it WOULD
+   *  write; neither says what the element's attributes are RIGHT NOW, and the
+   *  Values tab's whole shape is `current → next`. Reading it here rather than
+   *  from a main-thread `getState` is not an optimisation but a correctness
+   *  requirement: `getState` answers at some later time, and a trace taken
+   *  before generation N must be paired with the state of generation N — the
+   *  state the rule actually read.
+   *
+   *  Keyed by attribute id for a cell (plus `orientation` when variegated), and
+   *  for an agent by attribute id plus the engine field names the agent
+   *  inspector uses (`x`, `y`, `z`, `vx`, `vy`, `vz`, `radius`, `targetRadius`,
+   *  `age`, `bondDegree`, `density`). Absent for a GLOBAL root (grid init, a
+   *  periodic event), which has no element. */
+  snapshot?: Record<string, number>;
   /** The trace CANNOT be an exact prediction of this element's next state —
    *  see `traceApproximateReason` in the worker for the exact terms (async
    *  updates, RNG, indicator accumulation, a stale neighbour hash, a field the

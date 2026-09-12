@@ -72,6 +72,10 @@ export interface TraceEntry {
   graphKind: TraceGraphKind;
   events: TraceEvent[];
   writes: TraceWrite[];
+  /** RULE TRACE (P5) — the element's state AT the trace point, read beside the
+   *  trace in the worker (`traceSnapshot`). The Values tab's `current` column;
+   *  `writes` are its `next`. Absent when the target no longer resolves. */
+  snapshot?: Record<string, number>;
   truncated: boolean;
   approximate: boolean;
   error?: string;
@@ -295,6 +299,7 @@ export function pushTrace(msg: TraceReplyMsg): void {
     graphKind: kind,
     events: msg.events as TraceEvent[],
     writes: msg.writes as TraceWrite[],
+    ...(msg.snapshot !== undefined ? { snapshot: msg.snapshot } : {}),
     truncated: msg.truncated,
     approximate: msg.approximate,
     ...(msg.error !== undefined ? { error: msg.error } : {}),

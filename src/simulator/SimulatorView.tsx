@@ -16,7 +16,7 @@ import { LookupTableEditor } from '../modeler/panels/LookupTableEditor';
 import { compileGraphWebGPU } from '../modeler/vpl/compiler/webgpu/compile';
 import { createSimWorker } from './createSimWorker';
 import { setSimLayoutApi } from './simLayoutState';
-import { setSimTransportApi } from './simTransportState';
+import { setSimTransportApi, setSimPlaying } from './simTransportState';
 import { traceCodesFromCompile, type TraceCodes, type TraceTarget, type TraceReplyMsg } from './engine/traceProtocol';
 import {
   setTraceTarget as storeSetTraceTarget, clearTrace as storeClearTrace, setTraceOrigin,
@@ -9518,9 +9518,26 @@ export function SimulatorView({ visible = true, activeTab = true, live = false, 
   // `handleStep`, so the seam is registered here, the `simLayoutApi` pattern.
   const handleStepRef = useRef<() => void>(() => {});
   useEffect(() => {
-    setSimTransportApi({ stepGeneration: () => handleStepRef.current() });
+    setSimTransportApi({
+      stepGeneration: () => handleStepRef.current(),
+      // RULE TRACE (P5): the Trace panel's transport row. Play/Pause land on the
+      // SAME `setPlaying` seam the bar's button and the Enter shortcut use (the
+      // single `useEffect([playing])` that starts / cancels the batch), and the
+      // panel's ✕ is the Live-bar chip's ✕ — never a second copy of either.
+      play: () => setPlaying(true),
+      pause: () => setPlaying(false),
+      stopTrace: () => stopTracingRef.current(),
+    });
     return () => setSimTransportApi(null);
   }, []);
+
+  /** PUBLISH `playing` to the transport seam, for the Trace panel's one
+   *  Resume/Pause button (it lives in the Modeler's tree and cannot see this
+   *  state). ONE publication point keyed on the value rather than a line beside
+   *  each of the ten `setPlaying` call sites: a mirror that can only be kept in
+   *  step by remembering it at ten sites is a mirror that will drift. The setter
+   *  is equality-guarded, so this costs nothing on an unrelated render. */
+  useEffect(() => { setSimPlaying(playing); }, [playing]);
 
   // LIVE EXIT clears the session. DECISION (P3): tracing is a LIVE-only feature
   // - the chip that stops it and the graph that shows it both live in Live - so
