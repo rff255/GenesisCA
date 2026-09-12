@@ -535,7 +535,7 @@ cadence change free.
 | **Model load / File › New** | cleared | cleared | ⚠ **cleared — the ONE place they are.** Ids are minted per model from the same `n4`, `n5`, `n6` sequence, so a leftover mark lands on whatever node of the NEW graph wears that id and pauses a run the user never marked. Everywhere else they deliberately survive |
 | **Live exit** | session cleared | session cleared | **not** cleared — ⚠ a surviving target would be machinery the user can neither see nor stop, still paying for a trace build on every recompile. The inspectors keep their popovers; only the trace stops |
 | **Resume** (`playing` goes true, by any path) | — | — | the pause readout is cleared |
-| **`traceBreak`** | — | — | pauses through the **ordinary `playing` seam**; a resume clears the pause readout |
+| **`traceBreak`** | — | — | pauses through the **ordinary `playing` seam**; a resume clears the pause readout. ⚠ It also **puts the cursor on the node that matched** and the canvas follows it (see *Canvas focus*) |
 | **`traceTargetLost`** | cleared by `kind` | cleared by `kind` | kept |
 
 ### The inspect subscription merge
@@ -677,6 +677,57 @@ nodes emit no code.
   array identity: a node drag replaces the node array 60×/s while changing neither the wiring nor which
   nodes are reroutes.
 
+### Canvas focus follows the cursor
+
+⚠ **A node the user is told to look at must be ON SCREEN.** Stepping `]` onto a node three screens away,
+or breaking inside a macro that is not even open, showed the right node in the panel and an unchanged
+canvas — the debugger's answer was invisible. So the store REQUESTS focus and **the editor performs it**:
+it is the only side that knows what is mounted, where it sits and how far the viewport is from it.
+
+The seam is a **third store channel** — `requestTraceFocus({ graphKind, nodeId, macroPath, reason })` /
+`subscribeTraceFocus` / `takeTraceFocus()`. It carries an **event, not state**: `takeTraceFocus` returns
+the request and clears it, so one request pans exactly once, and nothing about it is in the session
+snapshot (which would re-render every breakpoint glyph for something none of them reads).
+
+**Who asks, in ONE place each:**
+
+| Trigger | Where | Reason |
+|---|---|---|
+| the cursor moves to a node (`]` / `[`, the panel's Back / Step node, a Steps-tab row click) | inside `setCursor` — every caller that hands over its `entry` gets it for free | `cursor` |
+| `]` past the last node (steps a generation, restarts the cursor) | the `cursorRestartPending` arm of `pushTrace` | `step` |
+| a **breakpoint hits** | `setPaused` — which now also **lands the cursor on the node** (the Help chapter always said it did), so the focus comes from the cursor trigger and is never doubled | `cursor`, or `break` when the mark has no flow record (a pure value node) |
+| a **Breakpoints-tab row label** is clicked | `TracePanel` — `bp.macroPath` is already in DEF space, so no translation | `breakpoint` |
+
+⚠ **Nothing asks per TRACE.** A playing model posts ~10 traces/s; a canvas that followed them would be
+unusable. Measured: 74 generations, 40 ring entries, **zero** focus requests and an unchanged viewport.
+
+**What the editor does with one** (`GraphEditor`, one `subscribeTraceFocus` subscriber):
+
+1. **The sub-tab**, if the request names the other graph (`setActiveGraph` — the editor's own path).
+2. **The scope.** `macroPath` is the **DEF** path, so it goes straight into `setCurrentScope(['root', …])`
+   — the scope effect owns the node swap, the saved-viewport restore, `setOpenMacroScope` and the history
+   reconcile. Set to the whole path at once rather than pushed level by level: the effect and the history
+   reconciler are both written against the final array, and N intermediate renders would each swap the
+   node set for a scope nobody sees. A root-scope request while inside a macro exits the same way.
+3. **The centring.** ⚠ **A node already fully in view is NOT moved** (`nodeFullyInView`, 24 px margin) —
+   stepping between two visible neighbours must not jitter the canvas. Otherwise
+   `setCenter(cx, cy, { zoom: Math.max(currentZoom, 0.75), duration: 250 })`: the user's zoom is kept
+   unless it is too far out to read a node, and **never zoomed out**. `prefers-reduced-motion` ⇒ duration 0.
+4. **Mid-gesture the request is DROPPED** (`nodeDragActiveRef` / `isConnectingGlobal`) — a pan under a node
+   being dragged or a wire being pulled would drop it. The cursor still moves; the next step pans.
+
+⚠ **Why a bounded retry loop.** A scope or graph change re-mounts every node AND the scope effect restores
+the viewport on a **50 ms timeout of its own**, so centring before that lands is overwritten a frame later.
+A focus that changed the scope therefore waits out `TRACE_FOCUS_SETTLE_MS` (90) and then retries per frame
+until React Flow has **measured** the node (P4's mount race wearing a different hat), bounded at 90 frames
+so an id that is not in this graph cannot spin. Positions come from `getInternalNode().internals.positionAbsolute`,
+never `node.position` — a node inside a GROUP is positioned relative to its parent.
+
+The two decidable halves are pure and harnessed (§ L): `focusTargetForOrigin` (WHERE) and `nodeFullyInView`
+(WHETHER). ⚠ `focusTargetForOrigin` is deliberately **not** `originInEditorScope`: that one answers *what
+lights in the scope I am already in* and rolls a record up to the macro INSTANCE; focus answers *where do I
+have to go*, so it keeps the record's own inner node and reports the whole DEF path to it.
+
 ### The tooltip
 
 `onNodeMouseEnter` / `onEdgeMouseEnter` open a surface that is:
@@ -772,8 +823,11 @@ the ring. The strip is filtered to the graph kind the editor is showing.
   `bondRequestEmitJS.ts` (and its WASM / WebGPU mirrors), and `decodeBondRequest` imports its constants
   from `bondRequestQueue.ts` rather than re-spelling them.
 - **Steps** — the flow events in order with the taken port, `(in <macro>)` for records inside a closed
-  macro, click = cursor, lazily-decoded value expanders, `⚑ request` rows.
-- **Breakpoints** — enable / remove / Clear all, **def-scoped labels**, an empty-state hint.
+  macro, click = cursor (and the canvas follows it), lazily-decoded value expanders, `⚑ request` rows.
+- **Breakpoints** — enable / remove / Clear all, **def-scoped labels**, an empty-state hint. The
+  label is a button: clicking it **shows that node on the canvas** (entering its macro scope when the
+  mark lives inside a def) without touching the cursor — the checkbox and the ✕ keep their own jobs,
+  and no control here takes focus on a mouse press.
 
 The numbers-to-sentences logic lives in the DOM-free `traceValues.ts`, driven by harness § J, so the
 panel renders what it returns and decides nothing about what a write MEANS. `formatNumber` / `formatNI`
@@ -836,6 +890,7 @@ exists in that shape for exactly this reason) and every claim is negative-contro
 | I | **The editor graph maths** — edge / reroute origins, value cones, `originInEditorScope` |
 | J | **Values (P5)** — raw writes back into the sentences the panel shows, and nothing left unclaimed |
 | K | **The P7b findings** — the write-side name, the root record, the sandbox method policy |
+| L | **Canvas focus (P8)** — where to go (`focusTargetForOrigin`, in DEF space, inner node not instance) and whether to move at all (`nodeFullyInView`) |
 
 ⚠ **A new emitted surface MUST be added to `check-compile-identity.mjs`** — the six trace surfaces are on
 that list, so an emit change to the trace build is caught the same way an engine emit change is.
@@ -856,6 +911,7 @@ macro model (Kelp War — instances at root and the inner path inside), a divisi
 | `window.__traceView()` | the tooltip view the highlighter publishes |
 | `window.__tracePerf(reset?)` | the highlighter's own mean / max cost |
 | `window.__tracePanelPerf()` | the Trace panel's body render cost |
+| `window.__traceFocus()` | the last canvas-focus request the editor performed, and whether it MOVED the viewport |
 
 ## Known limitations and follow-ups
 

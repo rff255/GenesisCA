@@ -37,6 +37,7 @@
  */
 
 import type { TraceOrigin } from '../modeler/vpl/compiler/traceOrigin';
+import { isLinkedOrigin } from '../modeler/vpl/compiler/traceOrigin';
 import type { OriginInScope } from './traceOrigin';
 import { originInScope } from './traceOrigin';
 
@@ -389,4 +390,66 @@ export function originInEditorScope(
   // in INSTANCE space, which is the only space that names a node on the canvas.
   if (instPath.length === scope.length) return { visible: true, nodeId: resolved.nodeId };
   return { visible: true, nodeId: instPath[scope.length]! };
+}
+
+// ---------------------------------------------------------------------------
+// CANVAS FOCUS (P8) — "show me that node"
+// ---------------------------------------------------------------------------
+
+/** Where the canvas has to be looking for a node to be on screen: the node
+ *  itself, and the macro scope (in **DEF** ids — the editor's own vocabulary)
+ *  that has to be open for it to exist on the canvas at all. */
+export interface TraceFocusTarget {
+  nodeId: string;
+  /** Macro DEF path, outermost first. Empty ⇒ the top-level graph. */
+  macroPath: string[];
+}
+
+/** The focus target one RESOLVED origin names.
+ *
+ *  ⚠ NOT `originInEditorScope`, and the difference is the whole point. That one
+ *  answers *what lights in the scope I am ALREADY looking at* and therefore
+ *  rolls a record inside a macro up to the instance node. Focus is the opposite
+ *  question — *where do I have to go to see this node* — so it keeps the
+ *  record's own node and reports the full path to it, which the editor then
+ *  ENTERS. The path is translated INSTANCE → DEF here (via `defOf`) because the
+ *  editor's scope stack names defs; see the module header's two id spaces.
+ *
+ *  A synthesized linked-mapping colour pass resolves to the `linked:` sentinel,
+ *  which names no node on any canvas ⇒ `null`, and the caller focuses nothing. */
+export function focusTargetForOrigin(
+  resolved: TraceOrigin | undefined,
+  defOf: (instanceId: string) => string,
+): TraceFocusTarget | null {
+  if (!resolved || !resolved.nodeId || isLinkedOrigin(resolved)) return null;
+  const instPath = resolved.macroPath ?? [];
+  return { nodeId: resolved.nodeId, macroPath: instPath.map(defOf) };
+}
+
+/** A node's box in FLOW coordinates (React Flow's absolute position + its
+ *  measured size). */
+export interface TraceNodeBox { x: number; y: number; width: number; height: number }
+/** The pane's size in SCREEN pixels. */
+export interface TracePaneSize { width: number; height: number }
+/** React Flow's viewport transform (`getViewport()`). */
+export interface TraceViewportTransform { x: number; y: number; zoom: number }
+
+/** Is this node ALREADY fully on screen (inside `margin` px of every edge)?
+ *
+ *  The anti-jitter rule: stepping `]` between two neighbouring nodes that are
+ *  both visible must not move the canvas at all. Only a node that is clipped or
+ *  off-screen is worth a pan. A node LARGER than the pane can never satisfy
+ *  this, which is the honest answer — centring it is the best view available. */
+export function nodeFullyInView(
+  node: TraceNodeBox,
+  viewport: TraceViewportTransform,
+  pane: TracePaneSize,
+  margin = 0,
+): boolean {
+  const left = node.x * viewport.zoom + viewport.x;
+  const top = node.y * viewport.zoom + viewport.y;
+  const right = left + node.width * viewport.zoom;
+  const bottom = top + node.height * viewport.zoom;
+  return left >= margin && top >= margin
+    && right <= pane.width - margin && bottom <= pane.height - margin;
 }

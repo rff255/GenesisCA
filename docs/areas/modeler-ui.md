@@ -578,6 +578,19 @@ trace cannot run there, and those nodes emit no code to stop at). ⚠ Breakpoint
 **macro DEF** path, which is the only path a def-scoped editor can express — so a mark set inside a def
 arms in **every instance** of it.
 
+### The canvas FOLLOWS the trace cursor
+
+The trace store asks (`subscribeTraceFocus` — a third, event-carrying channel) and the editor performs:
+enter the requested macro **DEF** scope through `setCurrentScope` (so the scope effect's node swap, saved
+viewport, `setOpenMacroScope` mirror and history reconcile all happen), switch the Cells/Agents sub-tab if
+the request names the other graph, then `setCenter` on the node. Three rules worth knowing here: a node
+**already fully in view is not moved** (stepping between visible neighbours must not jitter the canvas),
+the zoom is only ever raised to a legible minimum and **never lowered**, and a request that arrives during
+a node drag or a connection is **dropped**. ⚠ Because a scope change re-mounts the nodes *and* the scope
+effect restores the viewport on its own 50 ms timeout, the centring is a **bounded rAF retry** that waits
+that out and then waits for React Flow to MEASURE the node — the mount race above, wearing a different hat.
+Full detail: [`rule-trace.md`](rule-trace.md) § *Canvas focus follows the cursor*.
+
 ### The Trace panel drawer, and the tooltip
 
 `ModelerView` mounts `<TracePanel />` as a real flex sibling under `.graphArea`, below the editor slot, so

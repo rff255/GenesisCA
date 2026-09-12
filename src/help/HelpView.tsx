@@ -5266,7 +5266,10 @@ export function HelpView() {
               <strong>Step node</strong>, <strong>Back</strong> and{' '}
               <strong>Whole trace</strong>, which move a <em>cursor</em> through the recorded
               run. With a cursor set, only what has run <em>up to that point</em> is lit &mdash;
-              that is how you watch a rule unfold one node at a time.</li>
+              that is how you watch a rule unfold one node at a time. The canvas follows the
+              cursor: when the node it lands on is off-screen the graph pans to it (opening the
+              macro it sits inside, if it sits inside one), and a node already in view is left
+              exactly where it is.</li>
             <li><strong>The timeline</strong> &mdash; one chip per recent trace:{' '}
               <em>gen 412 &middot; Step</em>, <em>gen 412 &middot; Output Mapping</em>,{' '}
               <em>gen 410 &middot; Brush</em>, <em>gen 33 &middot; Division</em>,{' '}
@@ -5277,8 +5280,9 @@ export function HelpView() {
               followed by everything else the rule did (its colour, its orientation, writes
               aimed at neighbours, indicator contributions, forces, division and bond
               requests, field deposits). <strong>Steps</strong> lists the executed nodes in
-              order &mdash; click one to put the cursor there. <strong>Breakpoints</strong>{' '}
-              lists your marks, to disable, remove or clear.</li>
+              order &mdash; click one to put the cursor there and show it on the canvas.{' '}
+              <strong>Breakpoints</strong> lists your marks, to disable, remove or clear &mdash;
+              click a breakpoint&rsquo;s name to jump the canvas to it.</li>
           </ul>
 
           <h3 className={styles.h3}>Breakpoints</h3>
@@ -5287,7 +5291,8 @@ export function HelpView() {
             and when your traced element reaches that node the simulation{' '}
             <strong>pauses before that generation is applied</strong> &mdash; so the board in
             front of you is the state the rule was reading, not the result. The trace lands
-            with the cursor on the node, and the viewport chip says{' '}
+            with the cursor on the node &mdash; the graph pans to it, opening the macro it sits
+            inside if that is where you put the mark &mdash; and the viewport chip says{' '}
             <strong>&#9208; paused at &hellip;</strong>. Press Play (or{' '}
             <kbd className={styles.kbd}>Enter</kbd>) to carry on; a breakpoint fires{' '}
             <strong>once per generation</strong>, so a rule inside a loop stops once, not

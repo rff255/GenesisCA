@@ -51,6 +51,13 @@
 //      invisible: every write is claimed by exactly one row builder and the rest
 //      surface as generic rows.
 //
+//   L. CANVAS FOCUS (P8). The two pure halves of "show that node on the canvas":
+//      WHERE to go (`focusTargetForOrigin` — the record's OWN node plus the macro
+//      DEF path that has to be open for it to exist, which is deliberately NOT
+//      `originInEditorScope`'s roll-up to the instance) and WHETHER to move at
+//      all (`nodeFullyInView` — the anti-jitter rule that keeps `]` from shaking
+//      the canvas between two neighbours that are both already visible).
+//
 //   G. NEGATIVE CONTROLS. Three deliberate faults must each FAIL a NAMED check:
 //      (1) the record emission removed, (2) the shadow `set` trap broken (writes
 //      reaching the base array), (3) a pass's origin fold dropped. These mutate
@@ -72,7 +79,7 @@ const ENTRY = `
 export { compileGraph, compileAgentGraph, is3dModel, sparseSteppingEnabled } from '../src/modeler/vpl/compiler/compile.ts';
 export { resolveTraceOrigin } from '../src/modeler/vpl/compiler/traceOrigin.ts';
 export { originInScope } from '../src/trace/traceOrigin.ts';
-export { buildEditorTraceIndex, valueConeFrom, originInEditorScope, buildMacroDefIndex, buildMacroOutputMap, parseTraceHandle } from '../src/trace/traceGraphMap.ts';
+export { buildEditorTraceIndex, valueConeFrom, originInEditorScope, buildMacroDefIndex, buildMacroOutputMap, parseTraceHandle, focusTargetForOrigin, nodeFullyInView } from '../src/trace/traceGraphMap.ts';
 export { runTrace, TraceSandboxEscape, traceRngSeed, TRACE_MAX_EVENTS } from '../src/simulator/engine/traceRunner.ts';
 export { migrateForHarness } from '../src/dev/compileHarness.ts';
 export { createAgentStore, computeAgentMaxHashBins, buildSpatialHash, seedAgents } from '../src/simulator/engine/agentEngine.ts';
@@ -1795,9 +1802,94 @@ section('K. P7b — the review findings: the write-side name, the root record, t
 }
 
 // ===========================================================================
+section('L. CANVAS FOCUS (P8) — where to go, and whether to move at all');
+// ===========================================================================
+//
+// The two pure halves of "focus this node on the canvas". Both are in
+// `traceGraphMap.ts` precisely so this harness drives the SHIPPED functions:
+// the store decides WHEN to ask and the editor performs the pan, but WHERE and
+// WHETHER are decidable from data alone.
+{
+  const focusOf = M.focusTargetForOrigin;
+  const inView = M.nodeFullyInView;
+  const defOf = (id) => ({ i1: 'defA', i2: 'defB', i3: 'defA' }[id] ?? id);
+
+  // --- WHERE: the focus target is the record's OWN node, in DEF space -------
+  {
+    const root = focusOf({ nodeId: 'n7' }, defOf);
+    check('a root-scope record focuses itself, with an empty path',
+      root && root.nodeId === 'n7' && root.macroPath.length === 0, JSON.stringify(root));
+
+    const inner = focusOf({ nodeId: 'n3', macroPath: ['i1'] }, defOf);
+    // ⚠ THE WHOLE POINT, and the opposite of `originInEditorScope` at root:
+    // that one answers the INSTANCE node (what lights where you already are);
+    // focus answers the INNER node plus the path to it (where to go).
+    check('a record one macro deep focuses the INNER node, not the instance',
+      inner && inner.nodeId === 'n3', JSON.stringify(inner));
+    check('…and its path is translated INSTANCE -> DEF (the editor scope space)',
+      JSON.stringify(inner.macroPath) === JSON.stringify(['defA']), JSON.stringify(inner));
+    const lit = M.originInEditorScope({ nodeId: 'n3', macroPath: ['i1'] }, [], defOf);
+    check('the two answers genuinely differ (lit = instance, focus = inner node)',
+      lit.visible && lit.nodeId === 'i1' && inner.nodeId === 'n3',
+      `${lit.nodeId} vs ${inner.nodeId}`);
+
+    const deep = focusOf({ nodeId: 'n9', macroPath: ['i1', 'i2'] }, defOf);
+    check('a nested record focuses the inner node through the WHOLE def path',
+      deep && deep.nodeId === 'n9' && JSON.stringify(deep.macroPath) === JSON.stringify(['defA', 'defB']),
+      JSON.stringify(deep));
+
+    // Two INSTANCES of the same def resolve to the same focus target — the
+    // honest reading of a def-scoped editor (the breakpoint rule, verbatim).
+    const a = focusOf({ nodeId: 'n3', macroPath: ['i1'] }, defOf);
+    const c = focusOf({ nodeId: 'n3', macroPath: ['i3'] }, defOf);
+    check('two instances of ONE def focus the same node of that def',
+      JSON.stringify(a) === JSON.stringify(c), `${JSON.stringify(a)} vs ${JSON.stringify(c)}`);
+
+    check('a synthesized linked colour pass focuses NOTHING',
+      focusOf({ nodeId: 'linked:m1' }, defOf) === null);
+    check('an absent origin focuses nothing rather than throwing',
+      focusOf(undefined, defOf) === null && focusOf({ nodeId: '' }, defOf) === null);
+  }
+
+  // --- WHETHER: the anti-jitter containment test ---------------------------
+  {
+    const pane = { width: 800, height: 600 };
+    const vp = { x: 0, y: 0, zoom: 1 };
+    const node = { x: 100, y: 100, width: 200, height: 80 };
+    check('a node well inside the pane needs no pan', inView(node, vp, pane, 24) === true);
+    check('a node past the RIGHT edge does', inView({ ...node, x: 700 }, vp, pane, 24) === false);
+    check('a node past the BOTTOM edge does', inView({ ...node, y: 560 }, vp, pane, 24) === false);
+    check('a node past the LEFT edge does', inView({ ...node, x: -10 }, vp, pane, 24) === false);
+    check('a node past the TOP edge does', inView({ ...node, y: -10 }, vp, pane, 24) === false);
+    check('the MARGIN is what makes a node touching the rim count as off-screen',
+      inView({ x: 10, y: 100, width: 200, height: 80 }, vp, pane, 0) === true
+      && inView({ x: 10, y: 100, width: 200, height: 80 }, vp, pane, 24) === false);
+    check('the VIEWPORT TRANSFORM is applied: the same node panned away is out',
+      inView(node, { x: -2000, y: 0, zoom: 1 }, pane, 24) === false);
+    check('…and ZOOM scales the box, not just its corner',
+      inView({ x: 100, y: 100, width: 200, height: 80 }, { x: 0, y: 0, zoom: 3 }, pane, 24) === false);
+    check('a node BIGGER than the pane can never be fully in view (so it centres)',
+      inView({ x: 0, y: 0, width: 2000, height: 1500 }, vp, pane, 0) === false);
+  }
+
+  // NEGATIVE CONTROL — the two faults this section exists to catch.
+  expectFail('a focus target that rolls a macro record up to the instance node', () => {
+    const lit = M.originInEditorScope({ nodeId: 'n3', macroPath: ['i1'] }, [], defOf);
+    check('a record one macro deep focuses the INNER node, not the instance',
+      lit.nodeId === 'n3', lit.nodeId);
+  });
+  expectFail('a containment test that ignores the viewport transform', () => {
+    const naive = (n, _vp, pane) => n.x >= 0 && n.y >= 0
+      && n.x + n.width <= pane.width && n.y + n.height <= pane.height;
+    check('the VIEWPORT TRANSFORM is applied: the same node panned away is out',
+      naive({ x: 100, y: 100, width: 200, height: 80 }, { x: -2000, y: 0, zoom: 1 }, { width: 800, height: 600 }) === false);
+  });
+}
+
+// ===========================================================================
 rmSync(entryPath, { force: true });
 rmSync(dir, { recursive: true, force: true });
 console.log(failures === 0
-  ? '\nRULE TRACE (P1+P3+P4+P5+P7b) ✓  (all checks passed)'
+  ? '\nRULE TRACE (P1+P3+P4+P5+P7b+P8) ✓  (all checks passed)'
   : `\n${failures} CHECK(S) FAILED ✗`);
 process.exit(failures === 0 ? 0 : 1);

@@ -38,6 +38,17 @@ import { getNodeDef, getAllNodeDefs } from './nodes/registry';
  *  `scheduleSync` for why it is scoped to "a pointer is held in the editor" and
  *  not to node drags (which sync once, at release). */
 const SYNC_DEBOUNCE_MS = 100;
+
+/** RULE TRACE (P8) — the canvas-focus constants. `MARGIN` is how much of the
+ *  pane edge does not count as "on screen" (a node touching the rim is
+ *  technically visible and practically not); `SETTLE` outlasts the scope
+ *  effect's own 50 ms viewport restore; `MAX_FRAMES` bounds the wait for React
+ *  Flow to measure a node that has just mounted (~1.5 s at 60 Hz). */
+const TRACE_FOCUS_MARGIN = 24;
+const TRACE_FOCUS_MIN_ZOOM = 0.75;
+const TRACE_FOCUS_DURATION_MS = 250;
+const TRACE_FOCUS_SETTLE_MS = 90;
+const TRACE_FOCUS_MAX_FRAMES = 90;
 const SYNC_DEBOUNCE_HELD_MS = 400;
 import { parseHandleId, handleId } from './types';
 import type { PortDef, NodeTypeDef } from './types';
@@ -79,11 +90,12 @@ import { useClearDetailSelections } from '../ModelerDetailContext';
 import {
   subscribeTrace, selectedEntry, getTraceSession, cursorEventIndex,
   resolveRecordOrigin, hasBreakpoint, toggleBreakpoint, setMacroDefIndex,
+  subscribeTraceFocus, takeTraceFocus,
 } from '../../trace/traceState';
-import type { TraceGraphKind } from '../../trace/traceState';
+import type { TraceGraphKind, TraceFocusRequest } from '../../trace/traceState';
 import {
   buildEditorTraceIndex, buildMacroDefIndex, buildMacroOutputMap,
-  originInEditorScope, valueConeFrom, traceRootNodeId,
+  originInEditorScope, valueConeFrom, traceRootNodeId, nodeFullyInView,
 } from '../../trace/traceGraphMap';
 import type { EditorTraceIndex } from '../../trace/traceGraphMap';
 import { isLinkedOrigin } from './compiler/traceOrigin';
@@ -940,7 +952,7 @@ export function GraphEditorInner() {
 
   const contextMenuRef = useRef<HTMLDivElement>(null);
   const [menuPos, setMenuPos] = useState<{ x: number; y: number } | null>(null);
-  const { deleteElements, getNodes, updateNodeData } = useReactFlow();
+  const { deleteElements, getNodes, updateNodeData, getInternalNode, getViewport, setCenter } = useReactFlow();
   // Nudged after a MORPH: the two formula twins keep the very same handle ids,
   // so CaNode's port-signature effect would not fire on its own.
   const updateNodeInternals = useUpdateNodeInternals();
@@ -1633,6 +1645,134 @@ export function GraphEditorInner() {
     flushSync();             // persist the current graph's edits BEFORE swapping
     setActiveGraphState(g);
   }, [flushSync]);
+
+  // =========================================================================
+  // RULE TRACE (P8) — THE CANVAS FOLLOWS THE CURSOR
+  // =========================================================================
+  // The store REQUESTS ("show node X of scope Y of graph Z"), the editor
+  // PERFORMS — it is the only side that knows what is mounted, where it sits
+  // and how far the viewport is from it. Requests arrive on the store's third
+  // channel (`subscribeTraceFocus`), which carries an EVENT: `takeTraceFocus()`
+  // clears it, so one request pans once.
+  //
+  // Three rules, and each of them exists because its absence is worse:
+  //   • ENTER THE SCOPE FIRST, through the editor's own `setCurrentScope` — the
+  //     scope effect is what swaps the nodes, restores the saved viewport,
+  //     mirrors `setOpenMacroScope` and reconciles the history stack. A node
+  //     inside a macro is not on the canvas until that has happened.
+  //   • DO NOT MOVE A NODE THAT IS ALREADY FULLY VISIBLE. Stepping `]` along a
+  //     chain of neighbours must not jitter the canvas under the user.
+  //   • NEVER ZOOM OUT, and never steal the canvas mid-gesture (a node drag or
+  //     a connection in flight — the trace tooltip's own stand-down rule).
+  //
+  // ⚠ WHY A RETRY LOOP. A scope / graph change re-mounts every node, and the
+  // scope effect restores the viewport on a 50 ms timeout of its own — centring
+  // before that lands would be overwritten a frame later. So a focus that
+  // changed the scope waits out `TRACE_FOCUS_SETTLE_MS` and then retries per
+  // frame until React Flow has MEASURED the node (this is P4's mount race
+  // wearing a different hat), bounded so an id that is simply not in this graph
+  // cannot spin.
+  const traceFocusPendingRef = useRef<{ req: TraceFocusRequest; frames: number; notBefore: number } | null>(null);
+  const traceFocusRafRef = useRef<number | null>(null);
+  /** DEV: what the last request did (see `window.__traceFocus`). */
+  const traceFocusLastRef = useRef<unknown>(null);
+
+  const traceFocusStep = useCallback(() => {
+    traceFocusRafRef.current = null;
+    const pend = traceFocusPendingRef.current;
+    if (!pend) return;
+    const again = (): void => {
+      if (pend.frames-- <= 0) { traceFocusPendingRef.current = null; return; }
+      traceFocusRafRef.current = requestAnimationFrame(() => traceFocusStepRef.current());
+    };
+    if (performance.now() < pend.notBefore) { again(); return; }
+    // React Flow's INTERNAL node: `positionAbsolute` (a node inside a group has
+    // a parent-relative `position`, which would centre on the wrong place) and
+    // the MEASURED size, which is only there once the element has laid out.
+    const internal = getInternalNode(pend.req.nodeId);
+    const w = internal?.measured.width;
+    const h = internal?.measured.height;
+    if (!internal || !w || !h) { again(); return; }
+    const paneEl = editorWrapperRef.current?.querySelector('.react-flow') as HTMLElement | null;
+    if (!paneEl || paneEl.clientWidth === 0 || paneEl.clientHeight === 0) { again(); return; }
+    traceFocusPendingRef.current = null;
+    const vp = getViewport();
+    const box = {
+      x: internal.internals.positionAbsolute.x,
+      y: internal.internals.positionAbsolute.y,
+      width: w, height: h,
+    };
+    const inView = nodeFullyInView(
+      box, vp, { width: paneEl.clientWidth, height: paneEl.clientHeight }, TRACE_FOCUS_MARGIN,
+    );
+    if (import.meta.env.DEV) {
+      traceFocusLastRef.current = {
+        seq: pend.req.seq, nodeId: pend.req.nodeId, reason: pend.req.reason,
+        macroPath: pend.req.macroPath, graphKind: pend.req.graphKind, moved: !inView,
+      };
+    }
+    if (inView) return;
+    // Keep the user's zoom unless it is too far out to read a node; NEVER zoom
+    // out. `prefers-reduced-motion` gets the jump without the animation.
+    const reduced = typeof window !== 'undefined' && typeof window.matchMedia === 'function'
+      && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    void setCenter(box.x + w / 2, box.y + h / 2, {
+      zoom: Math.max(vp.zoom, TRACE_FOCUS_MIN_ZOOM),
+      duration: reduced ? 0 : TRACE_FOCUS_DURATION_MS,
+    });
+  }, [getInternalNode, getViewport, setCenter]);
+  const traceFocusStepRef = useRef(traceFocusStep);
+  traceFocusStepRef.current = traceFocusStep;
+
+  useEffect(() => {
+    const onFocusRequest = (): void => {
+      const req = takeTraceFocus();
+      if (!req) return;
+      // Mid-gesture the canvas belongs to the user: a pan under a node being
+      // dragged or a wire being pulled would drop it. DROP the request (the
+      // cursor still moved; the next step will pan).
+      if (nodeDragActiveRef.current || isConnectingGlobal) return;
+      let settle = 0;
+      if (req.graphKind !== activeGraphRef.current) {
+        // The agent graph's node ids never appear in the cells graph, so a
+        // request for the other kind means the sub-tab, not a missing node.
+        setActiveGraph(req.graphKind);
+        settle = TRACE_FOCUS_SETTLE_MS;
+      }
+      const scopeNow = currentScopeRef.current.filter(s => s && s !== 'root');
+      const want = req.macroPath;
+      const sameScope = scopeNow.length === want.length && scopeNow.every((s, i) => s === want[i]);
+      if (!sameScope) {
+        // The scope stack is set to the WHOLE path in one go rather than pushed
+        // level by level: the scope effect and the history reconciler are both
+        // written against the final array (the reconciler already pushes one
+        // entry per missing level), and N intermediate renders would each swap
+        // the node set and fire a viewport restore for a scope nobody sees.
+        setCurrentScope(['root', ...want]);
+        settle = TRACE_FOCUS_SETTLE_MS;
+      }
+      traceFocusPendingRef.current = {
+        req, frames: TRACE_FOCUS_MAX_FRAMES, notBefore: performance.now() + settle,
+      };
+      if (traceFocusRafRef.current === null) {
+        traceFocusRafRef.current = requestAnimationFrame(() => traceFocusStepRef.current());
+      }
+    };
+    return subscribeTraceFocus(onFocusRequest);
+  }, [setActiveGraph]);
+
+  useEffect(() => () => {
+    if (traceFocusRafRef.current !== null) cancelAnimationFrame(traceFocusRafRef.current);
+    traceFocusRafRef.current = null;
+    traceFocusPendingRef.current = null;
+  }, []);
+
+  useEffect(() => {
+    if (!import.meta.env.DEV) return undefined;
+    const w = window as unknown as Record<string, unknown>;
+    w.__traceFocus = () => traceFocusLastRef.current;
+    return () => { delete w.__traceFocus; };
+  }, []);
 
   useEffect(() => {
     return () => { if (syncTimer.current) clearTimeout(syncTimer.current); };

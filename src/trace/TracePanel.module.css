@@ -329,3 +329,19 @@
 }
 
 .bdotOff { background: transparent; border: 1.5px solid var(--color-text-muted); }
+
+/* The breakpoint's LABEL is the "show me that node" button (P8). A real
+   <button> — it is a click target with a keyboard path — styled as the text it
+   replaces so the row still reads as a list, with the pointer + hover that make
+   it legible as clickable. The checkbox and the × keep their own jobs. */
+.blabel {
+  background: none;
+  border: none;
+  padding: 0;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+  text-align: left;
+}
+
+.blabel:hover { color: var(--color-trace); text-decoration: underline; }

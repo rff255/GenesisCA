@@ -53,7 +53,7 @@ import {
   getTraceSession, subscribeTraceSession, getTraceTimeline, subscribeTraceTimeline,
   selectedEntry, pinSelection, unpin, setCursor, stepCursor, flowEvents,
   resolveRecordOrigin, macroDefPath, setBreakpointEnabled, removeBreakpoint,
-  clearBreakpoints,
+  clearBreakpoints, requestTraceFocus,
 } from './traceState';
 import type { TraceEntry, TraceGraphKind } from './traceState';
 import type { TraceValue } from '../simulator/engine/traceRunner';
@@ -622,7 +622,7 @@ export function TracePanel() {
             />
           )}
           {prefs.tab === 'steps' && (
-            <StepsTab steps={steps} cursor={cursor} truncated={!!entry?.truncated} model={model} kind={kind} />
+            <StepsTab steps={steps} cursor={cursor} truncated={!!entry?.truncated} model={model} kind={kind} entry={entry} />
           )}
           {prefs.tab === 'breakpoints' && <BreakpointsTab model={model} kind={kind} session={session} />}
         </div>
@@ -782,10 +782,13 @@ function stepValueText(
 }
 
 function StepsTab({
-  steps, cursor, truncated, model, kind,
+  steps, cursor, truncated, model, kind, entry,
 }: {
   steps: StepRow[]; cursor: number | null; truncated: boolean;
   model: CAModel; kind: TraceGraphKind;
+  /** The entry the rows came from — handed to `setCursor` so the canvas pans
+   *  to the node the row names (P8). */
+  entry: TraceEntry | null;
 }) {
   const [open, setOpen] = useState<string | null>(null);
   if (steps.length === 0) return <div className={styles.empty}>This trace executed no nodes.</div>;
@@ -795,7 +798,7 @@ function StepsTab({
         <div
           className={`${styles.srow} ${s.flowIndex !== null && s.flowIndex === cursor ? styles.srowCur : ''}`}
           onMouseDown={e => e.preventDefault()}
-          onClick={() => { if (s.flowIndex !== null) setCursor(s.flowIndex); }}
+          onClick={() => { if (s.flowIndex !== null) setCursor(s.flowIndex, entry); }}
           // P7b / F10 — NO `role="button"`. It sat on a `<div tabIndex={-1}>`
           // with no key handler, i.e. it told assistive tech "this is a button"
           // and then refused the Enter / Space a button owes. A real `<button>`
@@ -804,7 +807,7 @@ function StepsTab({
           // shape is a plain clickable row — and the keyboard path to the cursor
           // is the one the feature actually ships, the global `]` / `[` keys,
           // which reach the same `setCursor` without needing this row focused.
-          title={s.flowIndex !== null ? 'Put the cursor on this node (or step with ] and [)' : 'A queued request — the cursor does not stop here'}
+          title={s.flowIndex !== null ? 'Put the cursor on this node and show it on the canvas (or step with ] and [)' : 'A queued request — the cursor does not stop here'}
         >
           <span className={styles.sidx}>{s.flowIndex !== null ? s.flowIndex + 1 : ''}</span>
           {s.request
@@ -875,7 +878,21 @@ function BreakpointsTab({
             aria-label={`${bp.enabled ? 'Disable' : 'Enable'} the breakpoint on ${label}`}
           />
           <span className={`${styles.bdot} ${bp.enabled ? '' : styles.bdotOff}`} aria-hidden="true" />
-          <span className={bp.enabled ? '' : styles.smut}>{label}</span>
+          {/* P8 — the label JUMPS THE CANVAS to the mark. `bp.macroPath` is
+              already in the editor's DEF vocabulary, so the request needs no
+              translation; the editor enters the scope and centres the node.
+              `onMouseDown` preventDefault is the panel's standing rule: no
+              control here keeps focus on a mouse press, or the global `Enter`
+              would toggle play twice. */}
+          <button
+            type="button"
+            className={`${styles.blabel} ${bp.enabled ? '' : styles.smut}`}
+            title="Show this node on the canvas"
+            onMouseDown={e => e.preventDefault()}
+            onClick={() => requestTraceFocus({
+              graphKind: kind, nodeId: bp.nodeId, macroPath: bp.macroPath, reason: 'breakpoint',
+            })}
+          >{label}</button>
           <span className={styles.smut}>
             {'·'} {kind === 'agents' ? 'agents' : 'cells'} {'·'} {def ? `in ${def.name}` : 'root scope'}
           </span>

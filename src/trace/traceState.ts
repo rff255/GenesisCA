@@ -17,6 +17,10 @@
  * therefore does not re-render per frame. `subscribeTrace` is both, for a
  * consumer (P4's imperative class toggler) that genuinely reacts to each trace.
  *
+ * ⚠ A THIRD, one-consumer channel: `subscribeTraceFocus` / `takeTraceFocus`
+ * (P8 — "show that node on the canvas"). It carries an EVENT, not state, and is
+ * deliberately not a session field; see the CANVAS FOCUS block below.
+ *
  * ⚠ THE STORE IS PURE STATE. It posts no worker message and compiles nothing:
  * `SimulatorView` owns the worker and calls a setter here in the same statement
  * block as its post, the mirror-invariant discipline `overseerRunning` uses.
@@ -46,6 +50,8 @@
 import type { TraceOrigin, TraceOriginTable } from '../modeler/vpl/compiler/traceOrigin';
 import { resolveTraceOrigin } from '../modeler/vpl/compiler/traceOrigin';
 import type { TraceEvent, TraceValue, TraceWrite } from '../simulator/engine/traceRunner';
+import { focusTargetForOrigin } from './traceGraphMap';
+import type { TraceFocusTarget } from './traceGraphMap';
 import type { TraceReplyMsg, TraceRootKey, TraceTarget, TraceApproximateTerm } from '../simulator/engine/traceProtocol';
 import {
   TRACE_ROOT_AGENT_BEHAVIOUR, TRACE_ROOT_STEP,
@@ -233,6 +239,101 @@ export function macroDefPath(instancePath: readonly string[]): string[] {
   return instancePath.map(id => macroDefOfInstance.get(id) ?? id);
 }
 
+/** The one instance → def translation, as a function (the shape
+ *  `focusTargetForOrigin` / `originInEditorScope` take). */
+const defOf = (instanceId: string): string => macroDefOfInstance.get(instanceId) ?? instanceId;
+
+// ---------------------------------------------------------------------------
+// CANVAS FOCUS (P8) — the THIRD channel
+// ---------------------------------------------------------------------------
+/** ⚠ A THIRD, deliberately tiny channel, and NOT a session field.
+ *
+ * "Show me that node on the canvas" is an EVENT, not state: it happens once,
+ * exactly one consumer (the graph editor) performs it, and re-performing it on
+ * an unrelated re-render would yank the canvas out from under the user. Putting
+ * it in the session snapshot would also re-render every `useSyncExternalStore`
+ * session consumer (~300 breakpoint glyphs) for something none of them read.
+ *
+ * So: `requestTraceFocus` parks ONE request and notifies; the editor's single
+ * subscriber calls `takeTraceFocus()`, which returns it and CLEARS it, so the
+ * request is performed exactly once and a second subscriber (there is none, and
+ * there must not be one) could not double-pan.
+ *
+ * The reasons are for the editor's own judgement and for the DEV hook — a
+ * `'cursor'` step may decline to move a node that is already fully visible,
+ * where a `'breakpoint'` jump always means "take me there".
+ */
+export type TraceFocusReason = 'cursor' | 'break' | 'breakpoint' | 'step';
+
+export interface TraceFocusRequest extends TraceFocusTarget {
+  graphKind: TraceGraphKind;
+  reason: TraceFocusReason;
+  /** Monotonic — the editor logs it, and a DEV probe can tell two identical
+   *  requests apart. */
+  seq: number;
+}
+
+let pendingFocus: TraceFocusRequest | null = null;
+let focusSeq = 0;
+const focusListeners = new Set<() => void>();
+
+export function subscribeTraceFocus(fn: () => void): () => void {
+  focusListeners.add(fn);
+  return () => { focusListeners.delete(fn); };
+}
+
+/** Ask the graph editor to show a node. State-free: the request lives only until
+ *  it is taken. */
+export function requestTraceFocus(req: Omit<TraceFocusRequest, 'seq'>): void {
+  pendingFocus = { ...req, macroPath: [...req.macroPath], seq: ++focusSeq };
+  focusListeners.forEach(fn => fn());
+}
+
+/** Take the pending request (and clear it). */
+export function takeTraceFocus(): TraceFocusRequest | null {
+  const req = pendingFocus;
+  pendingFocus = null;
+  return req;
+}
+
+/** The focus target one LOWERED record id names — the node the user placed, plus
+ *  the macro DEF path that has to be open for it to be on the canvas. `null`
+ *  for a synthesized linked-mapping colour pass, which has no user node. */
+export function focusTargetForLoweredId(
+  loweredId: string, kind: TraceGraphKind,
+): TraceFocusTarget | null {
+  return focusTargetForOrigin(resolveRecordOrigin(loweredId, kind), defOf);
+}
+
+/** THE ONE PLACE a cursor move asks for focus. Every caller of `setCursor` /
+ *  `stepCursor` that hands over its entry gets the pan for free — the `]` / `[`
+ *  keys, the panel's Back / Step node buttons and a Steps-tab row click are all
+ *  the same gesture ("put the cursor here"), and each of them wiring its own
+ *  focus call is exactly how the three would drift apart. */
+function requestFocusForCursor(
+  entry: TraceEntry | null | undefined, cursor: number | null, reason: TraceFocusReason,
+): void {
+  if (!entry || cursor === null) return;
+  const idx = cursorEventIndex(entry, cursor);
+  if (idx === null) return;
+  const ev = entry.events[idx];
+  if (!ev) return;
+  const target = focusTargetForLoweredId(ev[1], entry.graphKind);
+  if (target) requestTraceFocus({ graphKind: entry.graphKind, ...target, reason });
+}
+
+/** The CURSOR index (an index into `flowEvents`) whose flow record carries this
+ *  lowered id — where a breakpoint hit lands the cursor. `null` when the id has
+ *  no flow record at all, which is the honest answer for a breakpoint on a pure
+ *  VALUE node (matched on its `v` record; the cursor only walks flow). */
+export function flowIndexOfLoweredId(entry: TraceEntry, loweredId: string): number | null {
+  const flow = flowEvents(entry);
+  for (let i = 0; i < flow.length; i++) {
+    if (entry.events[flow[i]!]![1] === loweredId) return i;
+  }
+  return null;
+}
+
 // ---------------------------------------------------------------------------
 // Setters
 // ---------------------------------------------------------------------------
@@ -320,6 +421,10 @@ export function pushTrace(msg: TraceReplyMsg): void {
       cursorRestartPending = false;
       // Session change — notify that channel too (the cursor moved).
       patchSession({ cursor: 0 });
+      // …and the canvas follows it, exactly as an ordinary `]` does — this IS
+      // the second half of one `]` press (P8). The ONLY per-trace focus request
+      // there is, and it is gated behind a one-shot the user has to arm.
+      requestFocusForCursor(entry, 0, 'step');
     }
   }
   notifyTimeline();
@@ -346,8 +451,15 @@ export function selectedEntry(kind: TraceGraphKind): TraceEntry | null {
   return auto === null ? null : (timeline.find(e => e.id === auto) ?? null);
 }
 
-/** `null` = the whole trace; otherwise an index into the entry's FLOW events. */
-export function setCursor(i: number | null): void {
+/** `null` = the whole trace; otherwise an index into the entry's FLOW events.
+ *
+ *  ⚠ Pass `entry` whenever the caller has it: that is what makes the CANVAS
+ *  FOLLOW the cursor (P8). The focus request is issued here, before the
+ *  equality guard, so re-selecting the node the cursor is already on still
+ *  brings it back on screen — the gesture means "show me this one" either way.
+ *  A cursor of `null` (Whole trace) asks for no focus: it names no node. */
+export function setCursor(i: number | null, entry?: TraceEntry | null): void {
+  if (i !== null && entry) requestFocusForCursor(entry, i, 'cursor');
   if (session.cursor === i) return;
   patchSession({ cursor: i });
 }
@@ -363,12 +475,12 @@ export function stepCursor(delta: 1 | -1, entry: TraceEntry | null): boolean {
   if (delta === 1) {
     const next = cur === null ? 0 : cur + 1;
     if (next >= n) return false;
-    setCursor(next);
+    setCursor(next, entry);
     return true;
   }
   if (cur === null) return false;
   if (cur <= 0) { setCursor(null); return true; }
-  setCursor(cur - 1);
+  setCursor(cur - 1, entry);
   return true;
 }
 
@@ -470,6 +582,28 @@ export function traceEveryGenWanted(): boolean {
 export function setPaused(p: TracePause | null): void {
   if (session.paused === p) return;
   patchSession({ paused: p });
+  if (!p) return;
+  // A BREAKPOINT HIT LANDS THE CURSOR ON THE NODE, and the canvas follows it
+  // (P8). The Help chapter has always said the trace "lands with the cursor on
+  // the node" — until now it did not, so `]` after a break resumed from the
+  // ROOT rather than from the mark the user set.
+  //
+  // ⚠ The `trace` reply for this generation was posted by the worker BEFORE the
+  // `traceBreak` (`traceRootSync` posts, then returns the hit), so the entry is
+  // already in the ring when this runs. It is still guarded on the generation:
+  // with an older trace PINNED, `selectedEntry` answers the pin, whose flow
+  // events are a different run and whose indices mean nothing here.
+  const kind = graphKindOfRoot(p.root);
+  const entry = selectedEntry(kind);
+  if (entry && entry.gen === p.gen) {
+    const flowIdx = flowIndexOfLoweredId(entry, p.nodeId);
+    // The cursor trigger issues the focus request — ONE request, not two.
+    if (flowIdx !== null) { setCursor(flowIdx, entry); return; }
+  }
+  // No flow record for it: a breakpoint on a pure VALUE node (matched on its
+  // `v` record), or a pinned / missing entry. Focus it directly.
+  const target = focusTargetForLoweredId(p.nodeId, kind);
+  if (target) requestTraceFocus({ graphKind: kind, ...target, reason: 'break' });
 }
 
 export function setLost(reason: string | null): void {
@@ -625,5 +759,8 @@ if (import.meta.env.DEV) {
     toggleBreakpoint, setBreakpointEnabled, removeBreakpoint, clearBreakpoints,
     selectTrace, setCursor, stepCursor, selectedEntry, flowEvents,
     executedNodeIds, takenFlowPorts, latestRecordsUpTo, breakpointLoweredIds,
+    // P8 — drive a focus request from a probe (the editor's own performer is
+    // observable through `window.__traceFocus()`).
+    requestTraceFocus, focusTargetForLoweredId, flowIndexOfLoweredId,
   };
 }
