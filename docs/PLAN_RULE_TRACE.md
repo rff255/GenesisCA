@@ -5,6 +5,12 @@
 > companion [PLAN_RULE_TRACE.html](PLAN_RULE_TRACE.html) (the entry gesture, the lit graph, the cursor,
 > the panel, the breakpoint pause, the tooltip). Branch `debug-mode`, base `8c7f6d4`.
 >
+> **P0 is delivered:** `PLAN_RULE_TRACE.html` exists — a self-contained illustrated companion (inline CSS +
+> inline SVG, no external assets) with eleven sections: the shape · the entry gesture · the lit graph · the
+> cursor · the Trace panel · the breakpoint pause storyboard · how it works (trace path vs production path,
+> and the cadence) · the hide/grey/enabled doctrine table · 2D vs 3D and cells vs agents · what the trace
+> cannot promise · the delivery order.
+>
 > Vocabulary: the feature is **Rule Trace**; the button is **Trace**; the pause point is a
 > **breakpoint**; the controls are **Resume · Pause · Step generation · Step node · Back one node**.
 
@@ -47,6 +53,18 @@ Live ─┬─ graph pane ──────────────────
 | **P5** | The Trace panel (transport, timeline, Values / Steps / Breakpoints) | P4 |
 | **P6** | Docs: `docs/areas/rule-trace.md`, CLAUDE.md routing row, HelpView chapter, README line, project-structure, HANDOFF | P5 |
 | **P7** | Adversarial review (read-only, findings ranked) → fix session | P6 |
+
+### P0 decisions (settled after drawing the mockups — the UI phases inherit these)
+
+| # | Question the mockup raised | Decision |
+|---|---|---|
+| A1 | Trace button: icon chip or labelled button? | An **icon chip** (the Follow chip's size and placement), with a distinct inline-SVG glyph — a three-dot stepped path, never a filled circle that could be read as Follow's `◎` — and the tooltip carrying the words: *"Trace this cell's rule in the graph (Live)"*. |
+| A2 | Breakpoint glyph on a red-headed node | A red dot **with a white ring** (readable on every header colour). |
+| A3 | Timeline strip in a narrow drawer | **Horizontal scroll, never wrap**; the newest entry is scrolled into view when it arrives unless the user has selected an older one. |
+| A4 | The trace accent colour | A new theme token `--color-trace` (magenta family, e.g. `#d05ce3` / theme-tuned) — distinct from Follow's accent orange and the breakpoint red. Used by the target mark, the chip, the lit path and the cursor pulse. |
+| A5 | A key for "Whole trace" | None — mouse only (`]` / `[` remain the only new keys). |
+| A6 | Values tab row order | Declaration order; changed rows **accented**, never re-sorted (a row that jumps is harder to follow across generations). |
+| A7 | The worked example | Death by overcrowding (`count = 4`) so the tooltip, the Values table and the storyboard tell one story. |
 
 ---
 

@@ -1,0 +1,961 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>GenesisCA — Rule Trace · illustrated plan</title>
+<style>
+  :root{
+    --bg:#0c0d10; --panel:#16181d; --elev:#1c1f26; --border:#2a2e37;
+    --text:#d8dae0; --muted:#8a8f9a; --accent:#e8a13a; --rec:#e05050; --ok:#5bc98a;
+    --cyan:#4cc9f0; --flow:#66bb6a; --violet:#7e57c2; --blue:#4c8bf0;
+    /* the trace accent — one hue used for the target mark, the chip, the lit path
+       and every trace-owned control. The exact token is settled in P3. */
+    --trace:#e879c2; --traceDim:#5a2a4a; --traceBg:#1e1420;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;padding:32px 28px 72px;background:var(--bg);color:var(--text);
+       font-family:system-ui,-apple-system,"Segoe UI",sans-serif;font-size:14px;line-height:1.55}
+  .wrap{max-width:1150px;margin:0 auto}
+  h1{font-size:23px;margin:0 0 6px;letter-spacing:.2px}
+  h2{font-size:16px;margin:44px 0 4px;color:var(--accent);letter-spacing:.3px}
+  h2 .tag{font-size:11px;color:var(--muted);font-weight:400;letter-spacing:.4px;margin-left:8px}
+  h3{font-size:12px;margin:20px 0 6px;color:var(--muted);text-transform:uppercase;letter-spacing:.7px;font-weight:600}
+  p{margin:8px 0} .lead{color:var(--muted);max-width:92ch}
+  ul{margin:6px 0 6px 18px;padding:0} li{margin:3px 0}
+  .cap{font-size:12px;color:var(--muted);margin:10px 0 0} .cap b{color:var(--text);font-weight:600}
+  .note{font-size:12.5px;color:var(--muted);border-left:2px solid var(--border);padding-left:11px;margin:14px 0}
+  .note.warn{border-left-color:var(--accent)}
+  .note.bad{border-left-color:var(--rec)}
+  .note.tr{border-left-color:var(--trace)}
+  .note b{color:var(--text)}
+  .kbd{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:11px;background:#12141a;border:1px solid var(--border);
+       border-radius:3px;padding:0 5px;color:#eaeaea;white-space:nowrap}
+  code{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px;color:#c9d1d9}
+  .pill{display:inline-block;font-size:10.5px;padding:1px 8px;border-radius:9px;border:1px solid var(--border);color:var(--muted);margin-left:6px;vertical-align:middle}
+  .pill.rec{color:var(--ok);border-color:#26402f}
+  .pill.warnp{color:var(--accent);border-color:#4a3a1e}
+  .pill.badp{color:var(--rec);border-color:#4a2020}
+  .pill.trp{color:var(--trace);border-color:var(--traceDim)}
+
+  /* ── mock app frame ── */
+  .app{position:relative;height:470px;border:1px solid var(--border);border-radius:9px;overflow:hidden;background:#0a0b0e;margin:12px 0 4px;font-size:11px}
+  .app.short{height:286px}
+  .nav{position:absolute;inset:0 0 auto 0;height:34px;background:var(--panel);border-bottom:1px solid var(--border);display:flex;align-items:center;padding:0 10px;gap:8px;z-index:30}
+  .nav .logo{width:14px;height:14px;border-radius:3px;background:linear-gradient(135deg,#e8a13a,#4cc9f0)}
+  .nav .t{font-weight:600;color:#eaeaea}
+  .nav .modes{margin-left:auto;margin-right:auto;display:flex;gap:2px}
+  .nav .m{padding:3px 9px;border-radius:5px;color:var(--muted);border:1px solid transparent}
+  .nav .m.on{color:#eaeaea;background:#22262e;border-color:#33383f}
+  .nav .m.live{color:var(--accent);border-color:#4a3a1e;background:#241d12}
+  .nav .right{display:flex;gap:6px;color:var(--muted)}
+  .ears{position:absolute;left:0;top:34px;bottom:0;width:30px;display:flex;flex-direction:column;justify-content:center;gap:5px;padding:0 4px;z-index:20}
+  .ear{height:22px;border-radius:6px;background:var(--panel);border:1px solid #33383f;color:var(--muted);display:flex;align-items:center;justify-content:center;font-size:10px}
+  .ear.on{color:var(--accent);border-color:#5a4320;background:#241d12}
+  .area{position:absolute;top:34px;bottom:0;left:30px;right:0;display:flex}
+  .pane{position:relative;overflow:hidden;min-width:0;min-height:0}
+  .graphPane{flex:1 1 0;background:var(--bg);background-image:radial-gradient(#242830 1px,transparent 1px);background-size:18px 18px}
+  .simPane{flex:1 1 0;background:#0a0b0e;display:flex;align-items:center;justify-content:center}
+  .divider{width:6px;flex:0 0 6px;background:#1e2229;display:flex;align-items:center;justify-content:center;z-index:16}
+  .divider i{width:2px;height:30px;border-radius:2px;background:#454b56}
+
+  /* graph nodes (HTML mock) */
+  .edges{position:absolute;inset:0;pointer-events:none;z-index:5}
+  .node{position:absolute;width:104px;background:var(--elev);border:1px solid #2f343d;border-radius:6px;box-shadow:0 3px 10px #0008;z-index:8}
+  .node .hd{padding:2px 7px;font-weight:600;font-size:10px;color:#fff;display:flex;align-items:center;gap:4px;border-radius:5px 5px 0 0}
+  .node .bd{padding:4px 7px;color:var(--muted);font-size:9.5px;line-height:1.35}
+  .node.evt .hd{background:#ffffff;color:#1e2a3a}
+  .node.data .hd{background:#1565c0}
+  .node.math .hd{background:#6a1b9a}
+  .node.logic .hd{background:#00838f}
+  .node.out .hd{background:#c62828}
+  .node.lit{border-color:#7a3a63;box-shadow:0 0 0 1px rgba(232,121,194,.5),0 0 17px -3px rgba(232,121,194,.95)}
+  .node.cur{border-color:var(--trace);box-shadow:0 0 0 2px rgba(232,121,194,.75),0 0 26px -2px rgba(232,121,194,1)}
+  .node.dim{opacity:.62}
+  .node .bp{width:7px;height:7px;border-radius:50%;background:var(--rec);box-shadow:0 0 0 1px #0008;flex:0 0 7px}
+  .port{position:absolute;width:7px;height:7px;border-radius:50%;background:var(--cyan);border:1px solid #0a0b0e}
+  .port.f{border-radius:0;clip-path:polygon(0 0,100% 50%,0 100%);background:var(--flow);width:8px;height:8px}
+  .port.l{left:-4px} .port.r{right:-4px}
+
+  /* viewport bar / transport / chips */
+  .vpbar{position:absolute;top:0;left:0;right:0;height:23px;background:#111318e6;border-bottom:1px solid var(--border);
+         display:flex;align-items:center;gap:7px;padding:0 7px;color:var(--muted);font-size:10px;z-index:15}
+  .vpbar b{color:#eaeaea;font-weight:600}
+  .vpbar .sp{margin-left:auto;display:flex;gap:4px;align-items:center}
+  .ico{min-width:16px;height:16px;padding:0 3px;border:1px solid var(--border);border-radius:3px;display:flex;align-items:center;justify-content:center;color:var(--muted);background:#12141a}
+  .ico.on{color:var(--accent);border-color:#4a3a1e}
+  .ico.dis{color:#41454c;border-color:#222630}
+  .transport{position:absolute;bottom:9px;left:50%;transform:translateX(-50%);display:flex;gap:3px;align-items:center;background:var(--panel);
+             border:1px solid var(--border);border-radius:9px;padding:4px 6px;box-shadow:0 4px 18px #000a;z-index:15}
+  .tb{min-width:23px;height:21px;padding:0 6px;border:1px solid var(--border);border-radius:5px;display:flex;align-items:center;justify-content:center;color:var(--text);font-size:10.5px;background:#12141a;white-space:nowrap}
+  .tb.play{color:var(--ok);border-color:#26402f;font-size:11px;min-width:28px}
+  .tb.muted{color:var(--muted)}
+  .tb.dis{color:#41454c;border-color:#222630}
+  .tb.tr{color:var(--trace);border-color:var(--traceDim);background:var(--traceBg)}
+  .chip{border-radius:5px;padding:0 7px;height:21px;display:inline-flex;align-items:center;gap:5px;font-size:10.5px;border:1px solid var(--border);background:#12141a;white-space:nowrap;color:var(--muted)}
+  .chip.trace{color:var(--trace);border-color:var(--traceDim);background:var(--traceBg)}
+  .chip.paused{color:var(--accent);border-color:#4a3a1e;background:#241d12}
+  .chip .dot{width:7px;height:7px;border-radius:50%;background:currentColor;flex:0 0 7px}
+  .chip .x{color:var(--muted);margin-left:2px}
+  .stats{position:absolute;right:9px;bottom:9px;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:10px;color:#8f98a6;text-align:right;line-height:1.5;z-index:15}
+  .board{display:block;width:100%;max-width:360px;height:auto}
+
+  /* the Trace panel (bottom drawer of the graph pane) */
+  .tracePanel{position:absolute;left:0;right:0;bottom:0;height:150px;background:var(--panel);border-top:1px solid var(--border);
+              display:flex;flex-direction:column;z-index:18;font-size:10px}
+  .tracePanel.solo{position:static;height:auto;border:1px solid var(--border);border-radius:8px;margin:12px 0 4px;overflow:hidden}
+  .tpGrip{height:5px;background:#12141a;border-bottom:1px solid #23272f;display:flex;align-items:center;justify-content:center}
+  .tpGrip i{width:26px;height:2px;border-radius:2px;background:#454b56}
+  .tpRow{display:flex;align-items:center;gap:4px;padding:4px 7px;border-bottom:1px solid #23272f;flex-wrap:wrap}
+  .tpRow .lbl{color:var(--muted);margin-right:2px}
+  .tpRow .sep{width:1px;height:15px;background:var(--border);margin:0 3px}
+  .tchip{border:1px solid var(--border);border-radius:5px;padding:1px 7px;color:var(--muted);background:#12141a;white-space:nowrap}
+  .tchip.on{color:var(--trace);border-color:var(--traceDim);background:var(--traceBg)}
+  .tchip.ghost{color:#5c616b;border-style:dashed}
+  .tabs{display:flex;gap:3px;padding:4px 7px 0;border-bottom:1px solid #23272f}
+  .tab{padding:2px 9px;border-radius:5px 5px 0 0;color:var(--muted);border:1px solid transparent;border-bottom:none}
+  .tab.on{color:#eaeaea;background:#22262e;border-color:#33383f}
+  .tpBody{padding:5px 8px;overflow:hidden;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:10px;flex:1 1 auto}
+  .tpHead{color:var(--muted);font-family:system-ui,sans-serif;font-size:10px;margin-bottom:4px}
+  .tpHead b{color:var(--text)}
+  .vrow{display:flex;align-items:center;gap:6px;padding:1.5px 6px;border-left:2px solid transparent;border-radius:2px}
+  .vrow .n{width:96px;color:var(--muted);flex:0 0 96px}
+  .vrow .v{color:var(--text)}
+  .vrow .arw{color:#5c616b}
+  .vrow.chg{background:var(--traceBg);border-left-color:var(--trace)}
+  .vrow.chg .v.next{color:var(--trace)}
+  .vrow .tagt{color:#5c616b;margin-left:auto;font-family:system-ui,sans-serif}
+  .srow{display:flex;align-items:center;gap:6px;padding:1.5px 6px;color:var(--text);border-left:2px solid transparent}
+  .srow.cur{background:var(--traceBg);border-left-color:var(--trace);color:var(--trace)}
+  .srow .ix{color:#5c616b;width:18px;flex:0 0 18px}
+  .srow .mut{color:var(--muted)}
+
+  /* inspector popover mock */
+  .pop{width:238px;background:var(--elev);border:1px solid var(--border);border-radius:8px;box-shadow:0 6px 22px #000a;overflow:hidden;font-size:11px}
+  .pop .ph{display:flex;align-items:center;gap:5px;padding:5px 8px;background:#0f1116;border-bottom:1px solid var(--border)}
+  .pop .ph .co{flex:1;font-family:ui-monospace,Menlo,Consolas,monospace;color:#eaeaea;font-size:10.5px;letter-spacing:.3px}
+  .pop .btn{width:21px;height:21px;border:1px solid #33383f;border-radius:4px;display:flex;align-items:center;justify-content:center;color:var(--muted);font-size:11px;flex:none}
+  .pop .btn.trace{color:var(--trace);border-color:var(--traceDim);background:var(--traceBg)}
+  .pop .btn.acc{color:var(--accent);border-color:#4a3a1e;background:#241d12}
+  .pop .cr{display:flex;align-items:center;gap:6px;padding:4px 8px;border-bottom:1px solid #23272f;color:var(--muted);font-size:10px}
+  .pop .sw{width:12px;height:12px;border-radius:3px;border:1px solid #33383f}
+  .pop .rows{padding:4px 8px}
+  .pop .r{display:flex;justify-content:space-between;gap:10px;padding:1px 0;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:10px}
+  .pop .r .n{color:var(--muted)} .pop .r .v{color:var(--text)}
+  .popWrap{display:flex;gap:14px;align-items:flex-start;flex-wrap:wrap}
+  .stage{background:#0a0b0e;border:1px solid var(--border);border-radius:8px;padding:16px;display:flex;justify-content:center;align-items:flex-start;gap:14px;flex-wrap:wrap}
+
+  table{border-collapse:collapse;width:100%;font-size:12.5px;margin:10px 0}
+  th,td{border:1px solid var(--border);padding:6px 9px;text-align:left;vertical-align:top}
+  th{background:var(--panel);color:var(--muted);font-weight:600;font-size:11px;text-transform:uppercase;letter-spacing:.5px}
+  td.good{color:var(--ok)} td.bad{color:var(--rec)} td.mid{color:var(--accent)} td.tr{color:var(--trace)}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+  .grid3{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}
+  .grid4{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}
+  .box{background:var(--panel);border:1px solid var(--border);border-radius:8px;padding:11px 13px;font-size:12.5px}
+  .box h4{margin:0 0 6px;font-size:12px;color:#eaeaea}
+  .box.warnbox{border-color:#4a3a1e}
+  .box.badbox{border-color:#4a2020}
+  .box.trbox{border-color:var(--traceDim)}
+  .frame{background:var(--panel);border:1px solid var(--border);border-radius:8px;padding:9px 10px;font-size:11px}
+  .frame .fh{display:flex;align-items:center;gap:6px;font-size:10px;color:var(--muted);margin-bottom:7px}
+  .frame .fn{width:16px;height:16px;border-radius:50%;background:#22262e;color:#eaeaea;display:flex;align-items:center;justify-content:center;font-size:9.5px;font-weight:700;flex:none}
+  .frame .fc{font-size:11px;color:var(--muted);margin-top:7px;min-height:44px}
+  .frame .fc b{color:var(--text)}
+  .frame.hit{border-color:var(--rec)}
+  .phases{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin:12px 0}
+  .ph{background:var(--panel);border:1px solid var(--border);border-radius:8px;padding:9px 11px;font-size:11.5px}
+  .ph .n{font-size:10px;color:var(--accent);letter-spacing:.6px;text-transform:uppercase;font-weight:700}
+  .ph h5{margin:2px 0 5px;font-size:12.5px;color:#eaeaea}
+  .ph p{margin:0;color:var(--muted);font-size:11px}
+  .ph.done{border-color:#26402f}
+  svg text{font-family:system-ui,-apple-system,"Segoe UI",sans-serif}
+  .svgbox{background:#0a0b0e;border:1px solid var(--border);border-radius:8px;padding:10px;margin:12px 0 4px}
+  .svgbox svg{display:block;width:100%;height:auto}
+</style>
+</head>
+<body>
+
+<!-- ══ shared SVG symbols: the board, the target mark, one voxel cube ══ -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+<defs>
+  <pattern id="gridp" width="8" height="8" patternUnits="userSpaceOnUse">
+    <path d="M8 0H0V8" fill="none" stroke="#171b22" stroke-width="1"/>
+  </pattern>
+  <filter id="glow" x="-70%" y="-70%" width="240%" height="240%">
+    <feGaussianBlur stdDeviation="3.2" result="b"/>
+    <feMerge><feMergeNode in="b"/><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+  </filter>
+  <marker id="ar" markerWidth="9" markerHeight="9" refX="7.5" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 z" fill="#7f8792"/></marker>
+  <marker id="arT" markerWidth="9" markerHeight="9" refX="7.5" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 z" fill="#e879c2"/></marker>
+  <marker id="arG" markerWidth="9" markerHeight="9" refX="7.5" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 z" fill="#66bb6a"/></marker>
+  <marker id="arC" markerWidth="9" markerHeight="9" refX="7.5" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 z" fill="#4cc9f0"/></marker>
+  <marker id="arR" markerWidth="9" markerHeight="9" refX="7.5" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 z" fill="#e05050"/></marker>
+  <g id="cube">
+    <path d="M12 0 L24 6 L12 12 L0 6 Z" fill="#5a7fa8"/>
+    <path d="M0 6 L12 12 L12 24 L0 18 Z" fill="#2f4761"/>
+    <path d="M24 6 L12 12 L12 24 L24 18 Z" fill="#40628a"/>
+  </g>
+</defs>
+<symbol id="board" viewBox="0 0 320 192">
+  <rect width="320" height="192" fill="#0a0b0e"/>
+  <rect width="320" height="192" fill="url(#gridp)"/>
+  <g fill="#cfd6e0">
+    <rect x="24" y="16" width="8" height="8"/><rect x="32" y="16" width="8" height="8"/><rect x="24" y="24" width="8" height="8"/><rect x="32" y="24" width="8" height="8"/>
+    <rect x="64" y="8" width="8" height="8"/><rect x="72" y="16" width="8" height="8"/><rect x="56" y="24" width="8" height="8"/><rect x="64" y="24" width="8" height="8"/><rect x="72" y="24" width="8" height="8"/>
+    <rect x="112" y="16" width="8" height="8"/><rect x="120" y="16" width="8" height="8"/><rect x="128" y="16" width="8" height="8"/>
+    <rect x="168" y="16" width="8" height="8"/><rect x="176" y="16" width="8" height="8"/><rect x="160" y="24" width="8" height="8"/><rect x="184" y="24" width="8" height="8"/><rect x="168" y="32" width="8" height="8"/><rect x="176" y="32" width="8" height="8"/>
+    <rect x="240" y="24" width="8" height="8"/><rect x="248" y="24" width="8" height="8"/><rect x="232" y="32" width="8" height="8"/><rect x="256" y="32" width="8" height="8"/><rect x="240" y="40" width="8" height="8"/><rect x="256" y="40" width="8" height="8"/><rect x="248" y="48" width="8" height="8"/>
+    <rect x="296" y="40" width="8" height="8"/><rect x="304" y="40" width="8" height="8"/><rect x="296" y="48" width="8" height="8"/><rect x="304" y="48" width="8" height="8"/>
+    <rect x="40" y="64" width="8" height="8"/><rect x="48" y="64" width="8" height="8"/><rect x="48" y="72" width="8" height="8"/><rect x="56" y="72" width="8" height="8"/><rect x="40" y="80" width="8" height="8"/>
+    <rect x="96" y="56" width="8" height="8"/><rect x="104" y="56" width="8" height="8"/><rect x="96" y="64" width="8" height="8"/><rect x="112" y="64" width="8" height="8"/><rect x="104" y="72" width="8" height="8"/>
+    <rect x="152" y="72" width="8" height="8"/><rect x="160" y="72" width="8" height="8"/><rect x="168" y="72" width="8" height="8"/><rect x="160" y="80" width="8" height="8"/><rect x="152" y="88" width="8" height="8"/><rect x="168" y="88" width="8" height="8"/>
+    <rect x="208" y="56" width="8" height="8"/><rect x="216" y="64" width="8" height="8"/><rect x="200" y="72" width="8" height="8"/><rect x="208" y="72" width="8" height="8"/><rect x="216" y="72" width="8" height="8"/>
+    <rect x="264" y="88" width="8" height="8"/><rect x="272" y="88" width="8" height="8"/><rect x="280" y="88" width="8" height="8"/><rect x="264" y="96" width="8" height="8"/>
+    <rect x="272" y="96" width="8" height="8" id="tcell"/>
+    <rect x="32" y="128" width="8" height="8"/><rect x="40" y="128" width="8" height="8"/><rect x="32" y="136" width="8" height="8"/><rect x="40" y="136" width="8" height="8"/>
+    <rect x="80" y="120" width="8" height="8"/><rect x="88" y="120" width="8" height="8"/><rect x="96" y="120" width="8" height="8"/><rect x="88" y="128" width="8" height="8"/>
+    <rect x="136" y="136" width="8" height="8"/><rect x="144" y="136" width="8" height="8"/><rect x="136" y="144" width="8" height="8"/><rect x="152" y="144" width="8" height="8"/>
+    <rect x="192" y="120" width="8" height="8"/><rect x="200" y="128" width="8" height="8"/><rect x="184" y="136" width="8" height="8"/><rect x="192" y="136" width="8" height="8"/><rect x="200" y="136" width="8" height="8"/>
+    <rect x="248" y="136" width="8" height="8"/><rect x="256" y="136" width="8" height="8"/><rect x="248" y="144" width="8" height="8"/><rect x="264" y="144" width="8" height="8"/>
+    <rect x="296" y="112" width="8" height="8"/><rect x="304" y="112" width="8" height="8"/><rect x="288" y="120" width="8" height="8"/><rect x="304" y="120" width="8" height="8"/><rect x="296" y="128" width="8" height="8"/>
+  </g>
+</symbol>
+<symbol id="tracemark" viewBox="0 0 320 192">
+  <rect x="270.2" y="94.2" width="11.6" height="11.6" fill="none" stroke="#e879c2" stroke-width="1.6"/>
+  <rect x="267" y="91" width="18" height="18" fill="none" stroke="#e879c2" stroke-width="1" opacity=".35"/>
+  <path d="M276 78 L276 88" stroke="#e879c2" stroke-width="1" opacity=".5"/>
+  <text x="276" y="74" fill="#e879c2" font-size="8" text-anchor="middle">(12, 34)</text>
+</symbol>
+</svg>
+
+<div class="wrap">
+
+<h1>Rule Trace — watch one cell's (or one agent's) rule execute in the graph</h1>
+<p class="lead">Pick <b>one</b> cell or <b>one</b> agent in <b>Live</b> mode and press <b>Trace</b>. From then on the node graph lights up along the path that element's rule actually took, hovering a wire shows the value it carried, a cursor walks the path node by node, breakpoints pause the run <em>before</em> the generation is applied, and a drawer under the graph lists what the element is about to become. Written plan: <code>docs/PLAN_RULE_TRACE.md</code> · design authority: <code>docs/IMPACT_MAP_RULE_TRACE.md</code> · origin: <code>docs/BRAINSTORM_RULE_TRACE.md</code>. Branch <code>debug-mode</code>, base <code>8c7f6d4</code>.</p>
+
+<div class="note tr"><b>The one architectural claim.</b> The trace is a <b>re-evaluation</b>, not an instrumented engine. The same graph goes through the same lowering passes and the same JS emitters with a <code>trace</code> option — single-element body, per-node value records, per-flow-node execution records — and runs <b>in the worker, in a write-recording sandbox</b>, against the live state. JS, WASM and WebGPU keep stepping the real grid, unchanged and unaware. That is why this is not a single-target feature: the trace behaves identically whichever engine the model runs on, in 2D or 3D, for cells or for agents.</p></div>
+
+<p class="cap"><b>Vocabulary.</b> The feature is <b>Rule Trace</b> · the button is <b>Trace</b> · the pause point is a <b>breakpoint</b> · the controls are <b>Resume · Pause · Step generation · Step node · Back one node</b>. The mockups use magenta for the trace accent; the final token is picked in P3.</p>
+
+<!-- ══════════════════════════════════════════════════════════ -->
+<h2>1 · The shape <span class="tag">where everything lives, in one frame</span></h2>
+
+<div class="app">
+  <div class="nav"><div class="logo"></div><span class="t">GenesisCA</span>
+    <div class="modes"><span class="m">⬚ Modeler</span><span class="m">▷ Simulator</span><span class="m live">◧ Live</span></div>
+    <div class="right"><span>?</span></div></div>
+  <div class="ears"><div class="ear">i</div><div class="ear on">⚙</div><div class="ear">≡</div><div class="ear">⊞</div></div>
+  <div class="area">
+
+    <!-- graph pane -->
+    <div class="pane graphPane">
+      <svg class="edges">
+        <!-- flow: Generation Step → If (taken) -->
+        <path d="M116 39 C 190 39 200 67 264 67" fill="none" stroke="#66bb6a" stroke-width="2.2" filter="url(#glow)"/>
+        <!-- value: Count Neighbours → Compare (taken) -->
+        <path d="M116 111 L 136 111" fill="none" stroke="#4cc9f0" stroke-width="2" filter="url(#glow)"/>
+        <!-- value: Compare → If (taken) -->
+        <path d="M244 111 C 256 111 256 85 264 85" fill="none" stroke="#4cc9f0" stroke-width="2" filter="url(#glow)"/>
+        <!-- flow: If.then → Set Attribute (taken) -->
+        <path d="M372 60 C 384 60 384 35 392 35" fill="none" stroke="#66bb6a" stroke-width="2.2" filter="url(#glow)"/>
+        <!-- flow: If.else → Set Attribute (not taken) -->
+        <path d="M372 78 C 384 78 384 169 392 169" fill="none" stroke="#3c4650" stroke-width="1.6" stroke-dasharray="4 3"/>
+        <!-- value: Get Cell Attribute → Set Attribute else (not taken) -->
+        <path d="M116 183 C 250 183 260 172 392 172" fill="none" stroke="#2f4a5a" stroke-width="1.6" stroke-dasharray="4 3"/>
+      </svg>
+
+      <div class="node evt lit" style="left:12px;top:20px">
+        <div class="hd">Generation Step</div><div class="bd">runs for every cell</div>
+        <span class="port f r" style="top:14px"></span>
+      </div>
+      <div class="node data lit" style="left:12px;top:92px">
+        <div class="hd">Count Neighbours</div><div class="bd">alive = true → <b style="color:#e879c2">4</b></div>
+        <span class="port r" style="top:15px"></span>
+      </div>
+      <div class="node data dim" style="left:12px;top:164px">
+        <div class="hd">Get Cell Attribute</div><div class="bd">alive · no record</div>
+        <span class="port r" style="top:15px"></span>
+      </div>
+      <div class="node math lit" style="left:140px;top:92px">
+        <div class="hd">Compare</div><div class="bd">count &gt; 3 → <b style="color:#e879c2">true</b></div>
+        <span class="port l" style="top:15px"></span><span class="port r" style="top:15px"></span>
+      </div>
+      <div class="node logic cur" style="left:268px;top:48px">
+        <div class="hd">If</div><div class="bd">then ▸ · else</div>
+        <span class="port f l" style="top:14px"></span><span class="port l" style="top:32px"></span>
+        <span class="port f r" style="top:8px"></span><span class="port f r" style="top:26px"></span>
+      </div>
+      <div class="node out lit" style="left:392px;top:16px">
+        <div class="hd"><span class="bp"></span>Set Attribute</div><div class="bd">alive ← false</div>
+        <span class="port f l" style="top:14px"></span>
+      </div>
+      <div class="node out dim" style="left:392px;top:150px">
+        <div class="hd">Set Attribute</div><div class="bd">alive ← alive</div>
+        <span class="port f l" style="top:14px"></span><span class="port l" style="top:32px"></span>
+      </div>
+
+      <!-- the Trace panel -->
+      <div class="tracePanel">
+        <div class="tpGrip"><i></i></div>
+        <div class="tpRow">
+          <span class="tb tr">⏵</span><span class="tb">⏸</span><span class="tb">⏭</span>
+          <span class="sep"></span>
+          <span class="tb">⤒</span><span class="tb">⤓</span><span class="tb muted">⟲</span>
+          <span class="sep"></span>
+          <span class="tchip ghost">Reset · Init</span><span class="tchip">gen 411 · Step</span><span class="tchip on">gen 412 · Step</span><span class="tchip">gen 412 · Output Mapping</span>
+        </div>
+        <div class="tabs"><span class="tab on">Values</span><span class="tab">Steps</span><span class="tab">Breakpoints</span></div>
+        <div class="tpBody">
+          <div class="tpHead">Trace of generation <b>412</b> (step)</div>
+          <div class="vrow chg"><span class="n">alive</span><span class="v">true</span><span class="arw">→</span><span class="v next">false</span></div>
+          <div class="vrow chg"><span class="n">age</span><span class="v">3</span><span class="arw">→</span><span class="v next">0</span></div>
+          <div class="vrow"><span class="n">colour</span><span class="arw">→</span><span class="v">#202020</span></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="divider"><i></i></div>
+
+    <!-- simulation pane -->
+    <div class="pane simPane">
+      <div class="vpbar">
+        <b>Live</b><span>Game of Life</span>
+        <span class="chip trace"><span class="dot"></span>Tracing cell (12, 34)<span class="x">✕</span></span>
+        <span class="sp"><span class="ico">⤢</span><span class="ico on">◉</span><span class="ico">⚙</span></span>
+      </div>
+      <svg class="board" viewBox="0 0 320 192" style="margin-top:18px"><use href="#board"/><use href="#tracemark"/></svg>
+      <div class="transport"><span class="tb muted">60 fps</span><span class="tb play">▮▮</span><span class="tb">⏭</span><span class="tb">■</span></div>
+      <div class="stats">Gen 412 · 60 fps<br>alive 1 907</div>
+    </div>
+  </div>
+</div>
+<p class="cap"><b>One target per graph.</b> The graph pane lights the path the traced cell took this generation and carries the <b>Trace panel</b> as a bottom drawer; the simulation pane marks the target on the board and carries the <b>chip</b> in the Live bar — the one place tracing can be stopped once the inspector is closed. The <span style="color:var(--rec)">red dot</span> on <em>Set Attribute</em> is a breakpoint. <em>Get Cell Attribute</em> is dimmed because the compiler sank it into the branch that did not run: no record, and that is the honest picture (D4).</p>
+
+<div class="note"><b>Why the drawer and not a side tab.</b> Live closes the left ActivityBar by policy, so a tab would put the values one click away from the graph they annotate; a floating popover is too small for a values table. The drawer is the IDE convention and it is <b>mounted only while a target exists</b> (D7) — no target, no drawer.</div>
+
+<!-- ══════════════════════════════════════════════════════════ -->
+<h2>2 · The entry gesture <span class="tag">the inspector you already open, plus one button</span></h2>
+
+<h3>Before → after — the cell inspector</h3>
+<div class="grid2">
+  <div>
+    <div class="stage">
+      <div class="pop">
+        <div class="ph"><span class="co">Cell (12, 34)</span><span class="btn">⊗</span><span class="btn">×</span></div>
+        <div class="cr"><span class="sw" style="background:#c8d0da"></span><span>#C8D0DA</span></div>
+        <div class="rows">
+          <div class="r"><span class="n">alive</span><span class="v">true</span></div>
+          <div class="r"><span class="n">age</span><span class="v">3</span></div>
+          <div class="r"><span class="n">energy</span><span class="v">4.2</span></div>
+        </div>
+      </div>
+    </div>
+    <p class="cap"><b>Outside Live</b> (Simulator tab, Modeler) — <b>no Trace button</b>. The graph is not on screen, so the feature is <em>structurally</em> unreachable from here: the doctrine says <b>hide</b>, not grey.</p>
+  </div>
+  <div>
+    <div class="stage">
+      <div class="pop">
+        <div class="ph"><span class="co">Cell (12, 34)</span><span class="btn trace" title="Trace this cell's rule in the graph">◉</span><span class="btn">⊗</span><span class="btn">×</span></div>
+        <div class="cr"><span class="sw" style="background:#c8d0da"></span><span>#C8D0DA</span></div>
+        <div class="rows">
+          <div class="r"><span class="n">alive</span><span class="v">true</span></div>
+          <div class="r"><span class="n">age</span><span class="v">3</span></div>
+          <div class="r"><span class="n">energy</span><span class="v">4.2</span></div>
+        </div>
+      </div>
+    </div>
+    <p class="cap"><b>In Live</b> — a <b>Trace</b> chip joins Close-all and Close, built exactly like the agent inspector's Follow toggle (same 21px chip, <code>aria-pressed</code>, accent fill when active). Tooltip: <em>"Trace this cell's rule in the graph"</em>. Pinned popovers only — a transient sweep popover is about to be discarded.</p>
+  </div>
+</div>
+
+<h3>The agent inspector — Follow and Trace side by side</h3>
+<div class="stage">
+  <div class="pop" style="width:252px">
+    <div class="ph"><span class="co">Agent #1487</span>
+      <span class="btn acc" title="Following this agent with the camera">◎</span>
+      <span class="btn trace" title="Trace this agent's rule in the graph">◉</span>
+      <span class="btn">⊗</span><span class="btn">×</span></div>
+    <div class="cr"><span class="sw" style="background:#7e57c2"></span><span>type · forager</span></div>
+    <div class="rows">
+      <div class="r"><span class="n">position</span><span class="v">(184.2, 96.7)</span></div>
+      <div class="r"><span class="n">velocity</span><span class="v">(0.81, −0.34)</span></div>
+      <div class="r"><span class="n">energy</span><span class="v">4.2</span></div>
+      <div class="r"><span class="n">bonds</span><span class="v">2</span></div>
+    </div>
+  </div>
+  <div style="max-width:420px;align-self:center">
+    <p class="cap" style="margin:0"><b>Two independent toggles.</b> <span style="color:var(--accent)">◎ Follow</span> moves the <em>camera</em>; <span style="color:var(--trace)">◉ Trace</span> moves the <em>graph</em>. They compose (follow and trace the same agent), and neither implies the other. Follow already exists — Trace is built on its template, which is why the two chips read as siblings.</p>
+    <p class="cap"><b>One target per graph.</b> A model with both tiers can trace one cell <em>and</em> one agent at the same time; pressing Trace on another element of the same kind moves that target. Closing the popover does not stop the trace — the chip does.</p>
+  </div>
+</div>
+
+<div class="note"><b>The target keeps its values flowing.</b> The traced element is silently added to the inspect subscription (cells) / the agent poll (agents), so <em>current</em> values keep arriving after the popover is closed — that is what the Values tab compares the trace's predictions against.</div>
+
+<!-- ══════════════════════════════════════════════════════════ -->
+<h2>3 · The lit graph <span class="tag">the path the element actually took, plus values on hover</span></h2>
+
+<div class="svgbox">
+<svg viewBox="0 0 1060 406" xmlns="http://www.w3.org/2000/svg">
+  <!-- wires (taken: glowing; not taken: dashed grey) -->
+  <path d="M175 173 C 300 173 320 170 436 170" fill="none" stroke="#66bb6a" stroke-width="2.6" filter="url(#glow)"/>
+  <path d="M176 255 L 226 255" fill="none" stroke="#4cc9f0" stroke-width="2.4" filter="url(#glow)"/>
+  <path d="M385 255 C 415 255 415 190 436 190" fill="none" stroke="#4cc9f0" stroke-width="2.4" filter="url(#glow)"/>
+  <path d="M576 166 C 604 166 612 109 636 109" fill="none" stroke="#66bb6a" stroke-width="2.6" filter="url(#glow)"/>
+  <path d="M576 190 C 604 190 612 323 636 323" fill="none" stroke="#3c4650" stroke-width="1.8" stroke-dasharray="5 4"/>
+  <path d="M176 337 C 380 337 420 336 636 336" fill="none" stroke="#2f4a5a" stroke-width="1.8" stroke-dasharray="5 4"/>
+
+  <!-- lit halos -->
+  <rect x="20" y="150" width="150" height="46" rx="7" fill="none" stroke="#e879c2" stroke-width="1.5" filter="url(#glow)" opacity=".9"/>
+  <rect x="20" y="232" width="150" height="46" rx="7" fill="none" stroke="#e879c2" stroke-width="1.5" filter="url(#glow)" opacity=".9"/>
+  <rect x="230" y="232" width="150" height="46" rx="7" fill="none" stroke="#e879c2" stroke-width="1.5" filter="url(#glow)" opacity=".9"/>
+  <rect x="640" y="86" width="170" height="46" rx="7" fill="none" stroke="#e879c2" stroke-width="1.5" filter="url(#glow)" opacity=".9"/>
+  <rect x="440" y="150" width="130" height="56" rx="7" fill="none" stroke="#e879c2" stroke-width="2.6" filter="url(#glow)"/>
+
+  <!-- N1 Generation Step -->
+  <rect x="20" y="150" width="150" height="46" rx="7" fill="#1c1f26" stroke="#2f343d"/>
+  <path d="M21 157 a6 6 0 0 1 6 -6 h136 a6 6 0 0 1 6 6 v11 h-148 z" fill="#ffffff"/>
+  <text x="30" y="164" font-size="11" font-weight="600" fill="#1e2a3a">Generation Step</text>
+  <text x="30" y="184" font-size="10.5" fill="#8a8f9a">runs for every cell</text>
+  <path d="M167 168 L177 173 L167 178 z" fill="#66bb6a"/>
+
+  <!-- N2 Count Neighbours -->
+  <rect x="20" y="232" width="150" height="46" rx="7" fill="#1c1f26" stroke="#2f343d"/>
+  <path d="M21 239 a6 6 0 0 1 6 -6 h136 a6 6 0 0 1 6 6 v11 h-148 z" fill="#1565c0"/>
+  <text x="30" y="246" font-size="11" font-weight="600" fill="#ffffff">Count Neighbours</text>
+  <text x="30" y="266" font-size="10.5" fill="#8a8f9a">alive = true</text>
+  <circle cx="171" cy="255" r="4.5" fill="#4cc9f0" stroke="#0a0b0e"/>
+
+  <!-- N3 Get Cell Attribute (not reached) -->
+  <rect x="20" y="314" width="150" height="46" rx="7" fill="#15171c" stroke="#262a32"/>
+  <path d="M21 321 a6 6 0 0 1 6 -6 h136 a6 6 0 0 1 6 6 v11 h-148 z" fill="#1a3f6b"/>
+  <text x="30" y="328" font-size="11" font-weight="600" fill="#93a3b5">Get Cell Attribute</text>
+  <text x="30" y="348" font-size="10.5" fill="#5c616b">alive · no record</text>
+  <circle cx="171" cy="337" r="4.5" fill="#2f4a5a" stroke="#0a0b0e"/>
+
+  <!-- N4 Compare -->
+  <rect x="230" y="232" width="150" height="46" rx="7" fill="#1c1f26" stroke="#2f343d"/>
+  <path d="M231 239 a6 6 0 0 1 6 -6 h136 a6 6 0 0 1 6 6 v11 h-148 z" fill="#6a1b9a"/>
+  <text x="240" y="246" font-size="11" font-weight="600" fill="#ffffff">Compare</text>
+  <text x="240" y="266" font-size="10.5" fill="#8a8f9a">count &gt; 3</text>
+  <circle cx="229" cy="255" r="4.5" fill="#4cc9f0" stroke="#0a0b0e"/>
+  <circle cx="381" cy="255" r="4.5" fill="#4cc9f0" stroke="#0a0b0e"/>
+
+  <!-- N5 If (cursor) -->
+  <rect x="440" y="150" width="130" height="56" rx="7" fill="#1c1f26" stroke="#e879c2"/>
+  <path d="M441 157 a6 6 0 0 1 6 -6 h116 a6 6 0 0 1 6 6 v11 h-128 z" fill="#00838f"/>
+  <text x="450" y="164" font-size="11" font-weight="600" fill="#ffffff">If</text>
+  <text x="450" y="184" font-size="10.5" fill="#e879c2">then ▸</text>
+  <text x="450" y="199" font-size="10.5" fill="#5c616b">else</text>
+  <path d="M433 165 L443 170 L433 175 z" fill="#66bb6a"/>
+  <circle cx="438" cy="190" r="4.5" fill="#4cc9f0" stroke="#0a0b0e"/>
+  <path d="M567 161 L577 166 L567 171 z" fill="#66bb6a"/>
+  <path d="M567 185 L577 190 L567 195 z" fill="#3c4650"/>
+  <text x="505" y="143" font-size="10" fill="#e879c2" text-anchor="middle">cursor</text>
+
+  <!-- N6 Set Attribute (then) + breakpoint -->
+  <rect x="640" y="86" width="170" height="46" rx="7" fill="#1c1f26" stroke="#2f343d"/>
+  <path d="M641 93 a6 6 0 0 1 6 -6 h156 a6 6 0 0 1 6 6 v11 h-168 z" fill="#c62828"/>
+  <circle cx="655" cy="95" r="4.6" fill="#ff5252" stroke="#ffffff" stroke-width="1.3"/>
+  <text x="666" y="100" font-size="11" font-weight="600" fill="#ffffff">Set Attribute</text>
+  <text x="650" y="120" font-size="10.5" fill="#8a8f9a">alive &#8592; false</text>
+  <path d="M631 104 L641 109 L631 114 z" fill="#66bb6a"/>
+  <text x="826" y="100" font-size="10" fill="#e05050">breakpoint</text>
+  <text x="826" y="114" font-size="10" fill="#5c616b">&#8220;pause the trace when</text>
+  <text x="826" y="126" font-size="10" fill="#5c616b">this node runs&#8221;</text>
+
+  <!-- N7 Set Attribute (else, not reached) -->
+  <rect x="640" y="300" width="170" height="46" rx="7" fill="#15171c" stroke="#262a32"/>
+  <path d="M641 307 a6 6 0 0 1 6 -6 h156 a6 6 0 0 1 6 6 v11 h-168 z" fill="#6d2020"/>
+  <text x="650" y="314" font-size="11" font-weight="600" fill="#b59797">Set Attribute</text>
+  <text x="650" y="334" font-size="10.5" fill="#5c616b">alive &#8592; alive</text>
+  <path d="M631 318 L641 323 L631 328 z" fill="#3c4650"/>
+  <circle cx="638" cy="336" r="4.5" fill="#2f4a5a" stroke="#0a0b0e"/>
+  <text x="826" y="322" font-size="10" fill="#5c616b">not reached — drawn exactly</text>
+  <text x="826" y="334" font-size="10" fill="#5c616b">as it normally looks</text>
+
+  <!-- T1 wire tooltip -->
+  <path d="M200 250 L 214 216" stroke="#4a505a" stroke-width="1"/>
+  <rect x="186" y="176" width="126" height="42" rx="5" fill="#0f1116" stroke="#3a404a"/>
+  <text x="196" y="192" font-size="10.5" fill="#8a8f9a">count</text>
+  <text x="302" y="192" font-size="11" font-weight="600" fill="#4cc9f0" text-anchor="end">4</text>
+  <text x="196" y="208" font-size="9.5" fill="#5c616b">Decimal · gen 412</text>
+
+  <!-- T2 node tooltip -->
+  <rect x="446" y="222" width="184" height="78" rx="5" fill="#0f1116" stroke="#3a404a"/>
+  <text x="456" y="238" font-size="10.5" font-weight="600" fill="#eaeaea">If</text>
+  <text x="620" y="238" font-size="9.5" fill="#5c616b" text-anchor="end">gen 412</text>
+  <text x="456" y="257" font-size="10.5" fill="#8a8f9a">condition</text>
+  <text x="620" y="257" font-size="10.5" fill="#4cc9f0" text-anchor="end">true</text>
+  <text x="456" y="274" font-size="10.5" fill="#8a8f9a">branch taken</text>
+  <text x="620" y="274" font-size="10.5" fill="#66bb6a" text-anchor="end">then</text>
+  <text x="456" y="291" font-size="10.5" fill="#8a8f9a">executions</text>
+  <text x="620" y="291" font-size="10.5" fill="#d8dae0" text-anchor="end">1</text>
+  <path d="M505 222 L 505 208" stroke="#4a505a" stroke-width="1"/>
+
+  <!-- legend -->
+  <g>
+    <rect x="20" y="376" width="14" height="12" rx="3" fill="#1c1f26" stroke="#e879c2" stroke-width="1.4"/>
+    <text x="42" y="386" font-size="10.5" fill="#8a8f9a">executed this trace</text>
+    <rect x="176" y="376" width="14" height="12" rx="3" fill="#1c1f26" stroke="#e879c2" stroke-width="2.6"/>
+    <text x="198" y="386" font-size="10.5" fill="#8a8f9a">the cursor's node</text>
+    <path d="M320 382 L 352 382" stroke="#66bb6a" stroke-width="2.6"/>
+    <text x="360" y="386" font-size="10.5" fill="#8a8f9a">flow taken</text>
+    <path d="M436 382 L 468 382" stroke="#4cc9f0" stroke-width="2.4"/>
+    <text x="476" y="386" font-size="10.5" fill="#8a8f9a">value consumed</text>
+    <path d="M578 382 L 610 382" stroke="#3c4650" stroke-width="1.8" stroke-dasharray="5 4"/>
+    <text x="618" y="386" font-size="10.5" fill="#8a8f9a">not reached</text>
+    <circle cx="724" cy="382" r="4.6" fill="#ff5252" stroke="#ffffff" stroke-width="1.3"/>
+    <text x="736" y="386" font-size="10.5" fill="#8a8f9a">breakpoint</text>
+  </g>
+</svg>
+</div>
+<p class="cap"><b>Game of Life, generation 412, cell (12, 34).</b> The cell is alive with <b>4</b> live neighbours, so <em>Compare</em> is true, the <b>then</b> branch runs and the cell dies. Hovering the <code>count</code> wire shows the value it carried; hovering a node shows all of its port values at the cursor. <em>Get Cell Attribute</em> and the whole <b>else</b> arm are drawn exactly as they normally look — the trace <b>adds</b> light, it never greys the rest of the graph.</p>
+
+<div class="note"><b>Tooltips are portalled, and they own no keyboard.</b> A <code>position:fixed</code> popover rendered from inside React Flow's transformed viewport breaks — the tooltip is portalled to <code>document.body</code> (the repo's standing rule). It carries <b>no</b> <code>role</code>: a hover surface that announced itself as a menu would stand the global <span class="kbd">Enter</span> down just for mousing past it — the lesson the viewer control already paid for.</div>
+
+<div class="note tr"><b>Values are decoded, not raw.</b> Binary &#8594; <code>true/false</code> · a tag &#8594; the option name · a neighbour index &#8594; <code>(dr, dc)</code> (or <code>(dr, dc, dl)</code> in 3D) · a vector or colour &#8594; <code>(x, y, z)</code> reassembled from the component records the composite lowering emitted · an array &#8594; <code>[a, b, c, …] (n)</code>, copied at record time because the underlying scratch buffer is reused.</div>
+
+<!-- ══════════════════════════════════════════════════════════ -->
+<h2>4 · The cursor <span class="tag">a generation runs in microseconds — the cursor is what makes it followable</span></h2>
+
+<div class="grid3">
+  <div>
+    <div class="svgbox" style="margin:0">
+    <svg viewBox="0 0 340 170" xmlns="http://www.w3.org/2000/svg">
+      <path d="M84 77 C 130 77 140 77 176 77" fill="none" stroke="#66bb6a" stroke-width="2" filter="url(#glow)"/>
+      <path d="M84 117 L 96 117" fill="none" stroke="#4cc9f0" stroke-width="1.8" filter="url(#glow)"/>
+      <path d="M166 117 C 172 117 172 90 176 90" fill="none" stroke="#4cc9f0" stroke-width="1.8" filter="url(#glow)"/>
+      <path d="M232 72 C 240 72 240 37 248 37" fill="none" stroke="#3c4650" stroke-width="1.6" stroke-dasharray="4 3"/>
+      <path d="M232 86 C 240 86 240 129 248 129" fill="none" stroke="#3c4650" stroke-width="1.6" stroke-dasharray="4 3"/>
+      <rect x="8" y="64" width="76" height="26" rx="5" fill="#1c1f26" stroke="#e879c2" stroke-width="1.3"/><text x="16" y="81" font-size="9" fill="#d8dae0">Generation</text>
+      <rect x="8" y="104" width="76" height="26" rx="5" fill="#1c1f26" stroke="#e879c2" stroke-width="1.3"/><text x="16" y="121" font-size="9" fill="#d8dae0">Count Nb</text>
+      <rect x="8" y="20" width="76" height="26" rx="5" fill="#15171c" stroke="#262a32"/><text x="16" y="37" font-size="9" fill="#5c616b">Get Attr</text>
+      <rect x="96" y="104" width="70" height="26" rx="5" fill="#1c1f26" stroke="#e879c2" stroke-width="1.3"/><text x="104" y="121" font-size="9" fill="#d8dae0">Compare</text>
+      <rect x="176" y="64" width="56" height="26" rx="5" fill="#1c1f26" stroke="#e879c2" stroke-width="2.6"/><text x="196" y="81" font-size="9" fill="#e879c2">If</text>
+      <rect x="248" y="24" width="84" height="26" rx="5" fill="#15171c" stroke="#262a32"/><text x="256" y="41" font-size="9" fill="#5c616b">Set alive</text>
+      <rect x="248" y="116" width="84" height="26" rx="5" fill="#15171c" stroke="#262a32"/><text x="256" y="133" font-size="9" fill="#5c616b">Set alive</text>
+      <text x="204" y="58" font-size="9" fill="#e879c2" text-anchor="middle">&#9650;</text>
+    </svg>
+    </div>
+    <p class="cap"><b>a · cursor on <em>If</em>.</b> Lit = everything with a record <em>up to the cursor</em>: the flow so far plus the current node's <b>value cone</b> (Compare, Count Neighbours). The Set nodes have not run yet, so they are dark.</p>
+  </div>
+  <div>
+    <div class="svgbox" style="margin:0">
+    <svg viewBox="0 0 340 170" xmlns="http://www.w3.org/2000/svg">
+      <path d="M84 77 C 130 77 140 77 176 77" fill="none" stroke="#66bb6a" stroke-width="2" filter="url(#glow)"/>
+      <path d="M84 117 L 96 117" fill="none" stroke="#4cc9f0" stroke-width="1.8" filter="url(#glow)"/>
+      <path d="M166 117 C 172 117 172 90 176 90" fill="none" stroke="#4cc9f0" stroke-width="1.8" filter="url(#glow)"/>
+      <path d="M232 72 C 240 72 240 37 248 37" fill="none" stroke="#66bb6a" stroke-width="2" filter="url(#glow)"/>
+      <path d="M232 86 C 240 86 240 129 248 129" fill="none" stroke="#3c4650" stroke-width="1.6" stroke-dasharray="4 3"/>
+      <rect x="8" y="64" width="76" height="26" rx="5" fill="#1c1f26" stroke="#e879c2" stroke-width="1.3"/><text x="16" y="81" font-size="9" fill="#d8dae0">Generation</text>
+      <rect x="8" y="104" width="76" height="26" rx="5" fill="#1c1f26" stroke="#e879c2" stroke-width="1.3"/><text x="16" y="121" font-size="9" fill="#d8dae0">Count Nb</text>
+      <rect x="8" y="20" width="76" height="26" rx="5" fill="#15171c" stroke="#262a32"/><text x="16" y="37" font-size="9" fill="#5c616b">Get Attr</text>
+      <rect x="96" y="104" width="70" height="26" rx="5" fill="#1c1f26" stroke="#e879c2" stroke-width="1.3"/><text x="104" y="121" font-size="9" fill="#d8dae0">Compare</text>
+      <rect x="176" y="64" width="56" height="26" rx="5" fill="#1c1f26" stroke="#e879c2" stroke-width="1.3"/><text x="196" y="81" font-size="9" fill="#d8dae0">If</text>
+      <rect x="248" y="24" width="84" height="26" rx="5" fill="#1c1f26" stroke="#e879c2" stroke-width="2.6"/><text x="258" y="41" font-size="9" fill="#e879c2">Set alive</text>
+      <circle cx="252" cy="28" r="3.4" fill="#ff5252" stroke="#ffffff" stroke-width="1"/>
+      <rect x="248" y="116" width="84" height="26" rx="5" fill="#15171c" stroke="#262a32"/><text x="256" y="133" font-size="9" fill="#5c616b">Set alive</text>
+      <text x="290" y="18" font-size="9" fill="#e879c2" text-anchor="middle">&#9650;</text>
+    </svg>
+    </div>
+    <p class="cap"><b>b · one step later</b> (<span class="kbd">]</span>). The cursor moved to the next <em>flow</em> event, the taken branch wire lit, and <em>Set Attribute</em> became current. The untaken arm never changes.</p>
+  </div>
+  <div>
+    <div class="svgbox" style="margin:0">
+    <svg viewBox="0 0 340 170" xmlns="http://www.w3.org/2000/svg">
+      <path d="M84 77 C 130 77 140 77 176 77" fill="none" stroke="#66bb6a" stroke-width="2" filter="url(#glow)"/>
+      <path d="M84 117 L 96 117" fill="none" stroke="#4cc9f0" stroke-width="1.8" filter="url(#glow)"/>
+      <path d="M166 117 C 172 117 172 90 176 90" fill="none" stroke="#4cc9f0" stroke-width="1.8" filter="url(#glow)"/>
+      <path d="M232 72 C 240 72 240 37 248 37" fill="none" stroke="#66bb6a" stroke-width="2" filter="url(#glow)"/>
+      <path d="M232 86 C 240 86 240 129 248 129" fill="none" stroke="#3c4650" stroke-width="1.6" stroke-dasharray="4 3"/>
+      <rect x="8" y="64" width="76" height="26" rx="5" fill="#1c1f26" stroke="#e879c2" stroke-width="1.3"/><text x="16" y="81" font-size="9" fill="#d8dae0">Generation</text>
+      <rect x="8" y="104" width="76" height="26" rx="5" fill="#1c1f26" stroke="#e879c2" stroke-width="1.3"/><text x="16" y="121" font-size="9" fill="#d8dae0">Count Nb</text>
+      <rect x="8" y="20" width="76" height="26" rx="5" fill="#15171c" stroke="#262a32"/><text x="16" y="37" font-size="9" fill="#5c616b">Get Attr</text>
+      <rect x="96" y="104" width="70" height="26" rx="5" fill="#1c1f26" stroke="#e879c2" stroke-width="1.3"/><text x="104" y="121" font-size="9" fill="#d8dae0">Compare</text>
+      <rect x="176" y="64" width="56" height="26" rx="5" fill="#1c1f26" stroke="#e879c2" stroke-width="1.3"/><text x="196" y="81" font-size="9" fill="#d8dae0">If</text>
+      <rect x="248" y="24" width="84" height="26" rx="5" fill="#1c1f26" stroke="#e879c2" stroke-width="1.3"/><text x="258" y="41" font-size="9" fill="#d8dae0">Set alive</text>
+      <circle cx="252" cy="28" r="3.4" fill="#ff5252" stroke="#ffffff" stroke-width="1"/>
+      <rect x="248" y="116" width="84" height="26" rx="5" fill="#15171c" stroke="#262a32"/><text x="256" y="133" font-size="9" fill="#5c616b">Set alive</text>
+      <text x="170" y="162" font-size="9" fill="#8a8f9a" text-anchor="middle">cursor: none — the whole trace</text>
+    </svg>
+    </div>
+    <p class="cap"><b>c · whole trace</b> (<b>&#10226;</b>). The cursor is cleared and <em>everything the element executed</em> is lit at once. This is what a freshly-landed trace shows — stepping is opt-in.</p>
+  </div>
+</div>
+
+<div class="tracePanel solo">
+  <div class="tpRow" style="border-bottom:none;padding:7px 10px;gap:6px;font-size:11px">
+    <span class="tb tr" style="height:23px">&#9205;</span><span class="lbl">Resume</span>
+    <span class="tb" style="height:23px">&#9208;</span><span class="lbl">Pause</span>
+    <span class="sep"></span>
+    <span class="tb" style="height:23px">&#9197;</span><span class="lbl">Step generation <span class="kbd">Space</span></span>
+    <span class="sep"></span>
+    <span class="tb dis" style="height:23px">&#10514;</span><span class="lbl" style="color:#5c616b">Back one node <span class="kbd">[</span></span>
+    <span class="tb" style="height:23px">&#10515;</span><span class="lbl">Step node <span class="kbd">]</span></span>
+    <span class="sep"></span>
+    <span class="tb" style="height:23px">&#10226;</span><span class="lbl">Whole trace</span>
+  </div>
+</div>
+<p class="cap"><b>The transport row, as it sits at the top of the Trace panel.</b> <b>Resume / Pause</b> are the simulator's own <code>playing</code> state (<span class="kbd">Enter</span>) and <b>Step generation</b> is the transport's Step (<span class="kbd">Space</span>) — the trace does not invent a second clock. <b>Step node / Back</b> move the cursor only, and are <b>greyed at the ends</b> of the recorded log with the reason in the tooltip (here: the cursor sits on the first flow event). <b>Whole trace</b> greys out when the cursor is already cleared.</p>
+
+<!-- ══════════════════════════════════════════════════════════ -->
+<h2>5 · The Trace panel <span class="tag">transport · timeline · Values / Steps / Breakpoints</span></h2>
+
+<div class="tracePanel solo">
+  <div class="tpGrip"><i></i></div>
+  <div class="tpRow">
+    <span class="tb tr">&#9205;</span><span class="tb">&#9208;</span><span class="tb">&#9197;</span>
+    <span class="sep"></span>
+    <span class="tb dis">&#10514;</span><span class="tb">&#10515;</span><span class="tb">&#10226;</span>
+    <span class="sep"></span>
+    <span class="lbl">timeline</span>
+    <span class="tchip ghost">Reset · Init</span>
+    <span class="tchip">gen 410 · Brush</span>
+    <span class="tchip">gen 411 · Step</span>
+    <span class="tchip on">gen 412 · Step</span>
+    <span class="tchip">gen 412 · Output Mapping</span>
+  </div>
+  <div class="tabs"><span class="tab on">Values</span><span class="tab">Steps</span><span class="tab">Breakpoints</span></div>
+  <div class="tpBody">
+    <div class="tpHead">Trace of generation <b>412</b> (step) · <span style="color:var(--accent)">approximate under asynchronous updates</span></div>
+    <div class="vrow chg"><span class="n">alive</span><span class="v">true</span><span class="arw">&#8594;</span><span class="v next">false</span><span class="tagt">Binary</span></div>
+    <div class="vrow chg"><span class="n">age</span><span class="v">3</span><span class="arw">&#8594;</span><span class="v next">0</span><span class="tagt">Decimal</span></div>
+    <div class="vrow"><span class="n">energy</span><span class="v">4.2</span><span class="arw">&#8594;</span><span class="v">4.2</span><span class="tagt">Decimal</span></div>
+    <div class="vrow"><span class="n">state</span><span class="v">wire</span><span class="arw">&#8594;</span><span class="v">wire</span><span class="tagt">tag</span></div>
+    <div class="vrow"><span class="n">colour</span><span class="arw">&#8594;</span><span class="v">#202020</span><span class="tagt">Output Mapping</span></div>
+    <div class="vrow"><span class="n">neighbour write</span><span class="arw">&#8594;</span><span class="v">(dr &#8722;1, dc 0) · energy += 0.4</span><span class="tagt">write to another cell</span></div>
+    <div class="vrow"><span class="n">indicator</span><span class="arw">&#8594;</span><span class="v">deaths += 1</span><span class="tagt">indicator write</span></div>
+    <div class="vrow"><span class="n">stop event</span><span class="arw">&#8594;</span><span class="v">not fired</span><span class="tagt">&#8212;</span></div>
+  </div>
+</div>
+<p class="cap"><b>Values, for a cell.</b> Every attribute as <b>current &#8594; next</b>, changed rows accented; then everything else the rule wrote — the colour the Output Mapping produced, writes aimed at <em>other</em> cells, indicator writes, the stop event, and whether the cell was <em>skipped</em>. The timeline strip is newest-right: an <b>Init</b> from the last Reset, a <b>Brush</b> from a stroke that hit the cell, two <b>Step</b>s and the <b>Output Mapping</b> that coloured it. Selecting an entry loads it into the graph.</p>
+
+<div class="grid2">
+  <div>
+    <div class="tracePanel solo" style="margin:0">
+      <div class="tabs"><span class="tab on">Values</span><span class="tab">Steps</span><span class="tab">Breakpoints</span></div>
+      <div class="tpBody">
+        <div class="tpHead">Trace of generation <b>412</b> (agent behaviour) · agent <b>#1487</b></div>
+        <div class="vrow"><span class="n">position</span><span class="v">(184.2, 96.7)</span><span class="arw">&#8594;</span><span class="v">(185.0, 96.4)</span></div>
+        <div class="vrow"><span class="n">velocity</span><span class="v">(0.81, &#8722;0.34)</span><span class="arw">&#8594;</span><span class="v">(0.79, &#8722;0.31)</span></div>
+        <div class="vrow"><span class="n">force (total)</span><span class="arw">&#8594;</span><span class="v">(&#8722;0.02, 0.03)</span></div>
+        <div class="vrow chg"><span class="n">energy</span><span class="v">4.2</span><span class="arw">&#8594;</span><span class="v next">3.7</span></div>
+        <div class="vrow"><span class="n">radius</span><span class="v">1.8</span><span class="arw">&#8594;</span><span class="v">1.8</span></div>
+        <div class="vrow chg"><span class="n">Request</span><span class="arw">&#8594;</span><span class="v next">divide</span><span class="tagt">queued, not applied</span></div>
+        <div class="vrow"><span class="n">field deposit</span><span class="arw">&#8594;</span><span class="v">pheromone += 0.5</span></div>
+      </div>
+    </div>
+    <p class="cap"><b>Values, for an agent.</b> The same table over the agent SoA: position, velocity, the <em>total</em> force the rule accumulated, radius, the sprite, field deposits — and the <b>requests</b> (divide · kill · bond form / break / rewire · create agent), which the sandbox records instead of performing. Nothing here has been applied to the world.</p>
+  </div>
+  <div>
+    <div class="tracePanel solo" style="margin:0">
+      <div class="tabs"><span class="tab">Values</span><span class="tab on">Steps</span><span class="tab">Breakpoints</span></div>
+      <div class="tpBody">
+        <div class="srow"><span class="ix">1</span><span>&#9656; Generation Step</span></div>
+        <div class="srow"><span class="ix">2</span><span>&#9656; If <span class="mut">(count &gt; 3 &#8594; true)</span> &#8594; <span style="color:#66bb6a">then</span></span></div>
+        <div class="srow cur"><span class="ix">3</span><span>&#9656; Set Attribute <span class="mut">alive &#8592; false</span></span></div>
+        <div class="srow"><span class="ix">4</span><span>&#9656; Set Attribute <span class="mut">age &#8592; 0</span></span></div>
+        <div class="srow"><span class="ix">5</span><span>&#9656; Update Indicator <span class="mut">deaths += 1</span></span></div>
+        <div class="srow" style="color:#5c616b"><span class="ix"></span><span>&#8212; 12 value records collapsed under their consumers &#8212;</span></div>
+      </div>
+    </div>
+    <p class="cap"><b>Steps.</b> The <b>flow</b> events in execution order, with the branch each control node took. Clicking a row puts the cursor there — the same cursor <span class="kbd">]</span> / <span class="kbd">[</span> walk. Value records are collapsed under the flow node that consumed them, so a cell-top of forty <em>Get Attribute</em>s is not forty steps.</p>
+  </div>
+</div>
+
+<div class="tracePanel solo" style="max-width:580px">
+  <div class="tabs"><span class="tab">Values</span><span class="tab">Steps</span><span class="tab on">Breakpoints</span></div>
+  <div class="tpBody">
+    <div class="srow"><span class="ix" style="color:#e05050">&#9673;</span><span>Set Attribute <span class="mut">· cells · root scope</span></span><span style="margin-left:auto;color:#5c616b">enabled &#10005;</span></div>
+    <div class="srow"><span class="ix" style="color:#5c616b">&#9675;</span><span style="color:#8a8f9a">If <span class="mut">· cells · root scope</span></span><span style="margin-left:auto;color:#5c616b">disabled &#10005;</span></div>
+    <div class="srow"><span class="ix" style="color:#e05050">&#9673;</span><span>Apply Force <span class="mut">· agents · inside <b style="color:#7e57c2">Chemotaxis</b> &#9656; Seek</span></span><span style="margin-left:auto;color:#5c616b">enabled &#10005;</span></div>
+    <div class="srow" style="color:#5c616b;margin-top:4px"><span class="ix"></span><span>Clear all</span></div>
+  </div>
+</div>
+<p class="cap"><b>Breakpoints.</b> Session state only — they are <b>not</b> saved into the <code>.gcaproj</code> (D8). Each row names the node, the graph it belongs to and its <b>macro scope</b>, because a breakpoint inside a macro is keyed by <em>path + inner node</em>: the same macro instanced twice can carry different breakpoints.</p>
+
+<div class="note"><b>The panel is a <code>role="region"</code>.</b> Not a dialog, not a menu — either would make <code>overlayOwnsKeyboard()</code> stand the global <span class="kbd">Enter</span> down for as long as the panel is open, and the panel is open for the whole tracing session. Its height is dragged from the top handle and persisted under its own key, <code>genesisca_trace_panel</code>.</div>
+
+<!-- ══════════════════════════════════════════════════════════ -->
+<h2>6 · The breakpoint pause <span class="tag">pauses BEFORE the generation is applied · fires once per generation</span></h2>
+
+<div class="grid4">
+  <div class="frame">
+    <div class="fh"><span class="fn">a</span><span class="chip trace" style="height:19px;font-size:10px"><span class="dot"></span>Tracing cell (12, 34)</span></div>
+    <svg viewBox="0 0 320 192" style="width:100%;display:block"><use href="#board"/><use href="#tracemark"/></svg>
+    <div class="fc"><b>Playing.</b> A breakpoint sits on <em>Set Attribute</em>. The worker now traces <b>every</b> generation, because it has to decide whether to pause. Gen 411 · 60 fps.</div>
+  </div>
+  <div class="frame hit">
+    <div class="fh"><span class="fn">b</span><span class="chip paused" style="height:19px;font-size:10px">&#9208; paused at Set Attribute</span></div>
+    <svg viewBox="0 0 320 192" style="width:100%;display:block"><use href="#board"/><use href="#tracemark"/>
+      <circle cx="276" cy="100" r="14" fill="none" stroke="#e05050" stroke-width="1.2" opacity=".8"/></svg>
+    <div class="fc"><b>Hit.</b> The traced cell reached the node, so generation 412 is <b>not run</b>: the board on screen is still exactly what the rule <em>read</em>. The cursor lands on <em>Set Attribute</em>, the Values tab shows <code>alive true &#8594; false</code> as a prediction.</div>
+  </div>
+  <div class="frame">
+    <div class="fh"><span class="fn">c</span><span class="chip trace" style="height:19px;font-size:10px"><span class="dot"></span>Tracing cell (12, 34)</span></div>
+    <svg viewBox="0 0 320 192" style="width:100%;display:block"><use href="#board"/><use href="#tracemark"/>
+      <rect x="272" y="96" width="8" height="8" fill="#0a0b0e"/>
+      <path d="M280 96 H272 V104" fill="none" stroke="#171b22" stroke-width="1"/></svg>
+    <div class="fc"><b>Resume &#9205;.</b> Generation 412 runs for the whole grid and the cell dies — the prediction becomes the board. The same breakpoint does <b>not</b> re-fire inside this generation.</div>
+  </div>
+  <div class="frame">
+    <div class="fh"><span class="fn">d</span><span class="chip paused" style="height:19px;font-size:10px">&#9208; paused at Set Attribute</span></div>
+    <svg viewBox="0 0 320 192" style="width:100%;display:block"><use href="#board"/><use href="#tracemark"/>
+      <rect x="272" y="96" width="8" height="8" fill="#0a0b0e"/>
+      <path d="M280 96 H272 V104" fill="none" stroke="#171b22" stroke-width="1"/>
+      <circle cx="276" cy="100" r="14" fill="none" stroke="#e05050" stroke-width="1.2" opacity=".8"/></svg>
+    <div class="fc"><b>Generation 413.</b> The cell is traced again and hits the same node again — so the run steps one generation per Resume, which is the loop a user wants when they are reading a rule.</div>
+  </div>
+</div>
+<p class="cap">Only the traced cell's change is drawn between frames (c) and (b) — the rest of the board advances too. <b>A breakpoint fires once per generation</b>: the worker remembers the generation it broke on, so the <em>next</em> step message runs that generation through without re-breaking.</p>
+
+<div class="note warn"><b>Breaking a batch is <code>cancelStep</code>'s job description.</b> A break stops the batch mid-flight, so it must drop the queued <code>step</code> messages that have no <code>reqId</code> exactly the way <code>cancelStep</code> does — otherwise they replay the moment the user resumes and the run jumps several generations. Overseer steps are never dropped, and the Overseer never traces (Live excludes it).</div>
+
+<div class="note tr"><b>Why the pause is <em>before</em>.</b> The trace is of the <b>current</b> state — "the board you see &#8594; what it does next" (D2). If the generation had already been applied, the board on screen would no longer be the one the rule read, and every value in the panel would describe a state the user cannot see.</div>
+
+<!-- ══════════════════════════════════════════════════════════ -->
+<h2>7 · How it works <span class="tag">a side computation beside an engine that never notices</span></h2>
+
+<div class="svgbox">
+<svg viewBox="0 0 1060 620" xmlns="http://www.w3.org/2000/svg">
+  <!-- lanes -->
+  <rect x="14" y="12" width="312" height="392" rx="9" fill="#101217" stroke="#232830"/>
+  <rect x="352" y="12" width="340" height="392" rx="9" fill="#101217" stroke="#232830"/>
+  <rect x="718" y="12" width="326" height="392" rx="9" fill="#101217" stroke="#232830"/>
+  <text x="28" y="30" font-size="10" fill="#8a8f9a" letter-spacing="1">MAIN THREAD · COMPILE</text>
+  <text x="366" y="30" font-size="10" fill="#8a8f9a" letter-spacing="1">WORKER</text>
+  <text x="732" y="30" font-size="10" fill="#8a8f9a" letter-spacing="1">MAIN THREAD · PRESENTATION</text>
+
+  <!-- column 1 -->
+  <rect x="30" y="42" width="280" height="38" rx="6" fill="#1c1f26" stroke="#2f343d"/>
+  <text x="42" y="66" font-size="11.5" fill="#d8dae0">Model graph — nodes + edges</text>
+  <path d="M170 80 L 170 102" stroke="#7f8792" stroke-width="1.4" marker-end="url(#ar)"/>
+
+  <rect x="30" y="106" width="280" height="52" rx="6" fill="#1c1f26" stroke="#e879c2"/>
+  <text x="42" y="126" font-size="11.5" fill="#e879c2">compileGraph(…, { trace: true })</text>
+  <text x="42" y="144" font-size="10" fill="#8a8f9a">same passes · same lowerings · same ids</text>
+  <path d="M170 158 L 170 180" stroke="#7f8792" stroke-width="1.4" marker-end="url(#ar)"/>
+
+  <rect x="30" y="184" width="280" height="78" rx="6" fill="#1c1f26" stroke="#2f343d"/>
+  <text x="42" y="202" font-size="11.5" fill="#d8dae0">the trace build</text>
+  <text x="42" y="219" font-size="10" fill="#8a8f9a">· single-element body — const idx = _traceIdx</text>
+  <text x="42" y="234" font-size="10" fill="#8a8f9a">· _tr.v / _tr.f / _tr.o records per node + branch</text>
+  <text x="42" y="249" font-size="10" fill="#8a8f9a">· CSE and aggregate fusion OFF</text>
+  <path d="M170 262 L 170 284" stroke="#7f8792" stroke-width="1.4" marker-end="url(#ar)"/>
+
+  <rect x="30" y="288" width="280" height="50" rx="6" fill="#1c1f26" stroke="#2f343d"/>
+  <text x="42" y="306" font-size="11.5" fill="#d8dae0">origin map</text>
+  <text x="42" y="324" font-size="10" fill="#8a8f9a">lowered id &#8594; user node · port · macro path</text>
+  <text x="42" y="362" font-size="10" fill="#5c616b">compiled only while a target exists; an id with no</text>
+  <text x="42" y="376" font-size="10" fill="#5c616b">origin is a harness failure, never a dark node</text>
+
+  <!-- column 2 -->
+  <rect x="368" y="42" width="308" height="38" rx="6" fill="#1c1f26" stroke="#2f343d"/>
+  <text x="380" y="66" font-size="11" fill="#d8dae0">setTrace { target, codes, breakpoints, everyGen }</text>
+  <path d="M522 80 L 522 102" stroke="#7f8792" stroke-width="1.4" marker-end="url(#ar)"/>
+
+  <rect x="368" y="106" width="308" height="156" rx="6" fill="#16181d" stroke="#e879c2"/>
+  <text x="380" y="126" font-size="11.5" fill="#e879c2">runTrace(fn, args, paramNames) — the sandbox</text>
+  <text x="380" y="148" font-size="10" fill="#8a8f9a">typed array &#8594; shadow proxy: reads see live state</text>
+  <text x="392" y="162" font-size="10" fill="#8a8f9a">(and this element's own earlier writes), writes go</text>
+  <text x="392" y="176" font-size="10" fill="#8a8f9a">to the shadow only</text>
+  <text x="380" y="196" font-size="10" fill="#8a8f9a">object &#8594; shallow copy · function &#8594; recording stub</text>
+  <text x="380" y="214" font-size="10" fill="#e05050">.subarray / .slice &#8594; throw (sandbox escape)</text>
+  <text x="380" y="232" font-size="10" fill="#8a8f9a">private RNG seeded from (element, generation)</text>
+  <text x="380" y="250" font-size="10" fill="#8a8f9a">event log capped at 5 000 &#8594; truncated: true</text>
+  <path d="M522 262 L 522 284" stroke="#7f8792" stroke-width="1.4" marker-end="url(#ar)"/>
+
+  <rect x="368" y="288" width="308" height="50" rx="6" fill="#1c1f26" stroke="#2f343d"/>
+  <text x="380" y="306" font-size="11.5" fill="#d8dae0">post trace { … }</text>
+  <text x="380" y="324" font-size="10" fill="#8a8f9a">events · writes · truncated · approximate</text>
+
+  <!-- column 3 -->
+  <rect x="734" y="42" width="294" height="52" rx="6" fill="#1c1f26" stroke="#e879c2"/>
+  <text x="746" y="62" font-size="11.5" fill="#e879c2">trace store (src/trace/traceState.ts)</text>
+  <text x="746" y="80" font-size="10" fill="#8a8f9a">timeline ring (40) · selected · cursor · breakpoints</text>
+  <path d="M881 94 L 881 116" stroke="#7f8792" stroke-width="1.4" marker-end="url(#ar)"/>
+
+  <rect x="734" y="120" width="294" height="52" rx="6" fill="#1c1f26" stroke="#2f343d"/>
+  <text x="746" y="140" font-size="11.5" fill="#d8dae0">GraphEditor — classList by data-id</text>
+  <text x="746" y="158" font-size="10" fill="#8a8f9a">one subscriber, diffed sets, NO React re-render</text>
+  <path d="M881 172 L 881 192" stroke="#7f8792" stroke-width="1.4" marker-end="url(#ar)"/>
+
+  <rect x="734" y="196" width="294" height="44" rx="6" fill="#1c1f26" stroke="#2f343d"/>
+  <text x="746" y="214" font-size="11.5" fill="#d8dae0">Trace panel — Values / Steps / Breakpoints</text>
+  <text x="746" y="230" font-size="10" fill="#8a8f9a">role="region"</text>
+  <path d="M881 240 L 881 260" stroke="#7f8792" stroke-width="1.4" marker-end="url(#ar)"/>
+
+  <rect x="734" y="264" width="294" height="44" rx="6" fill="#1c1f26" stroke="#2f343d"/>
+  <text x="746" y="282" font-size="11.5" fill="#d8dae0">hover tooltips — portalled to document.body</text>
+  <text x="746" y="298" font-size="10" fill="#8a8f9a">no role, decoded by type</text>
+
+  <text x="746" y="336" font-size="10" fill="#5c616b">CaNode subscribes to the breakpoint set only</text>
+  <text x="746" y="350" font-size="10" fill="#5c616b">(a static set) to draw its red dot</text>
+  <text x="746" y="376" font-size="10" fill="#5c616b">the cursor, the cones and the tooltips are ALL</text>
+  <text x="746" y="390" font-size="10" fill="#5c616b">derived here — the worker ships no presentation</text>
+
+  <!-- cross arrows -->
+  <path d="M310 223 C 336 223 338 61 364 61" fill="none" stroke="#e879c2" stroke-width="1.6" stroke-dasharray="5 4" marker-end="url(#arT)"/>
+  <text x="330" y="150" font-size="9.5" fill="#e879c2" text-anchor="middle" transform="rotate(-90 330 150)">codes + paramNames</text>
+  <path d="M676 313 C 700 313 706 70 730 70" fill="none" stroke="#e879c2" stroke-width="1.6" stroke-dasharray="5 4" marker-end="url(#arT)"/>
+  <text x="700" y="200" font-size="9.5" fill="#e879c2" text-anchor="middle" transform="rotate(-90 700 200)">postMessage</text>
+
+  <!-- bottom lane: production -->
+  <rect x="14" y="424" width="1030" height="120" rx="9" fill="#101217" stroke="#232830"/>
+  <text x="28" y="444" font-size="10" fill="#8a8f9a" letter-spacing="1">THE PRODUCTION PATH — NOT INSTRUMENTED, NOT CHANGED</text>
+
+  <rect x="30" y="458" width="212" height="46" rx="6" fill="#1c1f26" stroke="#26402f"/>
+  <text x="42" y="478" font-size="11.5" fill="#d8dae0">compileGraph(…) — normal</text>
+  <text x="42" y="494" font-size="10" fill="#5bc98a">byte-identical on every surface</text>
+  <path d="M242 481 L 272 481" stroke="#7f8792" stroke-width="1.4" marker-end="url(#ar)"/>
+
+  <rect x="278" y="458" width="212" height="46" rx="6" fill="#1c1f26" stroke="#2f343d"/>
+  <text x="290" y="478" font-size="11.5" fill="#d8dae0">JS · WASM · WebGPU</text>
+  <text x="290" y="494" font-size="10" fill="#8a8f9a">2D / 3D · cells / agents</text>
+  <path d="M490 481 L 520 481" stroke="#7f8792" stroke-width="1.4" marker-end="url(#ar)"/>
+
+  <rect x="526" y="458" width="240" height="46" rx="6" fill="#1c1f26" stroke="#2f343d"/>
+  <text x="538" y="478" font-size="11.5" fill="#d8dae0">the real grid + agent SoA</text>
+  <text x="538" y="494" font-size="10" fill="#8a8f9a">the buffers the renderer shows</text>
+
+  <!-- read up / write blocked -->
+  <path d="M700 452 C 700 380 690 300 648 266" fill="none" stroke="#4cc9f0" stroke-width="1.6" marker-end="url(#arC)"/>
+  <path d="M590 342 L 590 452" fill="none" stroke="#e05050" stroke-width="1.6" stroke-dasharray="5 4"/>
+  <path d="M582 390 L 598 406 M598 390 L 582 406" stroke="#e05050" stroke-width="2.4"/>
+  <path d="M40 80 C 20 90 20 110 20 446 C 20 454 24 458 32 458" fill="none" stroke="#4a505a" stroke-width="1.4" stroke-dasharray="4 4" marker-end="url(#ar)"/>
+
+  <!-- legend -->
+  <path d="M30 562 L 62 562" stroke="#4cc9f0" stroke-width="1.8" marker-end="url(#arC)"/>
+  <text x="74" y="566" font-size="10.5" fill="#8a8f9a">the sandbox <tspan fill="#4cc9f0">READS</tspan> the engine's live buffers — preceded by ensureCpuAttrsFresh() / ensureAgentStoreFresh() whenever the GPU owns them</text>
+  <path d="M30 582 L 62 582" stroke="#e05050" stroke-width="1.8" stroke-dasharray="5 4"/>
+  <path d="M38 576 L 54 590 M54 576 L 38 590" stroke="#e05050" stroke-width="2"/>
+  <text x="74" y="586" font-size="10.5" fill="#8a8f9a">its <tspan fill="#e05050">WRITES never reach the engine</tspan> — they land in the shadow and come back as the Values table; the real buffers hash identical around a trace</text>
+  <path d="M30 602 L 62 602" stroke="#4a505a" stroke-width="1.6" stroke-dasharray="4 4" marker-end="url(#ar)"/>
+  <text x="74" y="606" font-size="10.5" fill="#8a8f9a">the same graph also takes the normal path — and that emit does not change by one byte</text>
+</svg>
+</div>
+<p class="cap"><b>The same graph goes down two paths.</b> On the left it is compiled normally and hands JS, WASM or WebGPU the code that steps the real grid — <em>that emit does not change by one byte</em> (proved, not asserted: <code>check-compile-identity --compare</code>). On the trace path it is compiled a second time with the records, run for <b>one</b> element inside the sandbox, and the result is a message. The sandbox <b>reads</b> the engine's live buffers; nothing it writes can get back out.</p>
+
+<h3>The cadence — how often a trace runs</h3>
+<div class="grid3">
+  <div class="box"><h4 style="color:var(--ok)">Sampled &#8212; once per frame</h4><p style="margin:0;color:var(--muted)">The default while playing. One trace per root at the <b>end of the batch</b>, on the state the next generation will read — i.e. the board on screen &#8594; what it does next. On WebGPU that is <b>one readback per frame</b>, which the inspector already pays for.</p></div>
+  <div class="box warnbox"><h4 style="color:var(--accent)">Every generation &#8212; only with breakpoints</h4><p style="margin:0;color:var(--muted)">The worker must decide whether to pause, so it traces <b>before</b> each generation in all three batch loops. On WebGPU this costs a grid readback per generation — a debugging cost, paid only by a breakpoint session, never by default.</p></div>
+  <div class="box"><h4>On demand</h4><p style="margin:0;color:var(--muted)">When the target is set, after a paint, a paste, a Reset, a recompile or a state load, and whenever the simulation is paused. The trace of the board on screen, on request.</p></div>
+</div>
+
+<div class="note warn"><b>GPU-resident agents stand down under breakpoints.</b> A resident agent batch reads the CPU store back only once per frame, so it cannot host a per-generation hook. <code>agentResidentEligible()</code> gains one runtime term: an <em>agent</em> target with breakpoints runs the per-generation path (slower, correct). <b>Sampled</b> tracing keeps residency untouched.</div>
+
+<!-- ══════════════════════════════════════════════════════════ -->
+<h2>8 · Doctrine — hide, grey, or enabled <span class="tag">an enabled control must do something</span></h2>
+
+<table>
+  <tr><th style="width:24%">Control</th><th style="width:26%">Situation</th><th style="width:14%">Disposition</th><th>Why</th></tr>
+  <tr><td><b>Trace</b> button (cell &amp; agent inspector)</td><td>Simulator tab, Modeler — anywhere but Live</td><td class="bad">HIDE</td><td>The graph is not on screen: the feature is <b>structurally</b> unreachable from this panel. A greyed row would only raise "why is this here?".</td></tr>
+  <tr><td><b>Trace</b> button</td><td>a transient sweep popover</td><td class="bad">HIDE</td><td>The popover is about to be discarded — the Follow precedent, unchanged.</td></tr>
+  <tr><td>Live bar <b>chip</b> <span class="chip trace" style="height:17px;font-size:9.5px"><span class="dot"></span>Tracing cell</span></td><td>outside Live</td><td class="bad">HIDE</td><td>The Live viewport bar exists only in Live. Outside it there is no chip because there is no bar.</td></tr>
+  <tr><td>The <b>Trace panel</b></td><td>no target</td><td class="bad">ABSENT (hide)</td><td>Nothing to show, and an empty drawer would steal height from the graph it annotates (D7).</td></tr>
+  <tr><td><b>Resume &#9205; / Pause &#9208;</b></td><td>always</td><td class="good">ENABLED</td><td>They <em>are</em> the simulator's transport — the trace does not own a second clock.</td></tr>
+  <tr><td><b>Step generation &#9197;</b></td><td>always</td><td class="good">ENABLED</td><td>The transport's own Step (<span class="kbd">Space</span>).</td></tr>
+  <tr><td><b>Step node &#10515; / Back &#10514;</b></td><td>cursor at the end / the start of the log</td><td class="mid">GREY, reason in tooltip</td><td><b>Temporarily</b> unavailable — one more trace or one step back makes it live again. Greying keeps the row's shape stable while stepping.</td></tr>
+  <tr><td><b>Whole trace &#10226;</b></td><td>cursor already cleared</td><td class="mid">GREY</td><td>The state it would set is the state you are in.</td></tr>
+  <tr><td><b>Breakpoint</b> context-menu item</td><td>outside Live</td><td class="bad">HIDE</td><td>The trace cannot run there, so the breakpoint could never fire.</td></tr>
+  <tr><td>Breakpoint <b>glyph</b> on a node</td><td>whenever one is set</td><td class="good">SHOWN</td><td>Drawn from a static set through <code>useSyncExternalStore</code> — no per-trace work in <code>CaNode</code>.</td></tr>
+  <tr><td><span class="kbd">]</span> / <span class="kbd">[</span></td><td>no target · typing in a field · a dialog or menu owns the keyboard · capture review</td><td class="mid">STAND DOWN</td><td>The existing Phase-4 input-ownership gate, unchanged. Bound <b>once</b>, in the Live shell — never in both views.</td></tr>
+  <tr><td>"approximate" header line</td><td>synchronous models</td><td class="bad">ABSENT</td><td>It is only true under asynchronous updates; printing it always would train users to ignore it.</td></tr>
+</table>
+
+<!-- ══════════════════════════════════════════════════════════ -->
+<h2>9 · 2D and 3D, cells and agents <span class="tag">the trace is dimension-blind; only the mark has two bodies</span></h2>
+
+<div class="grid4">
+  <div>
+    <div class="svgbox" style="margin:0;padding:8px">
+      <svg viewBox="0 0 320 192"><use href="#board"/><use href="#tracemark"/></svg>
+    </div>
+    <p class="cap"><b>2D cell.</b> An outline in the trace accent, drawn in the overlay pass next to the inspector's own cell outline.</p>
+  </div>
+  <div>
+    <div class="svgbox" style="margin:0;padding:8px">
+      <svg viewBox="0 0 260 156" style="background:#0a0b0e">
+        <use href="#cube" x="100" y="30"/><use href="#cube" x="76" y="42"/><use href="#cube" x="124" y="42"/>
+        <use href="#cube" x="52" y="54"/><use href="#cube" x="100" y="54"/><use href="#cube" x="148" y="54"/>
+        <use href="#cube" x="76" y="66"/><use href="#cube" x="124" y="66"/><use href="#cube" x="100" y="78"/>
+        <path d="M112 48 L 130 57 L 112 66 L 94 57 Z" fill="none" stroke="#e879c2" stroke-width="1.8"/>
+        <path d="M112 66 L 112 84 M94 57 L 94 75 M130 57 L 130 75" stroke="#e879c2" stroke-width="1" opacity=".55"/>
+        <path d="M94 75 L 112 84 L 130 75" fill="none" stroke="#e879c2" stroke-width="1" opacity=".55"/>
+        <text x="196" y="40" font-size="9" fill="#e879c2">(4, 9, 2)</text>
+        <path d="M136 52 L 192 38" stroke="#e879c2" stroke-width="0.8" opacity=".6"/>
+      </svg>
+    </div>
+    <p class="cap"><b>3D cell.</b> The same target, published through the 3D renderer's inspect-cells channel with a distinct style — a voxel cage rather than a flat outline.</p>
+  </div>
+  <div>
+    <div class="svgbox" style="margin:0;padding:8px">
+      <svg viewBox="0 0 260 156" style="background:#0a0b0e">
+        <g fill="#7e57c2">
+          <circle cx="46" cy="40" r="5"/><circle cx="88" cy="28" r="5"/><circle cx="128" cy="52" r="5"/>
+          <circle cx="180" cy="36" r="5"/><circle cx="214" cy="64" r="5"/><circle cx="62" cy="88" r="5"/>
+          <circle cx="104" cy="104" r="5"/><circle cx="168" cy="96" r="5"/><circle cx="206" cy="120" r="5"/>
+          <circle cx="34" cy="122" r="5"/><circle cx="140" cy="130" r="5"/><circle cx="82" cy="62" r="5"/>
+        </g>
+        <circle cx="132" cy="78" r="5" fill="#b39ddb"/>
+        <circle cx="132" cy="78" r="12" fill="none" stroke="#e879c2" stroke-width="1.8"/>
+        <path d="M132 78 L 152 70" stroke="#e879c2" stroke-width="1.2"/>
+        <text x="150" y="62" font-size="9" fill="#e879c2">#1487</text>
+      </svg>
+    </div>
+    <p class="cap"><b>2D agent.</b> A ring in the trace accent — deliberately the same shape as Follow's ring, in a different hue, because they mean different things.</p>
+  </div>
+  <div>
+    <div class="svgbox" style="margin:0;padding:8px">
+      <svg viewBox="0 0 260 156" style="background:#0a0b0e">
+        <path d="M20 118 L 130 150 L 240 118 L 130 86 Z" fill="none" stroke="#1e2530" stroke-width="1"/>
+        <path d="M75 102 L 185 134 M185 102 L 75 134" stroke="#1a212b" stroke-width="1"/>
+        <g fill="#7e57c2">
+          <circle cx="66" cy="66" r="4"/><circle cx="108" cy="44" r="6"/><circle cx="158" cy="60" r="5"/>
+          <circle cx="198" cy="86" r="4"/><circle cx="84" cy="98" r="6"/><circle cx="176" cy="110" r="5"/>
+          <circle cx="44" cy="92" r="4"/><circle cx="214" cy="52" r="3"/>
+        </g>
+        <circle cx="132" cy="88" r="6" fill="#b39ddb"/>
+        <ellipse cx="132" cy="88" rx="15" ry="7" fill="none" stroke="#e879c2" stroke-width="1.8"/>
+        <path d="M132 88 L 132 106" stroke="#e879c2" stroke-width="1" opacity=".6"/>
+        <ellipse cx="132" cy="106" rx="9" ry="4" fill="none" stroke="#e879c2" stroke-width="1" opacity=".45"/>
+      </svg>
+    </div>
+    <p class="cap"><b>3D agent.</b> The ring becomes an orbit ring with a drop line to the floor, so the depth is readable — the 3D inspector's existing idiom.</p>
+  </div>
+</div>
+<p class="cap"><b>The trace itself does not know which one it is.</b> An element is a flat index: <code>idx</code> for a cell (the <code>_layer</code> decode happens inside the body exactly as it does in the engine), an id for an agent. What has two bodies is the <b>mark</b> — the 2D overlay draw and the 3D renderer's inspect channel — and both entry points already open the <em>same</em> popover, so the Trace button is written once. Verified on Game of Life and Wireworld (2D), Life3D and Accretor (3D), Particle Life in both.</p>
+
+<!-- ══════════════════════════════════════════════════════════ -->
+<h2>10 · What the trace cannot promise <span class="tag">stated in the UI, not buried in a doc</span></h2>
+
+<div class="grid3">
+  <div class="box warnbox"><h4>Random draws are the trace's own</h4><p style="margin:0;color:var(--muted)">The trace runs a <b>private</b> RNG seeded from <code>(element, generation)</code> — stable when you re-trace the same generation, but <b>not</b> the draw the engine made. On JS and WASM the shared stream's state at this element depends on every earlier element's draws in the same generation; on WebGPU the per-cell PCG state lives on the GPU.</p></div>
+  <div class="box warnbox"><h4>Asynchronous updates are approximate</h4><p style="margin:0;color:var(--muted)">The trace evaluates against the <b>start-of-generation</b> state; a real async pass may have updated neighbours earlier in this generation's order. The Values header says so on every async model — <em>"approximate under asynchronous updates"</em>.</p></div>
+  <div class="box warnbox"><h4>WebGPU is f32; the trace is f64</h4><p style="margin:0;color:var(--muted)">A documented, intentional difference of the WebGPU target. Values can differ in the last bits — the shape of the rule and the branch taken do not.</p></div>
+</div>
+
+<div class="note"><b>Everywhere else, the trace's "next values" are exactly what the engine writes.</b> The trace is the <b>JS reference compile</b>, and the reference is bit-identical to WASM by contract — so on a synchronous, non-random model the prediction is the value the engine produces. The panel makes that checkable on screen: the previous trace's prediction sits beside the now-current value from the inspect subscription.</div>
+
+<div class="note bad"><b>And two things it is deliberately not.</b> Not conditional breakpoints, data breakpoints, or breakpoints on value nodes; not editing a value mid-trace and re-running from the cursor; not several elements at once; not a trace history saved to a file; and not the Overseer graph, which is not a per-element rule. Recorded so nobody re-derives them (brainstorm §5).</div>
+
+<!-- ══════════════════════════════════════════════════════════ -->
+<h2>11 · Delivery order <span class="tag">one Opus session per phase</span></h2>
+
+<div class="phases">
+  <div class="ph done"><div class="n">P0</div><h5>This document</h5><p>The illustrated plan.</p></div>
+  <div class="ph"><div class="n">P1</div><h5>Compiler + runner</h5><p>The <code>trace</code> option, the origin maps, <code>traceRunner.ts</code>, the harness, the identity surfaces.</p></div>
+  <div class="ph"><div class="n">P2</div><h5>Worker</h5><p>Root registry, messages, the cadence hook in the three batch loops, breakpoints, GPU freshness, lifecycle.</p></div>
+  <div class="ph"><div class="n">P3</div><h5>SimulatorView</h5><p>Inspector buttons, chip, 2D/3D marks, the trace store, origin resolution, the two keys.</p></div>
+  <div class="ph"><div class="n">P4</div><h5>Graph editor</h5><p>Highlight classes, cursor, breakpoint glyph + menu, hover tooltips, macro scopes.</p></div>
+  <div class="ph"><div class="n">P5</div><h5>Trace panel</h5><p>Transport, timeline, Values / Steps / Breakpoints.</p></div>
+  <div class="ph"><div class="n">P6</div><h5>Docs</h5><p><code>docs/areas/rule-trace.md</code>, routing row, Help chapter, README, handoff.</p></div>
+  <div class="ph"><div class="n">P7</div><h5>Adversarial review</h5><p>Read-only findings against I1–I8 and the traps, then a fix session.</p></div>
+</div>
+
+<div class="note tr"><b>The invariants every phase is measured against.</b> I1 the normal emit stays byte-identical · I2 the trace never writes engine state · I3 a trace reads fresh state · I4 a breakpoint pauses before the generation and fires once · I5 no React re-render per trace · I6 every lowered id resolves · I7 Live-only surfaces are hidden elsewhere · I8 2D and 3D, cells and agents, JS / WASM / WebGPU.</div>
+
+</div>
+</body>
+</html>
