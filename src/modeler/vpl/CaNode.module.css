@@ -799,3 +799,36 @@
 .scopeMoving {
   opacity: 0.55;
 }
+
+/* RULE TRACE (P4) — the breakpoint marker.
+   Decision A2: a red dot WITH A WHITE RING, so it stays legible on every header
+   colour the catalogue uses (including the red `Set Attribute` family, where a
+   bare red dot disappears). It sits INSIDE the header as its first flex child
+   rather than in a gutter outside the node box: the node's left edge at header
+   height is already occupied by the main flow-in handle (`renderMainFlowHandle`
+   pins it there), and a marker overlapping an exec pin is worse than one that
+   shifts the title 15px. Matches the illustrated plan's §3 drawing. */
+.breakpointDot {
+  /* inline-block so it also works in the COLLAPSED header, which is not a flex
+     container (a flex parent blockifies it anyway). */
+  display: inline-block;
+  vertical-align: middle;
+  flex: 0 0 auto;
+  width: 10px;
+  height: 10px;
+  margin-right: var(--space-2);
+  border-radius: 50%;
+  background: var(--color-danger);
+  border: 1.5px solid #fff;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.5);
+  cursor: help;
+  pointer-events: auto;
+}
+
+/* Disabled ⇒ HOLLOW. The mark is still where the user put it; it just is not
+   armed, which is exactly what an outline says. */
+.breakpointDotOff {
+  background: transparent;
+  box-shadow: none;
+  opacity: 0.85;
+}

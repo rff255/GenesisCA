@@ -374,3 +374,106 @@
 .scopeNoticeWarn {
   border-color: var(--color-warning, #e8a13a);
 }
+
+/* =========================================================================
+   RULE TRACE (P4) — the lit path.
+   =========================================================================
+   ⚠ THE STATE IS CARRIED BY A `data-trace` ATTRIBUTE, NOT BY CLASS NAMES, and
+   that is load-bearing rather than a matter of taste. React Flow OWNS the
+   `className` of `.react-flow__node` / `.react-flow__edge` (it rebuilds it from
+   `cc([... , { selected, draggable, … }])` on every render), so a class added
+   imperatively is silently wiped the next time any of those flags flips —
+   selecting a lit node would drop its glow until the next trace, and while
+   PAUSED it would simply never come back. React writes no unknown attribute, so
+   `data-trace` survives every re-render. Tokens (space-separated):
+
+     hit       executed at or before the cursor (a node, or a reroute dot whose
+               relayed value has a record)
+     current   the flow node the cursor is standing on
+     dark      exists in this scope, has NO record in this trace
+     flow      (edges) a taken flow wire whose target has run
+     value     (edges) a value wire whose source port produced a record
+
+   `dark` is deliberately UNSTYLED: the plan's §3 is explicit that *the trace
+   adds light, it never greys the rest of the graph* — a not-reached node is
+   drawn exactly as it normally looks. The token is still written, because it is
+   the DOM signal the verification asserts against and the hook P5/P6 will want.
+
+   Every colour comes from `--color-trace` / `--color-trace-soft` (decision A4).
+*/
+
+:global(.react-flow__node[data-trace~="hit"]) {
+  box-shadow:
+    0 0 0 2px var(--color-trace-soft),
+    0 0 10px var(--color-trace-soft);
+  border-radius: var(--radius-lg);
+}
+
+:global(.react-flow__node[data-trace~="current"]) {
+  box-shadow:
+    0 0 0 2px var(--color-trace),
+    0 0 14px var(--color-trace-soft);
+  border-radius: var(--radius-lg);
+  animation: traceCurrentPulse 1.2s ease-in-out infinite;
+}
+
+/* SELECTION MUST STILL READ. `.react-flow__node.selected` above and the two
+   rules above are the same specificity, so without these the trace glow would
+   simply replace the selection ring. The selection ring stays outermost; the
+   trace glow becomes the halo behind it. */
+:global(.react-flow__node.selected[data-trace~="hit"]) {
+  box-shadow:
+    0 0 0 2px var(--color-bg-canvas),
+    0 0 0 4px var(--color-danger),
+    0 0 12px var(--color-trace-soft);
+}
+
+:global(.react-flow__node.selected[data-trace~="current"]) {
+  box-shadow:
+    0 0 0 2px var(--color-trace),
+    0 0 0 4px var(--color-danger),
+    0 0 14px var(--color-trace-soft);
+}
+
+@keyframes traceCurrentPulse {
+  0%, 100% {
+    box-shadow:
+      0 0 0 2px var(--color-trace),
+      0 0 10px var(--color-trace-soft);
+  }
+  50% {
+    box-shadow:
+      0 0 0 3px var(--color-trace),
+      0 0 20px var(--color-trace-soft);
+  }
+}
+
+/* The lit WIRES. `!important` is required, not lazy: `toRFEdges` puts the wire
+   colour in an INLINE `style` on the path, which beats any stylesheet rule. The
+   `:not(.selected)` guard keeps a deliberately selected wire red (the editor's
+   existing selection language) instead of having the trace outrank it. */
+:global(.react-flow__edge:not(.selected)[data-trace~="value"] .react-flow__edge-path) {
+  stroke: var(--color-trace) !important;
+  stroke-width: 2.4 !important;
+}
+
+:global(.react-flow__edge:not(.selected)[data-trace~="flow"] .react-flow__edge-path) {
+  stroke: var(--color-trace) !important;
+  stroke-width: 3.2 !important;
+  animation: traceFlowPulse 1.2s ease-in-out infinite;
+}
+
+/* A PULSE, NOT A MARCHING DASH. The plan's own legend already spends dashes on
+   "not reached", so animating the taken wire as a dash would say the opposite of
+   what it means. The energy travels as an opacity/glow breath instead. */
+@keyframes traceFlowPulse {
+  0%, 100% { opacity: 0.75; }
+  50%      { opacity: 1; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :global(.react-flow__node[data-trace~="current"]),
+  :global(.react-flow__edge[data-trace~="flow"] .react-flow__edge-path) {
+    animation: none;
+  }
+}

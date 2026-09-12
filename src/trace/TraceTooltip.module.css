@@ -1,0 +1,77 @@
+/* RULE TRACE (P4) — the hover tooltip. Portalled to document.body, so it is
+   positioned in CLIENT pixels and owns no pointer events. */
+
+.tooltip {
+  position: fixed;
+  z-index: 10000;
+  pointer-events: none;
+  min-width: 150px;
+  max-width: 320px;
+  padding: var(--space-2) var(--space-3);
+  background: var(--color-bg-canvas);
+  border: 1px solid var(--color-trace);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-md, 0 4px 14px rgba(0, 0, 0, 0.45));
+  font-size: var(--font-2xs);
+  color: var(--color-text-secondary);
+  line-height: 1.45;
+}
+
+.head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-3);
+  margin-bottom: var(--space-1);
+  padding-bottom: var(--space-1);
+  border-bottom: 1px solid var(--color-border);
+}
+
+.title {
+  font-weight: 600;
+  color: var(--color-text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.gen {
+  margin-left: auto;
+  font-size: var(--font-3xs);
+  color: var(--color-text-muted);
+  white-space: nowrap;
+}
+
+.row {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-3);
+}
+
+.label {
+  color: var(--color-text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.value {
+  margin-left: auto;
+  font-weight: 600;
+  color: var(--color-trace);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 190px;
+}
+
+/* A branch name is a NAME, not a measured value — it reads as prose, not as the
+   trace-coloured numbers above it. */
+.flowValue {
+  color: var(--color-text-primary);
+}
+
+.muted {
+  color: var(--color-text-muted);
+  font-style: italic;
+}

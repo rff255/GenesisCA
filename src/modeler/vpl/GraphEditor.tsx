@@ -75,6 +75,20 @@ import { computeAlignmentSnap, sameGuides } from './alignmentSnap';
 import type { AlignGuides, AlignTarget } from './alignmentSnap';
 import { useThemeTokens } from '../../styles/useThemeTokens';
 import { useClearDetailSelections } from '../ModelerDetailContext';
+// RULE TRACE (P4) — the lit path, the cursor, the breakpoint item, the tooltip.
+import {
+  subscribeTrace, selectedEntry, getTraceSession, cursorEventIndex,
+  resolveRecordOrigin, hasBreakpoint, toggleBreakpoint, setMacroDefIndex,
+} from '../../trace/traceState';
+import type { TraceGraphKind } from '../../trace/traceState';
+import {
+  buildEditorTraceIndex, buildMacroDefIndex, buildMacroOutputMap,
+  originInEditorScope, valueConeFrom, traceRootNodeId,
+} from '../../trace/traceGraphMap';
+import type { EditorTraceIndex } from '../../trace/traceGraphMap';
+import { isLinkedOrigin } from './compiler/traceOrigin';
+import { TraceTooltip } from '../../trace/TraceTooltip';
+import type { TraceGraphView, TraceHoverTarget, TraceHoverNode, TraceNodeView } from '../../trace/TraceTooltip';
 import styles from './GraphEditor.module.css';
 
 /** Canvas colors that React-Flow takes as JS props (Background grid, MiniMap)
@@ -165,7 +179,7 @@ function graphKindLabel(kind: ActiveGraphKind): string {
   return kind === 'cells' ? 'Cells' : kind === 'agents' ? 'Agents' : 'Overseer';
 }
 
-import { setIsConnecting, setConnectingFrom, setShowPortLabels, showPortLabelsGlobal, showGridGlobal, setShowGrid as setShowGridGlobal, snapEnabledGlobal, setSnapEnabled as setSnapEnabledGlobal, setConnectedHandlesFromEdges, setConnectionHazards, getSavedGraphViewport, setSavedGraphViewport, savedCurrentScope, setSavedCurrentScope, subscribeCurrentModelElementDrag, setCompatibleHandlesForDrag, clearCompatibleHandlesForDrag, setCurrentModelElementDrag, compatibleHandlesForDrag, currentModelElementDrag, setQuickAddApi, setActiveGraphKind, hasPendingMacroImport, takePendingMacroImport, displayNodeLabel, displayNodeDescription, setControlPick, getControlPick, setOpenMacroScope, getOpenMacroScope, setScopeMoveApi, setScopeDrag, getScopeDrag, type ScopeDragPointer, type ActiveGraphKind } from './graphState';
+import { setIsConnecting, setConnectingFrom, isConnectingGlobal, setShowPortLabels, showPortLabelsGlobal, showGridGlobal, setShowGrid as setShowGridGlobal, snapEnabledGlobal, setSnapEnabled as setSnapEnabledGlobal, setConnectedHandlesFromEdges, setConnectionHazards, getSavedGraphViewport, setSavedGraphViewport, savedCurrentScope, setSavedCurrentScope, subscribeCurrentModelElementDrag, setCompatibleHandlesForDrag, clearCompatibleHandlesForDrag, setCurrentModelElementDrag, compatibleHandlesForDrag, currentModelElementDrag, setQuickAddApi, setActiveGraphKind, hasPendingMacroImport, takePendingMacroImport, displayNodeLabel, displayNodeDescription, setControlPick, getControlPick, setOpenMacroScope, getOpenMacroScope, setScopeMoveApi, setScopeDrag, getScopeDrag, type ScopeDragPointer, type ActiveGraphKind } from './graphState';
 import { modelerUiState } from '../modelerUiState';
 import type { QuickAddPayload } from './graphState';
 import { detectEdgeHazard, isNodeAvailable } from './nodes/nodeValidation';
@@ -747,6 +761,34 @@ function AlignmentGuidesOverlay({ guides }: { guides: AlignGuides | null }) {
 }
 
 // ---------------------------------------------------------------------------
+// RULE TRACE (P4) — one recorded (LOWERED) id, resolved onto the open scope.
+// ---------------------------------------------------------------------------
+
+interface ResolvedTraceRecord {
+  /** The node of the OPEN SCOPE this record lights (the record's own node, or
+   *  the macro-instance node that contains it). */
+  nodeId: string;
+  /** The USER port the record stands for, when the lowering knows it. */
+  portId?: string;
+  /** Which component of a composite port, for a vector / colour lowering. */
+  component?: string;
+  /** How deep the record's own node lives, in macro INSTANCES. Equal to the
+   *  scope depth ⇒ the record IS this node's; deeper ⇒ it rolled up. */
+  depth: number;
+  /** The record's own node id (inside the macro def when `depth` is deeper) —
+   *  the key into the def's `macroOutput` bridge. */
+  innerNodeId: string;
+}
+
+/** May this node type carry a breakpoint? Excluded: the editor-only relays and
+ *  annotations (no `NodeTypeDef` at all — comments, groups, reroutes) and the
+ *  macro INTERFACE boundary nodes, which emit no code to stop at. */
+function canBreakpointNodeType(nodeType: string): boolean {
+  if (nodeType === 'macroInput' || nodeType === 'macroOutput') return false;
+  return !!getNodeDef(nodeType);
+}
+
+// ---------------------------------------------------------------------------
 // Context menu types
 // ---------------------------------------------------------------------------
 
@@ -1054,6 +1096,400 @@ export function GraphEditorInner() {
 
   const currentScopeRef = useRef(currentScope);
   useEffect(() => { currentScopeRef.current = currentScope; }, [currentScope]);
+
+  // =========================================================================
+  // RULE TRACE (P4) — THE IMPERATIVE HIGHLIGHTER
+  // =========================================================================
+  // A trace lands up to ~30×/s. Driving the lit path through React Flow's
+  // `nodes` / `edges` state would re-render the whole node layer that often —
+  // invariant I5 / impact-map Trap 6. So ONE subscriber recomputes three sets
+  // and writes a `data-trace` ATTRIBUTE straight onto the DOM; no React state
+  // is touched, `setNodes` / `setEdges` are never called, and `CaNode` is never
+  // re-rendered by a trace (it subscribes only to the BREAKPOINT set, which is
+  // static between user actions).
+  //
+  // WHY AN ATTRIBUTE AND NOT A CLASS: React Flow rebuilds the wrapper's
+  // `className` from `cc([... , { selected, draggable, … }])` on every render,
+  // so a class added imperatively is wiped the next time any of those flags
+  // flips. Selecting a lit node would drop its glow — permanently, if the run
+  // is paused. React writes no unknown attribute. See GraphEditor.module.css
+  // for the token list and what each one means.
+  //
+  // THE FOUR INPUTS that re-light: a new trace, a cursor move, a selection /
+  // origin-table change (all three arrive on `subscribeTrace`), and the SCOPE /
+  // graph kind the editor is showing (React deps below).
+
+  /** The per-hover view the tooltip reads. A REF, not state — it is replaced on
+   *  every trace and a state write here would defeat the whole exercise. */
+  const traceViewRef = useRef<TraceGraphView | null>(null);
+  const [traceHover, setTraceHover] = useState<TraceHoverTarget | null>(null);
+  /** Elements already located, so a trace costs a Map hit rather than a
+   *  `querySelector` per marked element. `isConnected` catches a remount. */
+  const traceElsRef = useRef(new Map<string, HTMLElement>());
+  /** What currently carries a `data-trace`, so it can be cleared. */
+  const traceMarkedRef = useRef<{ nodes: Set<string>; edges: Set<string> }>({ nodes: new Set(), edges: new Set() });
+  /** The wire index, rebuilt only when the GRAPH changes (never per trace).
+   *  Keyed on the edge array identity + the node COUNT: a node drag replaces the
+   *  node array 60×/s but changes neither wiring nor which nodes are reroutes. */
+  const traceIndexRef = useRef<{ edges: unknown; nodeCount: number; index: EditorTraceIndex } | null>(null);
+  /** loweredId → the node of the OPEN SCOPE it lights (null = not visible here),
+   *  keyed by everything that can invalidate it. */
+  const traceResolveRef = useRef<{ key: string; map: Map<string, ResolvedTraceRecord | null> }>({ key: '', map: new Map() });
+  /** DEV measurement for the perf gate (see `window.__tracePerf`). */
+  const tracePerfRef = useRef({ n: 0, total: 0, max: 0 });
+  /** A pending re-apply and how many are left. See the MOUNT RACE note in
+   *  `applyTraceMarks`. */
+  const traceRetryRef = useRef<{ raf: number | null; left: number }>({ raf: null, left: 3 });
+  /** A node drag is in flight — the trace tooltip stands down for it. Set from
+   *  `onNodeDragStart` / `onNodeDragStop` (which fire for every node, unlike the
+   *  group-drag bookkeeping inside them). */
+  const nodeDragActiveRef = useRef(false);
+
+  /** Every macro INSTANCE in this model → the DEF it instantiates. The trace's
+   *  `macroPath` is in INSTANCE ids, the editor's scope stack is in DEF ids —
+   *  see the header of `src/trace/traceGraphMap.ts`. Published to the store so
+   *  `breakpointLoweredIds` resolves a def-scoped breakpoint the same way. */
+  const macroDefIndex = useMemo(() => buildMacroDefIndex([
+    model.graphNodes,
+    model.agentGraphNodes,
+    model.overseerGraphNodes,
+    ...(model.macroDefs ?? []).map(d => d.nodes),
+  ]), [model]);
+  useEffect(() => { setMacroDefIndex(macroDefIndex); }, [macroDefIndex]);
+  /** def id → which of the instance's OUTPUT ports carries which inner port. */
+  const macroOutputMap = useMemo(() => buildMacroOutputMap(model.macroDefs), [model.macroDefs]);
+
+  const traceElFor = useCallback((id: string, kind: 'node' | 'edge'): HTMLElement | null => {
+    const key = `${kind}:${id}`;
+    const cache = traceElsRef.current;
+    const hit = cache.get(key);
+    if (hit && hit.isConnected) return hit;
+    const root = editorWrapperRef.current;
+    if (!root) return null;
+    const esc = typeof CSS !== 'undefined' && CSS.escape ? CSS.escape(id) : id;
+    const el = root.querySelector(
+      kind === 'node' ? `.react-flow__node[data-id="${esc}"]` : `.react-flow__edge[data-id="${esc}"]`,
+    ) as HTMLElement | null;
+    if (el) cache.set(key, el); else cache.delete(key);
+    return el;
+  }, []);
+
+  const applyTraceMarks = useCallback((isRetry = false) => {
+    const t0 = performance.now();
+    // A fresh (non-retry) invocation restores the retry budget; a retry spends
+    // from the one the invocation that scheduled it left behind.
+    if (!isRetry) traceRetryRef.current.left = 3;
+    const kind: TraceGraphKind | null =
+      activeGraph === 'agents' ? 'agents' : activeGraph === 'cells' ? 'cells' : null;
+    const entry = kind ? selectedEntry(kind) : null;
+
+    /** node id → the `data-trace` token string it should carry. */
+    const nextNodes = new Map<string, string>();
+    const nextEdges = new Map<string, string>();
+    let view: TraceGraphView | null = null;
+
+    if (entry && kind) {
+      const session = getTraceSession();
+      // The editor's stack carries a leading 'root' sentinel that names no def.
+      const scope = currentScopeRef.current.filter(s => s && s !== 'root');
+      const nodesNow = nodesRef.current;
+      const edgesNow = edgesRef.current;
+
+      let ix = traceIndexRef.current;
+      if (!ix || ix.edges !== edgesNow || ix.nodeCount !== nodesNow.length) {
+        ix = { edges: edgesNow, nodeCount: nodesNow.length, index: buildEditorTraceIndex(nodesNow, edgesNow) };
+        traceIndexRef.current = ix;
+      }
+      const index = ix.index;
+
+      const rkey = `${session.originVersion}|${kind}|${scope.join('/')}`;
+      if (traceResolveRef.current.key !== rkey) traceResolveRef.current = { key: rkey, map: new Map() };
+      const rcache = traceResolveRef.current.map;
+      const defOf = (instanceId: string) => macroDefIndex.get(instanceId) ?? instanceId;
+      const resolve = (loweredId: string): ResolvedTraceRecord | null => {
+        const cached = rcache.get(loweredId);
+        if (cached !== undefined) return cached;
+        const origin = resolveRecordOrigin(loweredId, kind);
+        let out: ResolvedTraceRecord | null = null;
+        // A synthesized linked-colour pass has no user node to light at all.
+        if (!isLinkedOrigin(origin)) {
+          const here = originInEditorScope(origin, scope, defOf);
+          if (here.visible) {
+            out = {
+              nodeId: here.nodeId,
+              portId: origin.portId,
+              component: origin.component,
+              depth: (origin.macroPath ?? []).length,
+              innerNodeId: origin.nodeId,
+            };
+          }
+        }
+        rcache.set(loweredId, out);
+        return out;
+      };
+
+      const cursorIdx = cursorEventIndex(entry, session.cursor);
+      const end = cursorIdx === null
+        ? entry.events.length - 1
+        : Math.min(cursorIdx, entry.events.length - 1);
+
+      const viewNodes = new Map<string, TraceNodeView>();
+      const flowHit = new Set<string>();
+      // THE ROOT NODE ITSELF. Its body is the emitted wrapper, so the compiler
+      // records no `f` for it and nothing in the log ever names it — yet it
+      // plainly ran (the trace exists because it did), and the plan lights it.
+      // Only at the top scope: a root cannot live inside a macro.
+      const rootNodeId = scope.length === 0 ? traceRootNodeId(entry.root, nodesNow) : null;
+      const valueHit = new Set<string>();
+      /** `<editorNodeId>:<portId>` — flow ports taken, value ports recorded. */
+      const takenPorts = new Set<string>();
+      const recordedPorts = new Set<string>();
+      const nodeView = (id: string): TraceNodeView => {
+        let v = viewNodes.get(id);
+        if (!v) { v = { flowCount: 0, taken: [], ports: new Map() }; viewNodes.set(id, v); }
+        return v;
+      };
+
+      for (let i = 0; i <= end; i++) {
+        const ev = entry.events[i]!;
+        if (ev[0] === 'q') continue;              // a stubbed host call, not a node
+        const r = resolve(ev[1]);
+        if (!r) continue;
+        const nv = nodeView(r.nodeId);
+        if (ev[0] === 'f') { flowHit.add(r.nodeId); nv.flowCount++; continue; }
+        if (ev[0] === 'o') {
+          // A branch port only means something on the node that OWNS it: a
+          // record rolled up to a macro instance names an INNER port.
+          if (r.depth === scope.length) {
+            if (!nv.taken.includes(ev[2])) nv.taken.push(ev[2]);
+            takenPorts.add(`${r.nodeId}:${ev[2]}`);
+          }
+          continue;
+        }
+        valueHit.add(r.nodeId);
+        const userPort = r.portId ?? ev[2];
+        // Which port(s) of the node IN THIS SCOPE does this record name? Its own
+        // when the record lives here; one level up, the macro instance's output
+        // ports that the def's `macroOutput` bridge maps this inner port onto.
+        let keys: readonly string[];
+        if (r.depth === scope.length) keys = [userPort];
+        else if (r.depth === scope.length + 1) {
+          const defId = macroDefIndex.get(r.nodeId);
+          keys = (defId ? macroOutputMap.get(defId)?.get(`${r.innerNodeId}:${userPort}`) : undefined) ?? [];
+        } else keys = [];
+        for (const k of keys) {
+          let rec = nv.ports.get(k);
+          if (!rec) { rec = {}; nv.ports.set(k, rec); }
+          if (r.component) {
+            if (!rec.components) rec.components = {};
+            rec.components[r.component] = ev[3];
+          } else {
+            rec.value = ev[3];
+          }
+          recordedPorts.add(`${r.nodeId}:${k}`);
+        }
+      }
+
+      if (rootNodeId) {
+        flowHit.add(rootNodeId);
+        const rv = nodeView(rootNodeId);
+        if (rv.flowCount === 0) rv.flowCount = 1;
+      }
+
+      // WHAT IS LIT (decision D3). With no cursor: everything with a record —
+      // the whole trace. With a cursor at flow event k: every flow node that ran
+      // up to k, plus the VALUE CONE of those nodes (a value with a record that
+      // nothing executed has consumed yet stays dark — and it matters, because
+      // the JS compiler hoists values ABOVE the flow, so nearly every value
+      // record precedes the first flow record in the log).
+      let litNodes: Set<string>;
+      if (cursorIdx === null) {
+        litNodes = new Set(viewNodes.keys());
+      } else {
+        litNodes = new Set(flowHit);
+        const cone = valueConeFrom(flowHit, index);
+        for (const id of valueHit) if (cone.has(id)) litNodes.add(id);
+      }
+
+      let currentId: string | null = null;
+      if (cursorIdx !== null) {
+        const ev = entry.events[cursorIdx];
+        if (ev && ev[0] === 'f') currentId = resolve(ev[1])?.nodeId ?? null;
+      }
+
+      for (const id of litNodes) nextNodes.set(id, id === currentId ? 'hit current' : 'hit');
+
+      const valueWireLit = (nodeId: string, portId: string): boolean =>
+        litNodes.has(nodeId) && recordedPorts.has(`${nodeId}:${portId}`);
+
+      // REROUTES are editor-only relays with no record of their own: a dot lights
+      // when the value (or the flow port) it RELAYS did.
+      for (const [rid, o] of index.rerouteOrigin) {
+        const lit = o.category === 'value'
+          ? valueWireLit(o.nodeId, o.portId)
+          : takenPorts.has(`${o.nodeId}:${o.portId}`);
+        if (lit && !nextNodes.has(rid)) nextNodes.set(rid, 'hit');
+      }
+
+      for (const e of edgesNow) {
+        const o = index.edgeOrigin.get(e.id);
+        if (!o) continue;
+        if (o.category === 'value') {
+          if (valueWireLit(o.nodeId, o.portId)) nextEdges.set(e.id, 'value');
+        } else if (takenPorts.has(`${o.nodeId}:${o.portId}`) || o.nodeId === rootNodeId) {
+          // A taken branch whose body has not been reached yet stays dark — that
+          // is what makes `]` walk the chain one wire at a time.
+          const targets = index.edgeTargets.get(e.id) ?? [];
+          if (targets.some(t => flowHit.has(t))) nextEdges.set(e.id, 'flow');
+        }
+      }
+
+      // `dark` = in this graph, no record in THIS trace. Written for the DOM
+      // signal only; the plan is explicit that the trace ADDS light and never
+      // greys the rest, so the token carries no visual style.
+      for (const n of nodesNow) {
+        if (nextNodes.has(n.id) || index.reroutes.has(n.id)) continue;
+        const t = (n.data as { nodeType?: string } | undefined)?.nodeType;
+        // Comments / groups have no def; the macro INTERFACE nodes emit no code.
+        if (!t || t === 'macroInput' || t === 'macroOutput' || !getNodeDef(t)) continue;
+        nextNodes.set(n.id, 'dark');
+      }
+
+      view = {
+        gen: entry.gen,
+        approximate: entry.approximate,
+        nodes: viewNodes,
+        edgeOrigin: index.edgeOrigin,
+        valueInputOrigin: index.valueInputOrigin,
+      };
+    }
+
+    traceViewRef.current = view;
+
+    // --- write the DOM ---------------------------------------------------
+    const marked = traceMarkedRef.current;
+    for (const id of marked.nodes) if (!nextNodes.has(id)) traceElFor(id, 'node')?.removeAttribute('data-trace');
+    for (const id of marked.edges) if (!nextEdges.has(id)) traceElFor(id, 'edge')?.removeAttribute('data-trace');
+    // Applied UNCONDITIONALLY for every current member rather than only for the
+    // diff's additions: React Flow can remount an element (which drops the
+    // attribute) without the set changing, and `setAttribute` on an unchanged
+    // value is free.
+    let missing = 0;
+    for (const [id, tok] of nextNodes) {
+      const el = traceElFor(id, 'node');
+      if (!el) { missing++; continue; }
+      if (el.getAttribute('data-trace') !== tok) el.setAttribute('data-trace', tok);
+    }
+    for (const [id, tok] of nextEdges) {
+      const el = traceElFor(id, 'edge');
+      if (!el) { missing++; continue; }
+      if (el.getAttribute('data-trace') !== tok) el.setAttribute('data-trace', tok);
+    }
+    traceMarkedRef.current = { nodes: new Set(nextNodes.keys()), edges: new Set(nextEdges.keys()) };
+
+    // ⚠ THE MOUNT RACE, and it is not theoretical — it was the one real defect
+    // the live run surfaced. Entering a macro is TWO passive effects in one
+    // flush: this one (declared earlier, so it runs FIRST and sees `currentScope`
+    // already changed) and the scope effect that actually calls `setNodes`. So
+    // the marks for the new scope are computed correctly and written to elements
+    // that do not exist yet, and while the simulation is PAUSED no further trace
+    // ever arrives to write them again — the inner path stayed dark until the
+    // user stepped. One rAF (bounded, so a genuinely absent id cannot spin)
+    // closes it, and it covers a React Flow remount for free.
+    const retry = traceRetryRef.current;
+    if (missing > 0 && retry.raf === null && retry.left > 0) {
+      retry.left--;
+      retry.raf = requestAnimationFrame(() => {
+        traceRetryRef.current.raf = null;
+        applyTraceMarksRef.current(true);
+      });
+    }
+
+    const dt = performance.now() - t0;
+    const p = tracePerfRef.current;
+    p.n++; p.total += dt; if (dt > p.max) p.max = dt;
+  }, [activeGraph, macroDefIndex, macroOutputMap, traceElFor]);
+
+  const applyTraceMarksRef = useRef(applyTraceMarks);
+  applyTraceMarksRef.current = applyTraceMarks;
+
+  // ONE subscription to BOTH channels — a new trace, a cursor step, a pinned
+  // selection and an origin-table swap all re-light.
+  useEffect(() => {
+    applyTraceMarks();
+    return subscribeTrace(applyTraceMarks);
+  }, [applyTraceMarks, currentScope]);
+
+  // The GRAPH changed under a live trace (a node added, a wire drawn): re-light
+  // without re-subscribing. Deliberately NOT keyed on the node array identity —
+  // that is replaced on every drag tick and nothing about the marks moves.
+  useEffect(() => { applyTraceMarksRef.current(); }, [nodes.length, edges]);
+
+  // Leave no mark behind: the editor unmounts on every Modeler → Simulator tab
+  // switch, and React Flow would otherwise reuse a marked element.
+  useEffect(() => () => {
+    const retry = traceRetryRef.current;
+    if (retry.raf !== null) { cancelAnimationFrame(retry.raf); retry.raf = null; }
+    for (const el of traceElsRef.current.values()) if (el.isConnected) el.removeAttribute('data-trace');
+    traceElsRef.current.clear();
+    traceMarkedRef.current = { nodes: new Set(), edges: new Set() };
+    traceViewRef.current = null;
+  }, []);
+
+  // DEV hooks: the marks live in the DOM and the view in a ref, so a probe has
+  // no other way in (the `__getOpenMacroScope` precedent).
+  useEffect(() => {
+    if (!import.meta.env.DEV) return undefined;
+    const w = window as unknown as Record<string, unknown>;
+    w.__traceMarks = () => ({
+      nodes: [...traceMarkedRef.current.nodes].map(id => ({ id, tok: traceElFor(id, 'node')?.getAttribute('data-trace') ?? null })),
+      edges: [...traceMarkedRef.current.edges].map(id => ({ id, tok: traceElFor(id, 'edge')?.getAttribute('data-trace') ?? null })),
+    });
+    w.__traceView = () => {
+      const v = traceViewRef.current;
+      return v && {
+        gen: v.gen,
+        approximate: v.approximate,
+        nodes: [...v.nodes].map(([id, nv]) => ({
+          id, flowCount: nv.flowCount, taken: nv.taken, ports: [...nv.ports].map(([p, r]) => [p, r]),
+        })),
+      };
+    };
+    w.__tracePerf = (reset?: boolean) => {
+      const p = tracePerfRef.current;
+      const out = { n: p.n, mean: p.n ? p.total / p.n : 0, max: p.max };
+      if (reset) { p.n = 0; p.total = 0; p.max = 0; }
+      return out;
+    };
+    return () => { delete w.__traceMarks; delete w.__traceView; delete w.__tracePerf; };
+  }, [traceElFor]);
+
+  /** The hovered node's data, for the tooltip (which never touches RF's store). */
+  const traceLookupNode = useCallback((id: string): TraceHoverNode | null => {
+    const n = nodesRef.current.find(x => x.id === id);
+    const d = n?.data as { nodeType?: string; config?: Record<string, unknown>; label?: string } | undefined;
+    if (!d?.nodeType) return null;
+    return {
+      nodeType: d.nodeType,
+      config: d.config ?? {},
+      ...(typeof d.label === 'string' && d.label ? { label: d.label } : {}),
+    };
+  }, []);
+
+  /** Hover is offered ONLY while a trace is on screen for this graph, and never
+   *  during a drag or a connection (a tooltip under a wire being dragged is in
+   *  the way, and React Flow keeps firing enter/leave through both). */
+  const traceHoverAllowed = useCallback(
+    () => traceViewRef.current !== null && !isConnectingGlobal && !nodeDragActiveRef.current, []);
+  const onTraceNodeEnter = useCallback((event: React.MouseEvent, node: Node) => {
+    if (!traceHoverAllowed()) return;
+    setTraceHover({ kind: 'node', id: node.id, x: event.clientX, y: event.clientY });
+  }, [traceHoverAllowed]);
+  const onTraceEdgeEnter = useCallback((event: React.MouseEvent, edge: Edge) => {
+    if (!traceHoverAllowed()) return;
+    setTraceHover({ kind: 'edge', id: edge.id, x: event.clientX, y: event.clientY });
+  }, [traceHoverAllowed]);
+  const onTraceHoverLeave = useCallback(() => setTraceHover(null), []);
 
   // --- Browser "back" exits the macro view instead of leaving the site ---
   // One same-document pushState entry per macro level currently entered,
@@ -2169,6 +2605,10 @@ export function GraphEditorInner() {
   // at drag-start won't be picked up mid-drag.
   const onNodeDragStart = useCallback(
     (_event: React.MouseEvent, node: Node) => {
+      // RULE TRACE (P4) — before the group-only early return: the trace tooltip
+      // stands down for EVERY node drag, not just a group's.
+      nodeDragActiveRef.current = true;
+      setTraceHover(null);
       if (node.type !== 'groupNode') return;
       const { w, h } = nodeSize(node);
       const rect = {
@@ -2206,6 +2646,7 @@ export function GraphEditorInner() {
 
   const onNodeDragStop = useCallback(
     (_event: React.MouseEvent, node: Node) => {
+      nodeDragActiveRef.current = false;
       if (groupDragRef.current?.groupId === node.id) {
         groupDragRef.current = null;
       }
@@ -5508,6 +5949,10 @@ export function GraphEditorInner() {
         onNodeDragStart={onNodeDragStart}
         onNodeDragStop={onNodeDragStop}
         onNodeDoubleClick={onNodeDoubleClick}
+        onNodeMouseEnter={onTraceNodeEnter}
+        onNodeMouseLeave={onTraceHoverLeave}
+        onEdgeMouseEnter={onTraceEdgeEnter}
+        onEdgeMouseLeave={onTraceHoverLeave}
         onEdgeDoubleClick={(_event, edge) => { setEdges(eds => eds.filter(e => e.id !== edge.id)); scheduleSync(); }}
         nodeTypes={nodeTypes}
         // Restore the user's last pan/zoom across ModelerView unmounts (tab
@@ -5599,6 +6044,20 @@ export function GraphEditorInner() {
           }}
         />
       </ReactFlow>
+
+      {/* RULE TRACE (P4) — the hover tooltip. Rendered here but PORTALLED to
+          document.body: a `position: fixed` surface born inside React Flow's
+          transformed viewport is positioned against the transform. It is shown
+          only while a trace is on screen for this graph (the handlers gate on
+          it) and while the context menu is closed. */}
+      {traceHover && !contextMenu && (
+        <TraceTooltip
+          hover={traceHover}
+          viewRef={traceViewRef}
+          lookupNode={traceLookupNode}
+          model={model}
+        />
+      )}
 
       {/* Unified context menu */}
       {contextMenu && (
@@ -5781,6 +6240,40 @@ export function GraphEditorInner() {
             <>
               <div className={styles.contextTitle}>{contextMenu.target.nodeType === 'reroute' ? 'Reroute' : 'Node'}</div>
               <button className={styles.contextItem} onClick={e => { e.stopPropagation(); renameNode(); }}>Rename</button>
+              {/* RULE TRACE (P4) — BREAKPOINT.
+                  LIVE-ONLY, and hidden (not greyed) elsewhere: outside Live
+                  there is no running simulation for a breakpoint to pause and
+                  no graph pane beside it, so the user cannot reach the working
+                  state from this menu — the doctrine's "structurally
+                  impossible ⇒ HIDE" arm. Also hidden on the Overseer graph
+                  (the experiment orchestrator is never traced) and on the node
+                  types that emit no code to stop at. */}
+              {getLiveShown() && activeGraph !== 'overseer'
+                && canBreakpointNodeType(contextMenu.target.nodeType) && (() => {
+                const nid = (contextMenu.target as { nodeId: string }).nodeId;
+                const bpKind: TraceGraphKind = activeGraph === 'agents' ? 'agents' : 'cells';
+                // The editor's scope names macro DEFS; so does a breakpoint's
+                // key (see `src/trace/traceGraphMap.ts`). A mark set inside a
+                // def therefore arms in every instance of that def, which is
+                // the only thing a def-scoped editor can honestly promise.
+                const bpScope = currentScope.filter(s => s && s !== 'root');
+                const existing = hasBreakpoint(bpKind, bpScope, nid);
+                return (
+                  <button
+                    className={styles.contextItem}
+                    title={existing
+                      ? 'Remove the breakpoint on this node'
+                      : 'Pause the run just before the generation in which this node runs'}
+                    onClick={e => {
+                      e.stopPropagation();
+                      setContextMenu(null);
+                      toggleBreakpoint({ graphKind: bpKind, macroPath: bpScope, nodeId: nid });
+                    }}
+                  >
+                    {existing ? '✓ Breakpoint' : 'Breakpoint'}
+                  </button>
+                );
+              })()}
               {contextMenu.target.nodeType === 'reroute' && (
                 <button
                   className={styles.contextItem}

@@ -95,6 +95,26 @@ import {
   subscribeScopeDrag,
   scopeMoveApi,
 } from './graphState';
+import { hasBreakpoint, subscribeTraceSession } from '../../trace/traceState';
+
+/** RULE TRACE (P4) — this node's breakpoint state as a PRIMITIVE:
+ *  0 = none · 1 = enabled · 2 = disabled.
+ *
+ *  ⚠ Primitive on purpose. `useSyncExternalStore` calls this on EVERY session
+ *  notification (a cursor step, a pause, a lost target), once per mounted node —
+ *  so the snapshot has to compare equal for the ~300 nodes whose own mark did
+ *  not move, or a keystroke would re-render the whole canvas. Returning the
+ *  `BreakpointDef` object would also work (the Map copy keeps entry identity),
+ *  but a number cannot be got wrong by a later refactor.
+ *
+ *  The KEY's macro path is the editor's open DEF path (`getOpenMacroScope`) —
+ *  see the two-id-spaces note in `src/trace/traceGraphMap.ts`. */
+function breakpointStateFor(nodeId: string): 0 | 1 | 2 {
+  const kind = getActiveGraphKind();
+  if (kind !== 'cells' && kind !== 'agents') return 0;   // the Overseer never traces
+  const bp = hasBreakpoint(kind, getOpenMacroScope(), nodeId);
+  return bp ? (bp.enabled ? 1 : 2) : 0;
+}
 
 /** Snapshot getter for useSyncExternalStore — must return a stable reference
  *  when nothing changed (otherwise React thinks the store keeps changing).
@@ -1139,6 +1159,22 @@ function CaNodeComponent({ id, data, selected }: NodeProps) {
   // 100 ms debounce, so an instance-side write would be clobbered.
   const openScopeIds = useSyncExternalStore(subscribeOpenMacroScope, getOpenMacroScope);
 
+  // RULE TRACE (P4) — the breakpoint marker. Session channel only: a TRACE
+  // never re-renders a node (invariant I5); only setting / clearing / disabling
+  // a mark does. `openScopeIds` above already re-renders this node on a scope
+  // change, which is the other input to the key.
+  const bpState = useSyncExternalStore(subscribeTraceSession, () => breakpointStateFor(id));
+  const breakpointGlyph = bpState === 0 ? null : (
+    <span
+      className={bpState === 1
+        ? styles.breakpointDot
+        : `${styles.breakpointDot} ${styles.breakpointDotOff}`}
+      title={bpState === 1
+        ? 'Breakpoint — the trace pauses before this generation when this node runs'
+        : 'Breakpoint (disabled) — the trace does not pause here'}
+    />
+  );
+
   /**
    * The interface this instance renders, already SECTIONED.
    *
@@ -1901,6 +1937,7 @@ function CaNodeComponent({ id, data, selected }: NodeProps) {
           <div className={styles.collapsedColorSwatch} style={{ background: colorSwatchHex }} />
         ) : (
           <div className={styles.collapsedHeader} style={{ background: def.color, color: textColorForBg(def.color), textShadow: isLightHeaderBg(def.color) ? 'none' : undefined }}>
+            {breakpointGlyph}
             {collapsedLabel}
             {collapsedColorPreview && (
               <span className={styles.collapsedColorDot} style={{ background: collapsedColorPreview }} />
@@ -2019,6 +2056,7 @@ function CaNodeComponent({ id, data, selected }: NodeProps) {
       <div className={styles.header} title={def.description} style={{ background: def.color, color: textColorForBg(def.color), textShadow: isLightHeaderBg(def.color) ? 'none' : undefined }}>
         {mainFlowIn && renderMainFlowHandle(mainFlowIn, 'input')}
         {mainFlowOut && renderMainFlowHandle(mainFlowOut, 'output')}
+        {breakpointGlyph}
         {linkCount >= 2 && (
           <span
             className={`${styles.linkBadge} nodrag`}

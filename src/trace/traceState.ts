@@ -32,8 +32,13 @@
  *                  two every frame.
  *   `cursor`       null = the whole trace; else an index into the selected
  *                  entry's FLOW events (`f` records) — "step node".
- *   breakpoints    keyed `graphKind|macroPath|nodeId`, so the SAME macro
- *                  instanced twice can carry different breakpoints.
+ *   breakpoints    keyed `graphKind|macroPath|nodeId`, where `macroPath` is the
+ *                  editor's macro-DEF path (P4). The editor's scope stack names
+ *                  DEFS, not instances — entering a macro edits the shared
+ *                  definition — so a breakpoint set inside a def is a mark on
+ *                  THAT NODE OF THAT DEF and arms in every instance of it. The
+ *                  trace's own `macroPath` names INSTANCES, so matching runs
+ *                  through `macroDefPath` (see `setMacroDefIndex`).
  *   `paused`       the last `traceBreak` (cleared when the run resumes).
  *   `lost`         the last `traceTargetLost` reason (a transient notice).
  */
@@ -196,6 +201,27 @@ export function subscribeTrace(fn: () => void): () => void {
 /** The lowered-id → user-node table of one graph's TRACE BUILD. */
 export function getTraceOrigin(kind: TraceGraphKind): TraceOriginTable {
   return kind === 'agents' ? originTables.agent : originTables.cell;
+}
+
+// ---------------------------------------------------------------------------
+// The macro INSTANCE → DEF index (P4). See the `breakpoints` note in the header.
+// ---------------------------------------------------------------------------
+
+let macroDefOfInstance: ReadonlyMap<string, string> = new Map();
+
+/** Published by `GraphEditor` from the model (every macro instance in the two
+ *  top-level graphs and inside every def). Pure lookup data — it changes no
+ *  session field and therefore notifies nobody. */
+export function setMacroDefIndex(index: ReadonlyMap<string, string>): void {
+  macroDefOfInstance = index;
+}
+
+/** Translate a trace's INSTANCE path into the editor's DEF path. An instance the
+ *  index does not know falls back to itself, so with no index published this is
+ *  the identity and every consumer behaves exactly as it did before P4. */
+export function macroDefPath(instancePath: readonly string[]): string[] {
+  if (instancePath.length === 0) return [];
+  return instancePath.map(id => macroDefOfInstance.get(id) ?? id);
 }
 
 // ---------------------------------------------------------------------------
@@ -403,7 +429,9 @@ export function breakpointLoweredIds(kind: TraceGraphKind): string[] {
   for (const bp of wanted) if (bp.macroPath.length === 0) out.add(bp.nodeId);
   for (const loweredId of Object.keys(table)) {
     const o = resolveTraceOrigin(loweredId, table);
-    const path = o.macroPath ?? [];
+    // The record's path names macro INSTANCES; a breakpoint's names macro DEFS
+    // (the editor's scope stack). Compare in DEF space — see the header.
+    const path = macroDefPath(o.macroPath ?? []);
     for (const bp of wanted) {
       if (o.nodeId !== bp.nodeId) continue;
       if (path.length !== bp.macroPath.length) continue;

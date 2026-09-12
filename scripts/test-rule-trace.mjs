@@ -64,6 +64,7 @@ const ENTRY = `
 export { compileGraph, compileAgentGraph, is3dModel, sparseSteppingEnabled } from '../src/modeler/vpl/compiler/compile.ts';
 export { resolveTraceOrigin } from '../src/modeler/vpl/compiler/traceOrigin.ts';
 export { originInScope } from '../src/trace/traceOrigin.ts';
+export { buildEditorTraceIndex, valueConeFrom, originInEditorScope, buildMacroDefIndex, buildMacroOutputMap, parseTraceHandle } from '../src/trace/traceGraphMap.ts';
 export { runTrace, TraceSandboxEscape, traceRngSeed, TRACE_MAX_EVENTS } from '../src/simulator/engine/traceRunner.ts';
 export { migrateForHarness } from '../src/dev/compileHarness.ts';
 export { createAgentStore, computeAgentMaxHashBins, buildSpatialHash, seedAgents } from '../src/simulator/engine/agentEngine.ts';
@@ -1116,10 +1117,184 @@ section('H. SCOPE MAPPING — originInScope (P3)');
   });
 }
 
+
+section('I. THE EDITOR MAP — reroute chains, the value cone, the two id spaces (P4)');
+// ===========================================================================
+{
+  const idx = M.buildEditorTraceIndex;
+  const cone = M.valueConeFrom;
+  const inEditorScope = M.originInEditorScope;
+
+  const vNode = (id) => ({ id, type: 'caNode', data: { nodeType: 'compare', config: {} } });
+  const rNode = (id, cat = 'value') => ({ id, type: 'rerouteNode', data: { nodeType: 'reroute', portCategory: cat } });
+  const vEdge = (id, s, sp, t, tp) => ({ id, source: s, sourceHandle: `output_value_${sp}`, target: t, targetHandle: `input_value_${tp}` });
+  const fEdge = (id, s, sp, t, tp) => ({ id, source: s, sourceHandle: `output_flow_${sp}`, target: t, targetHandle: `input_flow_${tp}` });
+
+  // --- a REROUTE CHAIN: A -> R1 -> R2 -> B, one lowered edge, three editor ones
+  {
+    const nodes = [vNode('A'), rNode('R1'), rNode('R2'), vNode('B')];
+    const edges = [
+      vEdge('e1', 'A', 'result', 'R1', 'in'),
+      { id: 'e2', source: 'R1', sourceHandle: 'output_value_out', target: 'R2', targetHandle: 'input_value_in' },
+      { id: 'e3', source: 'R2', sourceHandle: 'output_value_out', target: 'B', targetHandle: 'input_value_x' },
+    ];
+    const ix = idx(nodes, edges);
+    const origins = ['e1', 'e2', 'e3'].map(e => ix.edgeOrigin.get(e));
+    check('reroute chain: EVERY editor segment resolves to the ONE real source port',
+      origins.every(o => o && o.nodeId === 'A' && o.portId === 'result' && o.category === 'value'),
+      JSON.stringify(origins));
+    check('reroute chain: both DOTS relay that same source port',
+      ix.rerouteOrigin.get('R1')?.nodeId === 'A' && ix.rerouteOrigin.get('R2')?.nodeId === 'A',
+      JSON.stringify([...ix.rerouteOrigin]));
+    check('reroute chain: the consumer value source is A, not a dot',
+      JSON.stringify(ix.valueSources.get('B')) === JSON.stringify(['A']),
+      JSON.stringify([...ix.valueSources]));
+    check('a reroute is NOT itself a value consumer', !ix.valueSources.has('R1') && !ix.valueSources.has('R2'));
+  }
+
+  // --- a FLOW reroute: the taken wire must know the REAL node it ends on
+  {
+    const nodes = [vNode('IF'), rNode('RF', 'flow'), vNode('SET')];
+    const edges = [
+      fEdge('f1', 'IF', 'then', 'RF', 'in'),
+      { id: 'f2', source: 'RF', sourceHandle: 'output_flow_out', target: 'SET', targetHandle: 'input_flow_do' },
+    ];
+    const ix = idx(nodes, edges);
+    check('flow reroute: the first segment already carries IF:then',
+      ix.edgeOrigin.get('f1')?.portId === 'then' && ix.edgeOrigin.get('f1')?.category === 'flow');
+    check('flow reroute: the first segment REAL target is SET (not the dot)',
+      JSON.stringify(ix.edgeTargets.get('f1')) === JSON.stringify(['SET']),
+      JSON.stringify(ix.edgeTargets.get('f1')));
+  }
+
+  // --- fan-out + a dangling dot (the shapes `collapseReroutes` also tolerates)
+  {
+    const nodes = [vNode('A'), rNode('R'), vNode('B'), vNode('C'), rNode('D')];
+    const edges = [
+      vEdge('e1', 'A', 'result', 'R', 'in'),
+      { id: 'e2', source: 'R', sourceHandle: 'output_value_out', target: 'B', targetHandle: 'input_value_x' },
+      { id: 'e3', source: 'R', sourceHandle: 'output_value_out', target: 'C', targetHandle: 'input_value_x' },
+      { id: 'e4', source: 'D', sourceHandle: 'output_value_out', target: 'C', targetHandle: 'input_value_y' },
+    ];
+    const ix = idx(nodes, edges);
+    check('fan-out: both consumers resolve to A',
+      ix.edgeOrigin.get('e2')?.nodeId === 'A' && ix.edgeOrigin.get('e3')?.nodeId === 'A');
+    check('a dot relaying NOTHING contributes no origin and no source',
+      !ix.edgeOrigin.has('e4') && JSON.stringify(ix.valueSources.get('C')) === JSON.stringify(['A']),
+      JSON.stringify([...ix.valueSources]));
+  }
+
+  // --- THE VALUE CONE ------------------------------------------------------
+  {
+    // GET -> CMP -> IF(flow) ; STRAY -> OTHER, which nothing executed reads
+    const nodes = ['GET', 'CMP', 'IF', 'STRAY', 'OTHER'].map(vNode);
+    const edges = [
+      vEdge('e1', 'GET', 'value', 'CMP', 'x'),
+      vEdge('e2', 'CMP', 'result', 'IF', 'condition'),
+      vEdge('e3', 'STRAY', 'value', 'OTHER', 'x'),
+    ];
+    const ix = idx(nodes, edges);
+    const c = cone(['IF'], ix);
+    check('the cone of a flow node is its TRANSITIVE value inputs',
+      c.has('CMP') && c.has('GET'), JSON.stringify([...c]));
+    check('a value node nothing executed reads is OUTSIDE the cone',
+      !c.has('STRAY') && !c.has('OTHER'), JSON.stringify([...c]));
+    check('the cone of nothing is empty', cone([], ix).size === 0);
+    // A cycle cannot be drawn by the editor, but a hand-edited file could.
+    const cyc = idx(nodes, [...edges, vEdge('e4', 'CMP', 'result', 'GET', 'x')]);
+    check('a value CYCLE terminates', cone(['IF'], cyc).size === 2);
+  }
+
+  // --- THE TWO ID SPACES ---------------------------------------------------
+  // One def `D`, instanced TWICE (`iA`, `iB`). The editor's scope names `D`.
+  {
+    const defOf = (i) => ({ iA: 'D', iB: 'D', iX: 'E' }[i] ?? i);
+    const rec = (nodeId, ...macroPath) => (macroPath.length ? { nodeId, macroPath } : { nodeId });
+
+    const rootA = inEditorScope(rec('inner', 'iA'), [], defOf);
+    const rootB = inEditorScope(rec('inner', 'iB'), [], defOf);
+    check('root scope: each instance lights its OWN node',
+      rootA.nodeId === 'iA' && rootB.nodeId === 'iB', `${rootA.nodeId}/${rootB.nodeId}`);
+
+    const inA = inEditorScope(rec('inner', 'iA'), ['D'], defOf);
+    const inB = inEditorScope(rec('inner', 'iB'), ['D'], defOf);
+    check('inside def D: BOTH instances light the def own node (the editor edits the DEF)',
+      inA.visible && inA.nodeId === 'inner' && inB.visible && inB.nodeId === 'inner',
+      `${JSON.stringify(inA)}/${JSON.stringify(inB)}`);
+
+    const other = inEditorScope(rec('inner', 'iX'), ['D'], defOf);
+    check('inside def D: an instance of a DIFFERENT def is not visible', !other.visible, JSON.stringify(other));
+
+    const top = inEditorScope(rec('n1'), ['D'], defOf);
+    check('inside def D: a TOP-LEVEL node is not visible', !top.visible, JSON.stringify(top));
+
+    const nested = inEditorScope(rec('deep', 'iA', 'iN'), ['D'], defOf);
+    check('inside def D: a nested record lights the NESTED INSTANCE node (instance space)',
+      nested.visible && nested.nodeId === 'iN', JSON.stringify(nested));
+
+    const plain = inEditorScope(rec('n1'), [], defOf);
+    check('a top-level record at the root scope is itself', plain.visible && plain.nodeId === 'n1');
+  }
+
+  // --- the macro instance -> def index, and the OUTPUT bridge --------------
+  {
+    const root = [
+      { id: 'iA', data: { nodeType: 'macro', config: { macroDefId: 'D' } } },
+      { id: 'n1', data: { nodeType: 'compare', config: {} } },
+    ];
+    const defNodes = [
+      { id: 'iN', data: { nodeType: 'macro', config: { macroDefId: 'E' } } },
+      { id: 'inner', data: { nodeType: 'compare', config: {} } },
+      { id: 'mo', data: { nodeType: 'macroOutput', config: {} } },
+    ];
+    const index = M.buildMacroDefIndex([root, defNodes]);
+    check('the instance index maps every macro instance, at every level',
+      index.get('iA') === 'D' && index.get('iN') === 'E' && !index.has('n1'),
+      JSON.stringify([...index]));
+
+    const bridge = M.buildMacroOutputMap([{
+      id: 'D',
+      nodes: defNodes,
+      edges: [{ id: 'x1', source: 'inner', sourceHandle: 'output_value_result', target: 'mo', targetHandle: 'input_value_out_0' }],
+    }]);
+    check('the macroOutput bridge maps inner:port -> the INSTANCE output port',
+      JSON.stringify(bridge.get('D')?.get('inner:result')) === JSON.stringify(['out_0']),
+      JSON.stringify([...(bridge.get('D') ?? [])]));
+    check('a def with no macroOutput contributes nothing',
+      M.buildMacroOutputMap([{ id: 'Z', nodes: [], edges: [] }]).size === 0);
+  }
+
+  // NEGATIVE CONTROL: an index that stops at the IMMEDIATE source — the naive
+  // reading of an edge — leaves a reroute chain dark past the first dot.
+  expectFail('an edge origin that does not walk the reroute chain', () => {
+    const naive = (edges) => new Map(edges.map(e => [e.id, {
+      nodeId: e.source, portId: e.sourceHandle.split('_').slice(2).join('_'), category: 'value',
+    }]));
+    const edges = [
+      vEdge('e1', 'A', 'result', 'R1', 'in'),
+      { id: 'e3', source: 'R2', sourceHandle: 'output_value_out', target: 'B', targetHandle: 'input_value_x' },
+    ];
+    const built = naive(edges);
+    const origins = ['e1', 'e3'].map(e => built.get(e));
+    check('reroute chain: EVERY editor segment resolves to the ONE real source port',
+      origins.every(o => o && o.nodeId === 'A' && o.portId === 'result' && o.category === 'value'),
+      JSON.stringify(origins));
+  });
+
+  // NEGATIVE CONTROL: comparing the trace's INSTANCE path against the editor's
+  // DEF scope directly (i.e. `originInScope` with no translation) — nothing
+  // inside any macro would ever light.
+  expectFail('a scope test that compares instance ids against a DEF scope', () => {
+    const r = M.originInScope({ nodeId: 'inner', macroPath: ['iA'] }, ['D']);
+    check('inside def D: BOTH instances light the def own node (the editor edits the DEF)',
+      r.visible && r.nodeId === 'inner', JSON.stringify(r));
+  });
+}
+
 // ===========================================================================
 rmSync(entryPath, { force: true });
 rmSync(dir, { recursive: true, force: true });
 console.log(failures === 0
-  ? '\nRULE TRACE (P1+P3) ✓  (all checks passed)'
+  ? '\nRULE TRACE (P1+P3+P4) ✓  (all checks passed)'
   : `\n${failures} CHECK(S) FAILED ✗`);
 process.exit(failures === 0 ? 0 : 1);
