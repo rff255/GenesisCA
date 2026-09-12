@@ -73,6 +73,17 @@ import {
 // probe so the "one adapter, balanced refcount" claim is reproducible from the
 // committed tree; a page-side import() would get a DIFFERENT module instance).
 import { sharedGpuRefCount, sharedGpuAdapterRequestCount, setSharedGpuEventSink } from './sharedGpuDevice';
+// RULE TRACE (P2) — the write-recording sandbox + the wire protocol. Both are
+// DOM-free; `traceProtocol` carries no runtime import of the compiler (type-only),
+// so the worker bundle is unchanged in weight for a non-tracing session.
+import { runTrace, TraceSandboxEscape, TRACE_MAX_EVENTS, type TraceEvent, type TraceWrite } from './traceRunner';
+import {
+  TRACE_ROOT_STEP, TRACE_ROOT_INIT, TRACE_ROOT_GRID_INIT,
+  TRACE_ROOT_AGENT_BEHAVIOUR, TRACE_ROOT_AGENT_INIT, TRACE_ROOT_AGENT_DIVISION,
+  traceInputColorKey, traceOutputMappingKey, traceAgentOutputMappingKey, traceAgentInputMappingKey,
+  type TraceCodes, type TraceRootKey, type TraceTarget,
+  type SetTraceMsg, type RequestTraceMsg, type ClearTraceMsg,
+} from './traceProtocol';
 
 /** A camera/graphics view is either the 2D disc view or the Phase C 3D sphere view
  *  (distinguished by `mode: '3d'`). One setAgentCamera message carries either. */
@@ -829,7 +840,7 @@ interface SetAgentSpriteAtlasMsg { type: 'setAgentSpriteAtlas'; atlas: AgentSpri
  *  refreshDisplay). */
 interface RefreshAgentDisplayMsg { type: 'refreshAgentDisplay' }
 
-type WorkerMsg = InitMsg | StepMsg | CancelStepMsg | PaintMsg | PaintManualMsg | ResetMsg | RecompileMsg | UpdateModelAttrsMsg | UpdateLookupTableMsg | ImportImageMsg | ImportGridValuesMsg | UpdateIndicatorsMsg | GetStateMsg | LoadStateMsg | ReadRegionMsg | WriteRegionMsg | ClearRegionMsg | SetUseWasmMsg | SetUseWebGPUMsg | ReadbackWebGPUMsg | ColorPassMsg | SetRecordingMsg | AttachCanvasMsg | RequestColorsSnapshotMsg | SetInspectCellsMsg | RefreshDisplayMsg | SeedAgentsMsg | CreateAgentMsg | KillAgentsMsg | PaintAgentsMsg | PaintAgentsColorMsg | SpawnAgentsBrushMsg | ClearAgentsMsg | ReadAgentsMsg | PasteAgentsMsg | FormBondMsg | BreakBondMsg | GetBondStateMsg | SetBondStateMsg | GetAgentStateMsg | MoveAgentsMsg | NudgeAgentsMsg | SetAgentWasmBackedMsg | SetRngSeedMsg | SetSimLayersMsg | SetAgentSnapshotVelocityMsg | AttachAgentCanvasMsg | SetAgentCameraMsg | SetAgentUiSyncMsg | SetAgentVizMsg | SetAgentSpriteAtlasMsg | RefreshAgentDisplayMsg | GetDiagnosticsMsg | E1bCountersMsg | AgentPixelsMsg | GraphIndicatorStatsMsg | CompositeReadbackMsg | AttachVoxelCanvasMsg | SetGridCameraMsg | SetGridUiSyncMsg | SetGridVizMsg | RefreshGridDisplayMsg | VoxelReadbackMsg;
+type WorkerMsg = SetTraceMsg | RequestTraceMsg | ClearTraceMsg | InitMsg | StepMsg | CancelStepMsg | PaintMsg | PaintManualMsg | ResetMsg | RecompileMsg | UpdateModelAttrsMsg | UpdateLookupTableMsg | ImportImageMsg | ImportGridValuesMsg | UpdateIndicatorsMsg | GetStateMsg | LoadStateMsg | ReadRegionMsg | WriteRegionMsg | ClearRegionMsg | SetUseWasmMsg | SetUseWebGPUMsg | ReadbackWebGPUMsg | ColorPassMsg | SetRecordingMsg | AttachCanvasMsg | RequestColorsSnapshotMsg | SetInspectCellsMsg | RefreshDisplayMsg | SeedAgentsMsg | CreateAgentMsg | KillAgentsMsg | PaintAgentsMsg | PaintAgentsColorMsg | SpawnAgentsBrushMsg | ClearAgentsMsg | ReadAgentsMsg | PasteAgentsMsg | FormBondMsg | BreakBondMsg | GetBondStateMsg | SetBondStateMsg | GetAgentStateMsg | MoveAgentsMsg | NudgeAgentsMsg | SetAgentWasmBackedMsg | SetRngSeedMsg | SetSimLayersMsg | SetAgentSnapshotVelocityMsg | AttachAgentCanvasMsg | SetAgentCameraMsg | SetAgentUiSyncMsg | SetAgentVizMsg | SetAgentSpriteAtlasMsg | RefreshAgentDisplayMsg | GetDiagnosticsMsg | E1bCountersMsg | AgentPixelsMsg | GraphIndicatorStatsMsg | CompositeReadbackMsg | AttachVoxelCanvasMsg | SetGridCameraMsg | SetGridUiSyncMsg | SetGridVizMsg | RefreshGridDisplayMsg | VoxelReadbackMsg;
 
 // ---------------------------------------------------------------------------
 // C3 (P4) — RUNTIME FALLBACK LOG
@@ -1954,6 +1965,15 @@ function runDivisionEvent(events: Array<{ mother: number; a: number; b: number; 
   const fn = agentDivisionFn;
   const s = agentStore;
   for (const ev of events) {
+    // RULE TRACE — the traced agent DIVIDING. Daughter A reuses the mother's
+    // slot, so `ev.a` is the id the user is watching; daughter 0 (A) is traced,
+    // BEFORE the real event rewrites the inherited attributes, so the panel
+    // shows what the division rule read. Daughter B is a brand-new slot the user
+    // never selected, and tracing both would post two conflicting traces of one
+    // root in the same generation.
+    if (traceAgentTarget !== null && ev.a === traceAgentTarget && traceFns.has(TRACE_ROOT_AGENT_DIVISION)) {
+      traceRootSync(TRACE_ROOT_AGENT_DIVISION, buildDivisionArgs(s, ev.a, 0, ev.axisX, ev.axisY, ev.b), ev.a, { kind: 'agent', id: ev.a });
+    }
     try {
       // D3 — each daughter is told the OTHER's slot id, so ONE event can set both
       // daughters' attributes by id (both are ALIVE here, satisfying the strict
@@ -2136,6 +2156,15 @@ function runAgentInputMapping(mappingId: string, ids: number[], values: number[]
     // kill drain runs after the loop, but `freeAgentSlot` is not what clears
     // `alive` here — the flag is; so re-check it cheaply).
     if (!s.alive[id]) continue;
+    // RULE TRACE — an agent paint that hits the traced agent runs its Input
+    // Mapping graph on it: trace that root with the STROKE's channel payload,
+    // BEFORE the real call rewrites the agent (the cell `inputColor` rule).
+    if (traceAgentTarget === id && !traceCodesStale) {
+      const imKey = traceAgentInputMappingKey(mappingId);
+      if (traceFns.has(imKey)) {
+        traceRootSync(imKey, [...values, ...buildAgentInputArgs(s, id, agentCreate, agentAddToWorld)], id, { kind: 'agent', id });
+      }
+    }
     try {
       im.fn(...values, ...buildAgentInputArgs(s, id, agentCreate, agentAddToWorld));
     } catch (e) {
@@ -2435,6 +2464,7 @@ function runAgentStep(): void {
   const binEdge = Math.max(collisionBinEdge, chargeBinEdgeOf(cfg));
   const hash = buildSpatialHash(s, Math.max(1e-3, binEdge), W, H, D, boundaryTreatment === 'torus', agentHashReserve);
   currentAgentHash = hash;
+  currentAgentHashGen = generation;   // RULE TRACE — see traceApproximate
   noteAgentHash(hash, Math.max(1e-3, binEdge), W, H, D, s.liveCount);
   // C10 — the Barnes–Hut octree for GLOBAL charge, built ONCE per generation from
   // the same positions the hash saw (and, like the hash, before the behaviour, so
@@ -3330,6 +3360,17 @@ function agentResidentEligible(): boolean {
   // RUNTIME-only term (the Simulate-agents layer toggle): nothing outside the
   // worker can know it, so it stays here.
   if (!simulateAgents) return false;
+  // RULE TRACE (S10) — a BREAKPOINT session needs a per-generation hook, and the
+  // resident batch structurally cannot host one: it is ONE submit covering many
+  // generations, with a single readback per frame. For an AGENT target that also
+  // means the CPU store is stale for all but the last generation of a slice; for
+  // a CELL target the resident branch runs the grid's generations in a block
+  // AFTER the agent batch, so breaking between them would leave the two layers
+  // at different generations. So an every-gen session runs the per-generation
+  // path (slower, correct) for EITHER target kind. Sampled tracing — the default
+  // — keeps residency and reads the store at the frame boundary through
+  // `ensureAgentStoreFresh()`.
+  if (traceEveryGen && (traceCellTarget !== null || traceAgentTarget !== null)) return false;
   // Every MODEL-derivable term lives in `residencyModelBlockers`
   // (model/agentResidency.ts), which the Properties compatibility readout calls
   // with the same facts — so the engine's decision and the explanation the user
@@ -3562,6 +3603,7 @@ async function runAgentStepWebGPUInner(gpuFieldBridge?: GpuFieldBridge | null): 
   const binEdge = Math.max(collisionBinEdge, chargeBinEdgeOf(cfg));
   const hash = buildSpatialHash(s, Math.max(1e-3, binEdge), W, H, s.worldDepth, boundaryTreatment === 'torus', agentHashReserve);
   currentAgentHash = hash;
+  currentAgentHashGen = generation;   // RULE TRACE — see traceApproximate
   noteAgentHash(hash, Math.max(1e-3, binEdge), W, H, s.worldDepth, s.liveCount);
 
   // Prime the sync attr write buffer (no-op in async agent mode). Keeps the CPU
@@ -3864,6 +3906,7 @@ function runAgentStructuralPhase(): void {
     // (Get Nearby Agents in an agent OM graph) falls back to all-pairs instead
     // of querying a dims/content-mismatched hash.
     currentAgentHash = null;
+    currentAgentHashGen = -1;   // RULE TRACE — no hash means no hash generation
     const tryForm = (i: number, j: number) => {
       if (j <= i || !alive[j]) return;
       let dx = x[j]! - x[i]!, dy = y[j]! - y[i]!;
@@ -4797,6 +4840,52 @@ function fillBoundarySentinel(): void {
   }
 }
 
+/** ONE cell's neighbour indices for ONE neighbourhood, written into `out` at
+ *  `outBase`. Extracted from `buildNeighborIndices`' inner loop so the boundary
+ *  math has exactly ONE definition: the full per-cell table is this function run
+ *  over every cell, and the Rule Trace's per-cell stand-in (`traceNbrRow`, used
+ *  when the WebGPU target DROPPED the table) is this function run over one. A
+ *  second copy of the torus-wrap / constant-sentinel rules is precisely the kind
+ *  of silent 2D-vs-3D divergence this codebase keeps paying for.
+ *
+ *  3D Grid CA: the offset table gains a `layer` dimension and reads 3-tuple
+ *  offsets when present. The STRIDE stays `coords.length` (=== coords3d.length
+ *  for a 3D nbr) so every downstream `nIdx_<nbr>[idx*nSz+k]` consumer is
+ *  byte-compatible and 3D-for-free. In 2D (depth===1, no coords3d) the inner
+ *  arithmetic reduces to the historical `row*width+col` form. */
+function computeCellNeighbours(
+  nbr: NeighborhoodDef, cellIdx: number, out: Int32Array, outBase: number,
+): void {
+  const coords3d = nbr.coords3d;
+  const nbrSize = coords3d ? coords3d.length : nbr.coords.length;
+  const layer = depth > 1 ? Math.floor(cellIdx / (width * height)) : 0;
+  const rem = cellIdx - layer * width * height;
+  const row = Math.floor(rem / width);
+  const col = rem - row * width;
+  for (let n = 0; n < nbrSize; n++) {
+    const c = coords3d ? coords3d[n]! : nbr.coords[n]!;
+    const dr = c[0], dc = c[1], dl = (c as number[])[2] ?? 0;
+    let nLayer = layer + dl;
+    let nRow = row + dr;
+    let nCol = col + dc;
+
+    if (nLayer < 0 || nLayer >= depth || nRow < 0 || nRow >= height || nCol < 0 || nCol >= width) {
+      if (boundaryTreatment === 'torus') {
+        nLayer = ((nLayer % depth) + depth) % depth;
+        nRow = ((nRow % height) + height) % height;
+        nCol = ((nCol % width) + width) % width;
+      } else {
+        // Constant: typed arrays can't store -1, so `total` is the
+        // sentinel (the +1 cell holds the boundary value).
+        out[outBase + n] = total; // sentinel
+        continue;
+      }
+    }
+
+    out[outBase + n] = (nLayer * height + nRow) * width + nCol;
+  }
+}
+
 function buildNeighborIndices(): void {
   nbrIndices = {};
   if (!wasmMemory || !wasmLayout) return;
@@ -4841,34 +4930,8 @@ function buildNeighborIndices(): void {
     // Index table is a view over wasmMemory at the layout offset ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â shared with WASM step.
     const indices = new Int32Array(buf, wasmLayout.nbrIndexOffset[nbr.id]!, total * nbrSize);
 
-    for (let layer = 0; layer < depth; layer++) {
-      for (let row = 0; row < height; row++) {
-        for (let col = 0; col < width; col++) {
-          const cellIdx = (layer * height + row) * width + col;
-          for (let n = 0; n < nbrSize; n++) {
-            const c = coords3d ? coords3d[n]! : nbr.coords[n]!;
-            const dr = c[0], dc = c[1], dl = (c as number[])[2] ?? 0;
-            let nLayer = layer + dl;
-            let nRow = row + dr;
-            let nCol = col + dc;
-
-            if (nLayer < 0 || nLayer >= depth || nRow < 0 || nRow >= height || nCol < 0 || nCol >= width) {
-              if (boundaryTreatment === 'torus') {
-                nLayer = ((nLayer % depth) + depth) % depth;
-                nRow = ((nRow % height) + height) % height;
-                nCol = ((nCol % width) + width) % width;
-              } else {
-                // Constant: typed arrays can't store -1, so `total` is the
-                // sentinel (the +1 cell holds the boundary value).
-                indices[cellIdx * nbrSize + n] = total; // sentinel
-                continue;
-              }
-            }
-
-            indices[cellIdx * nbrSize + n] = (nLayer * height + nRow) * width + nCol;
-          }
-        }
-      }
+    for (let cellIdx = 0; cellIdx < total; cellIdx++) {
+      computeCellNeighbours(nbr, cellIdx, indices, cellIdx * nbrSize);
     }
 
     nbrIndices[nbr.id] = indices;
@@ -4884,8 +4947,52 @@ function buildNeighborIndices(): void {
 
 let activeViewer = '';
 
-/** Build args for the loop-wrapped step function (called once per step, not per cell) */
-function buildLoopArgs(useActiveList: boolean = true): unknown[] {
+/** RULE TRACE — a stand-in for a neighbour table the WebGPU grid target DROPPED.
+ *
+ *  ⚠ THE TRAP THIS SOLVES. Under the WebGPU grid the per-cell table is not built
+ *  at all (`nbrTableDropped`): the GPU computes neighbours inline, and the drop
+ *  predicate deliberately EXCLUDES the step — its CPU fallback is exactly what is
+ *  being dropped. `buildLoopArgs` then pushes `undefined` for the table, which no
+ *  engine path ever reads... but the trace build of the STEP does, and it threw
+ *  `Cannot read properties of undefined` on the first neighbour read of every
+ *  WebGPU model. Rebuilding the whole table (total × nSz × 4 bytes — the very
+ *  thing the drop exists to avoid; 2.8 GB at 300³) is not an option, and a trace
+ *  is ONE cell: this answers the traced cell's row from `computeCellNeighbours`
+ *  (the same definition the full table is built from) and the constant-boundary
+ *  sentinel `total` for anything else, so a read outside the traced row is a
+ *  defined boundary value rather than a crash.
+ *
+ *  The result is array-LIKE, not an array: `traceRunner` wraps it as a shadow
+ *  proxy like any other buffer (its duck-typed `isArrayLike` test is what makes
+ *  that work), and writes to it are recorded and discarded exactly as they would
+ *  be for the real table. */
+function traceNbrRow(nbr: NeighborhoodDef, idx: number): ArrayLike<number> {
+  const nbrSize = nbr.coords3d ? nbr.coords3d.length : nbr.coords.length;
+  const row = new Int32Array(nbrSize);
+  computeCellNeighbours(nbr, idx, row, 0);
+  const base = idx * nbrSize;
+  const len = total * nbrSize;
+  return new Proxy({ length: len } as Record<string, unknown>, {
+    get(t, prop) {
+      if (typeof prop === 'string') {
+        const k = +prop;
+        if (Number.isInteger(k) && k >= 0) {
+          const off = k - base;
+          return (off >= 0 && off < nbrSize) ? row[off]! : total;
+        }
+      }
+      return Reflect.get(t, prop);
+    },
+  }) as unknown as ArrayLike<number>;
+}
+
+/** Build args for the loop-wrapped step function (called once per step, not per cell)
+ *
+ *  `traceNbrIdx` is the RULE TRACE's only intrusion into the engine's arg
+ *  builders: when the neighbour table was dropped (WebGPU grid) it substitutes
+ *  that cell's row (see `traceNbrRow`). Absent — every engine call site — the
+ *  args are byte-identical to before. */
+function buildLoopArgs(useActiveList: boolean = true, traceNbrIdx?: number): unknown[] {
   // 3D Grid CA: `depth` + `WH` follow W/H ONLY for a 3D grid (depth > 1),
   // matching the compiler's buildLoopParams (gated on is3dModel === dimension
   // 3d && gridDepth > 1, which is exactly depth > 1 here). 2D args byte-identical.
@@ -4893,7 +5000,7 @@ function buildLoopArgs(useActiveList: boolean = true): unknown[] {
   for (const attr of cellAttrs) args.push(readAttrs[attr.id]);
   for (const attr of cellAttrs) args.push(writeAttrs[attr.id]);
   for (const nbr of neighborhoods) {
-    args.push(nbrIndices[nbr.id]);
+    args.push(traceNbrIdx !== undefined && !nbrIndices[nbr.id] ? traceNbrRow(nbr, traceNbrIdx) : nbrIndices[nbr.id]);
     args.push(nbr.coords3d ? nbr.coords3d.length : nbr.coords.length);
   }
   args.push(cachedModelAttrs, colors, activeViewer, cachedIndicators, linkedResults, rngState, stopFlag);
@@ -4931,13 +5038,13 @@ function buildLoopArgs(useActiveList: boolean = true): unknown[] {
 }
 
 /** Build args for a per-cell function (InputColor) */
-function buildCellArgs(idx: number): unknown[] {
+function buildCellArgs(idx: number, traceNbrIdx?: number): unknown[] {
   // 3D Grid CA: D + WH only for a 3D grid (mirrors buildCellParams). 2D byte-identical.
   const args: unknown[] = depth > 1 ? [idx, total, width, height, depth, width * height] : [idx, total, width, height];
   for (const attr of cellAttrs) args.push(readAttrs[attr.id]);
   for (const attr of cellAttrs) args.push(writeAttrs[attr.id]);
   for (const nbr of neighborhoods) {
-    args.push(nbrIndices[nbr.id]);
+    args.push(traceNbrIdx !== undefined && !nbrIndices[nbr.id] ? traceNbrRow(nbr, traceNbrIdx) : nbrIndices[nbr.id]);
     args.push(nbr.coords3d ? nbr.coords3d.length : nbr.coords.length);
   }
   args.push(cachedModelAttrs, colors, activeViewer, cachedIndicators, linkedResults, rngState, stopFlag);
@@ -6272,6 +6379,12 @@ function runGridPeriodicEvents(): boolean {
   if (gridPeriodicFns.length === 0 || !gridCellsEnabled) return false;
   let ran = false;
   const isSync = updateMode !== 'asynchronous';
+  // RULE TRACE — a periodic root is GLOBAL (no element), so it is traced WHOLE
+  // and BEFORE any of this firing writes anything. Selected by its OWN cadence
+  // test rather than by index against `gridPeriodicFns`, so a root that failed
+  // to eval on either side cannot shift the pairing. GPU freshness is the
+  // caller's (the WebGPU-grid branch reads back before calling this).
+  traceDuePeriodicRoots('cell', buildLoopArgs);
   for (const p of gridPeriodicFns) {
     if (generation % p.period !== p.phase) continue;
     if (!ran && isSync) {
@@ -6321,6 +6434,10 @@ function runGridPeriodicEvents(): boolean {
 function runAgentPeriodicEvents(): boolean {
   if (agentPeriodicFns.length === 0 || !agentStore || !simulateAgents) return false;
   const s = agentStore;
+  // RULE TRACE — the agent sibling of the grid periodic trace (see above). The
+  // spawn closures the trace passes are the sandbox's recording stubs, so a
+  // traced Create Agent records a request and spawns nothing (I2).
+  traceDuePeriodicRoots('agent', () => buildAgentInitArgs(s, agentBehaviourCreate, agentBehaviourAddToWorld, s.highWater));
   let ran = false;
   let overflowed = false;
   for (const p of agentPeriodicFns) {
@@ -7140,6 +7257,509 @@ function sendColors(): void {
 }
 
 // ---------------------------------------------------------------------------
+// RULE TRACE (P2) — the worker half
+//
+// WHAT THIS IS. One cell's (or one agent's) rule is RE-EVALUATED, against the
+// live state, by a TRACE BUILD of the JS reference compile (`compileGraph(…,
+// { trace: true })` — a single-element body that records every value port and
+// every flow node). It runs inside `traceRunner`'s write-recording sandbox, so
+// the engines — JS / WASM / WebGPU, 2D / 3D, cells / agents — are neither
+// instrumented nor changed. The trace is a SIDE COMPUTATION; nothing here is on
+// the path of a generation.
+//
+// ZERO COST WHEN OFF. Every hook below starts with a `traceCellTarget === null
+// && traceAgentTarget === null` test (usually via `traceArmed()`), so a session
+// with no target pays one null check per batch — no readback, no per-generation
+// work, no message.
+//
+// THE INVARIANTS (plan §0, impact map §13)
+//   I2  THE TRACE NEVER WRITES ENGINE STATE. Enforced in `traceRunner` (every
+//       argument wrapped by kind); this file's duty is to hand it the REAL
+//       buffers and never to apply what comes back. `writes` is a report.
+//   I3  A TRACE READS FRESH STATE. Under GPU ownership the trace is preceded by
+//       `ensureCpuAttrsFresh()` / `ensureAgentStoreFresh()` — the existing
+//       one-shots. The trace is a READER: it never clears `gpuOwnsAttrs` /
+//       `agentStoreStale` itself (only those one-shots may).
+//   I4  A BREAKPOINT PAUSES BEFORE THE GENERATION IS APPLIED, fires ONCE per
+//       generation (`traceBreakGen`), and breaking a batch DROPS the queued
+//       reqId-less `step` messages — the `cancelStep` rule, or the play loop
+//       replays a whole batch straight through the pause.
+//
+// THE CADENCE (impact map §4)
+//   SAMPLED (default)  — one trace per root per BATCH, taken at the batch END.
+//       That state is the post-batch state, i.e. the PRE-step state of the next
+//       generation: "the board on screen → what it does next".
+//   EVERY GENERATION   — `everyGen` (the main thread sets it while breakpoints
+//       exist or the user is stepping): trace BEFORE each generation, and break
+//       if a breakpoint id appears. Costs one extra single-element evaluation
+//       per generation, and (on WebGPU) one readback — which is why it is opt-in
+//       and why it makes a model residency-INELIGIBLE (see agentResidentEligible).
+//   ON DEMAND          — `requestTrace`, and after every state-changing event
+//       (paint / import / load / reset / recompile), coalesced through a
+//       microtask so a burst of paints traces once.
+//
+// The Overseer never traces: its batches carry a `reqId` and are a fixed-count
+// ensemble run — a break would silently bias the statistics.
+// ---------------------------------------------------------------------------
+
+/** The traced CELL (a flat index — dimension-blind, so 2D and 3D are one path)
+ *  and the traced AGENT (a slot id). A grid+agents model can carry one of each;
+ *  each drives its own graph's roots. */
+let traceCellTarget: number | null = null;
+let traceAgentTarget: number | null = null;
+/** True while anything is traced — the one test every hook opens with. */
+function traceArmed(): boolean { return traceCellTarget !== null || traceAgentTarget !== null; }
+
+type TraceRootKind = 'cell' | 'agent' | 'global';
+
+interface TraceFnEntry {
+  fn: (...args: unknown[]) => unknown;
+  /** The emitted fn's FULL parameter list — `runTrace` names its sandbox
+   *  wrappers from this (it is the only way it can tell `_rngState` from a cell
+   *  attribute buffer) and cuts the arg list to the declared count. */
+  paramNames: string[];
+  /** Does the root take an ELEMENT, or is it global (grid init, a periodic
+   *  event, agent init)? */
+  kind: TraceRootKind;
+  /** WHICH graph the root belongs to — a global root still belongs to the cell
+   *  or the agent side, and that decides which freshness one-shot precedes it. */
+  side: 'cell' | 'agent';
+  /** Periodic roots only — the worker fires them on its own cadence test, the
+   *  same `generation % period === phase` the engine's copy uses. Pairing by
+   *  index with `gridPeriodicFns` would drift the moment one of them failed to
+   *  eval. */
+  period?: number;
+  phase?: number;
+  /** STATIC approximation markers, scanned ONCE from the emitted text (see
+   *  `traceApproximate`). */
+  usesRng: boolean;
+  usesIndicatorWrite: boolean;
+  usesAgentHash: boolean;
+}
+
+/** Root key → the eval'd trace fn. Keyed by `traceProtocol`'s root keys, which
+ *  are the keys `compile.ts` writes into `trace.paramNames`. */
+const traceFns = new Map<TraceRootKey, TraceFnEntry>();
+/** LOWERED node ids. The main thread resolves user ids through the origin table
+ *  before sending, so the worker only ever does set membership. */
+let traceBreakIds = new Set<string>();
+let traceEveryGen = false;
+/** The generation a breakpoint already fired on — a breakpoint fires ONCE per
+ *  generation, so the `step` that resumes runs that generation through. */
+let traceBreakGen = -1;
+/** Monotonic reply id, so the UI can drop an out-of-order arrival. */
+let traceSeq = 0;
+/** A break that has fired and is waiting for its batch to post `stepped` first
+ *  (invariant I4's ordering). */
+let tracePendingBreak: { root: TraceRootKey; gen: number; nodeId: string } | null = null;
+/** Which RULE root the last breakpoint hit came from — set beside the hit so the
+ *  break message names the root without threading it back through two returns. */
+let traceLastHitRoot: TraceRootKey = TRACE_ROOT_STEP;
+/** Coalescing latch for the on-demand cadence (a paint drag posts one message
+ *  per frame; a stroke must trace ONCE). */
+let traceRequestPending = false;
+/** Set by `recompile`: the fns in hand were built from the PREVIOUS graph and
+ *  must not be run. The main thread's `setTrace` with fresh codes clears it (P3
+ *  sends `recompile` first — the engine must not wait on the trace compile). */
+let traceCodesStale = false;
+/** The generation `currentAgentHash` was built for — a trace taken BEFORE an
+ *  agent step hands the sandbox the PREVIOUS generation's hash, which only
+ *  matters for a graph that queries it (see `traceApproximate`). */
+let currentAgentHashGen = -1;
+
+/** Scan the emitted text ONCE for the things that make a trace an approximation
+ *  rather than a prediction. Text tests are exact here because these are the
+ *  literal token sequences the node emitters produce (GetRandomNode &co's
+ *  xorshift advance, UpdateIndicator/SetIndicator's accumulator write, the
+ *  spatial-hash stencil the nearby/vision nodes emit). */
+function traceMarkers(code: string): Pick<TraceFnEntry, 'usesRng' | 'usesIndicatorWrite' | 'usesAgentHash'> {
+  return {
+    usesRng: code.includes('_rs = (_rs ^'),
+    usesIndicatorWrite: /_indicators\[[^\]]*\]\s*(?:=[^=]|\+=|-=)/.test(code),
+    usesAgentHash: code.includes('_hashBinStart['),
+  };
+}
+
+/** Eval one root into the registry. A failure is COLLECTED, never thrown: one
+ *  broken root must not cost the others (the `compileFns` posture). */
+function installTraceFn(
+  errors: Array<{ root: TraceRootKey; message: string }>,
+  rootKey: TraceRootKey, code: string | undefined,
+  paramNames: Record<string, string[]> | undefined,
+  kind: TraceRootKind, side: 'cell' | 'agent',
+  cadence?: { period: number; phase: number },
+): void {
+  if (!code) return;
+  const params = paramNames?.[rootKey];
+  if (!params) {
+    errors.push({ root: rootKey, message: 'the trace build shipped code but no parameter list' });
+    return;
+  }
+  try {
+    // eslint-disable-next-line no-eval
+    const fn = eval(code) as (...args: unknown[]) => unknown;
+    traceFns.set(rootKey, { fn, paramNames: params, kind, side, ...cadence, ...traceMarkers(code) });
+  } catch (e) {
+    errors.push({ root: rootKey, message: (e instanceof Error ? e.message : String(e)) });
+  }
+}
+
+function installTraceCodes(codes: TraceCodes): void {
+  traceFns.clear();
+  traceCodesStale = false;
+  const errors: Array<{ root: TraceRootKey; message: string }> = [];
+  const c = codes.cell;
+  if (c) {
+    installTraceFn(errors, TRACE_ROOT_STEP, c.stepCode, c.paramNames, 'cell', 'cell');
+    installTraceFn(errors, TRACE_ROOT_INIT, c.initCode, c.paramNames, 'cell', 'cell');
+    installTraceFn(errors, TRACE_ROOT_GRID_INIT, c.gridInitCode, c.paramNames, 'global', 'cell');
+    for (const p of c.gridPeriodicCodes ?? []) {
+      installTraceFn(errors, p.rootKey, p.code, c.paramNames, 'global', 'cell', { period: p.period, phase: p.phase });
+    }
+    for (const ic of c.inputColorCodes ?? []) {
+      // inputColor / division / the agent input mapping declare `idx` THEMSELVES
+      // (they are already single-element roots), so they take only `_tr` as a
+      // trailing arg — `runTrace` reads that off `paramNames`, not off `kind`.
+      installTraceFn(errors, traceInputColorKey(ic.mappingId), ic.code, c.paramNames, 'cell', 'cell');
+    }
+    for (const om of c.outputMappingCodes ?? []) {
+      installTraceFn(errors, traceOutputMappingKey(om.mappingId), om.code, c.paramNames, 'cell', 'cell');
+    }
+  }
+  const a = codes.agent;
+  if (a) {
+    installTraceFn(errors, TRACE_ROOT_AGENT_BEHAVIOUR, a.behaviourCode, a.paramNames, 'agent', 'agent');
+    installTraceFn(errors, TRACE_ROOT_AGENT_INIT, a.initCode, a.paramNames, 'global', 'agent');
+    installTraceFn(errors, TRACE_ROOT_AGENT_DIVISION, a.divisionCode, a.paramNames, 'agent', 'agent');
+    for (const p of a.periodicCodes ?? []) {
+      installTraceFn(errors, p.rootKey, p.code, a.paramNames, 'global', 'agent', { period: p.period, phase: p.phase });
+    }
+    for (const om of a.outputMappingCodes ?? []) {
+      installTraceFn(errors, traceAgentOutputMappingKey(om.mappingId), om.code, a.paramNames, 'agent', 'agent');
+    }
+    for (const im of a.inputMappingCodes ?? []) {
+      installTraceFn(errors, traceAgentInputMappingKey(im.mappingId), im.code, a.paramNames, 'agent', 'agent');
+    }
+  }
+  if (errors.length > 0) self.postMessage({ type: 'traceCompileErrors', errors });
+}
+
+/** The target no longer exists. Clear it (the FNS stay — the model didn't
+ *  change) and say why, so the UI can drop its chip and its marks. */
+function loseTraceTarget(kind: 'cell' | 'agent', reason: string): void {
+  if (kind === 'cell') traceCellTarget = null; else traceAgentTarget = null;
+  self.postMessage({ type: 'traceTargetLost', reason });
+}
+
+/** Is the cell target still a cell of this grid? Posts + clears if not. */
+function traceCellIdx(): number | null {
+  const idx = traceCellTarget;
+  if (idx === null) return null;
+  if (!gridCellsEnabled) { loseTraceTarget('cell', 'the model no longer has a cell grid'); return null; }
+  if (idx < 0 || idx >= total) {
+    loseTraceTarget('cell', `the traced cell (index ${idx}) is outside the current grid of ${total} cells`);
+    return null;
+  }
+  return idx;
+}
+
+/** Is the agent target still alive? Posts + clears if not (a traced agent dying
+ *  is the ordinary end of an agent trace session). */
+function traceAgentId(): number | null {
+  const id = traceAgentTarget;
+  if (id === null) return null;
+  const s = agentStore;
+  if (!s) { loseTraceTarget('agent', 'the model no longer has agents'); return null; }
+  if (id < 0 || id >= s.highWater || !s.alive[id]) {
+    loseTraceTarget('agent', `the traced agent (#${id}) is no longer alive`);
+    return null;
+  }
+  return id;
+}
+
+/** Why this trace is an APPROXIMATION rather than a prediction of the element's
+ *  next state. Honest and conservative — a false "exact" is far worse than a
+ *  false "approximate", because the whole feature is an explanation.
+ *
+ *  STATIC (from the emitted text, scanned once):
+ *   - RNG. The sandbox draws from a PRIVATE stream seeded from (element,
+ *     generation) so a re-trace is stable and the engine's shared stream is not
+ *     advanced (D1) — which necessarily means different draws from the real run.
+ *   - INDICATOR ACCUMULATION. `updateIndicator` / `setIndicator` mutate one
+ *     shared accumulator that every OTHER element also writes this generation;
+ *     a single-element trace sees only its own contribution.
+ *   - A SPATIAL-HASH QUERY whose hash was built for an earlier generation (see
+ *     `currentAgentHashGen`): the agents have moved since it was binned.
+ *  DYNAMIC (from the run's state):
+ *   - ASYNCHRONOUS cells / agents: the element's real turn comes after some of
+ *     its neighbours have already written THIS generation, and the trace reads
+ *     the state as of now.
+ *   - A CELL trace on a model whose agents deposit into the field: the agent
+ *     step runs BEFORE the cell step, so this generation's deposit is not in the
+ *     numbers the trace read (the trace is taken before the generation, which is
+ *     what a breakpoint means).
+ */
+function traceApproximate(entry: TraceFnEntry): boolean {
+  if (entry.usesRng || entry.usesIndicatorWrite) return true;
+  if (entry.side === 'cell') {
+    if (updateMode === 'asynchronous') return true;
+    if (agentStore && simulateAgents && agentUsesField) return true;
+    return false;
+  }
+  if (entry.usesAgentHash && currentAgentHashGen !== generation) return true;
+  if (agentStore && !agentStore.syncAttrs) return true;
+  return false;
+}
+
+/** The first breakpoint id in an event log, or null. Value (`v`) and flow (`f`)
+ *  records both count: a breakpoint on a pure value node must fire even though
+ *  no flow record carries its id. */
+function traceFirstBreak(events: TraceEvent[]): string | null {
+  if (traceBreakIds.size === 0) return null;
+  for (const e of events) {
+    if (e[0] === 'f' || e[0] === 'v') { if (traceBreakIds.has(e[1])) return e[1]; }
+  }
+  return null;
+}
+
+/** Run ONE root and post its trace. SYNCHRONOUS on purpose: several call sites
+ *  (Reset's init roots, a paint's input mapping, a division) must trace the
+ *  PRE-state, and an `await` there would let the real run happen first. The
+ *  async freshness (I3) is the CALLER's, through `traceFreshFor`.
+ *
+ *  Returns the lowered id of the first breakpoint hit, or null. */
+function traceRootSync(
+  rootKey: TraceRootKey, args: unknown[], elementIdx: number | undefined, target: TraceTarget,
+): string | null {
+  if (traceCodesStale) return null;
+  const entry = traceFns.get(rootKey);
+  if (!entry) return null;
+  let result;
+  try {
+    result = runTrace({
+      fn: entry.fn, args, paramNames: entry.paramNames,
+      ...(elementIdx !== undefined ? { elementIdx } : {}),
+      generation, maxEvents: TRACE_MAX_EVENTS,
+      // An aliased buffer (async `r === w`) gets ONE shadow so a self-read after
+      // a self-write sees the write — the engine's own single-buffer semantics.
+      // The ONE case where the CPU aliases what the engine does not is the
+      // WebGPU sync grid whose separate write buffer was dropped for memory
+      // (`attrWriteAliased`): the GPU still steps double-buffered, so the trace
+      // keeps two shadows there and reads stay pre-state.
+      sharedProxies: !(entry.side === 'cell' && attrWriteAliased && updateMode !== 'asynchronous'),
+    });
+  } catch (e) {
+    if (e instanceof TraceSandboxEscape) {
+      // A node emitter started calling `.subarray` / `.slice` on a parameter —
+      // i.e. the sandbox can no longer promise I2. LOUD, and the session stops:
+      // running on would be running unsandboxed.
+      traceFns.clear();
+      traceCellTarget = null; traceAgentTarget = null;
+      self.postMessage({ type: 'error', message: '[trace] ' + e.message });
+      self.postMessage({ type: 'traceTargetLost', reason: 'the trace sandbox was breached (see the error above)' });
+      return null;
+    }
+    throw e;
+  }
+  const events = result.events as TraceEvent[];
+  const writes = result.writes as TraceWrite[];
+  self.postMessage({
+    type: 'trace', seq: ++traceSeq, root: rootKey, gen: generation, target,
+    events, writes, truncated: result.truncated, approximate: traceApproximate(entry),
+    ...(result.error !== undefined ? { error: result.error } : {}),
+  });
+  return traceFirstBreak(events);
+}
+
+/** Every message whose handler changes what a trace would read. The ON-DEMAND
+ *  cadence re-traces after each of them (`step` is NOT here: the batch loops
+ *  own their own cadence, and a per-batch double trace is exactly the waste the
+ *  sampled rule avoids). */
+const TRACE_RETRACE_TYPES = new Set<string>([
+  // `paint` and `reset` are deliberately ABSENT: both finish on an asynchronous
+  // arm under WebGPU and schedule from their own continuation, where the state
+  // is actually applied. Listing them here too would post one trace of the
+  // PRE-mutation state before the real one on those arms.
+  'paintManual', 'writeRegion', 'clearRegion', 'importImage', 'importGridValues',
+  'loadState', 'recompile', 'setRngSeed', 'updateModelAttrs', 'updateLookupTable',
+  'seedAgents', 'createAgent', 'killAgents', 'paintAgents', 'paintAgentsColor', 'spawnAgentsBrush',
+  'clearAgents', 'pasteAgents', 'moveAgents', 'nudgeAgents', 'formBond', 'breakBond', 'setBondState',
+]);
+
+/** A GLOBAL root (grid init, a periodic event, agent init) has no element, but
+ *  the reply still names the session's target so the UI can file the trace under
+ *  the element the user is watching. */
+function traceGlobalTarget(): TraceTarget {
+  if (traceCellTarget !== null) return { kind: 'cell', idx: traceCellTarget };
+  if (traceAgentTarget !== null) return { kind: 'agent', id: traceAgentTarget };
+  return { kind: 'cell', idx: -1 };
+}
+
+/** Trace every PERIODIC root of one side that is due on this generation, before
+ *  the engine fires its own copies. Args are built lazily so a model with no
+ *  periodic trace root pays nothing. */
+function traceDuePeriodicRoots(side: 'cell' | 'agent', args: () => unknown[]): void {
+  if (!traceArmed() || traceFns.size === 0 || traceCodesStale) return;
+  let built: unknown[] | null = null;
+  for (const [key, entry] of traceFns) {
+    if (entry.side !== side || entry.kind !== 'global' || entry.period === undefined || entry.phase === undefined) continue;
+    if (generation % entry.period !== entry.phase) continue;
+    if (built === null) built = args();
+    traceRootSync(key, built, undefined, traceGlobalTarget());
+  }
+}
+
+/** I3 — pull the GPU state down before a trace READS the CPU mirror, and ONLY
+ *  when it is actually stale. The conditions MIRROR the one-shots' own guards,
+ *  so this returns `null` — no promise, no microtask — in every case where the
+ *  one-shot would have returned immediately. That is what lets the synchronous
+ *  G/F-1 step path trace in line (it is a JS/WASM grid with CPU agents by
+ *  construction: both GPU branches of the `step` handler return before it), and
+ *  what keeps a non-GPU session free of scheduling noise.
+ *
+ *  The trace is a READER: it calls the one-shots, and NEVER clears
+ *  `gpuOwnsAttrs` / `agentStoreStale` itself. */
+function traceAwaitFreshness(): Promise<void> | null {
+  const needCell = traceCellTarget !== null && useWebGPU && !!webgpuRuntime?.stepReady && gpuOwnsAttrs;
+  const needAgent = traceAgentTarget !== null && agentStoreStale && !!agentWebgpuRuntime && !!agentStore;
+  if (!needCell && !needAgent) return null;
+  return (async () => {
+    if (needCell) await ensureCpuAttrsFresh();
+    if (needAgent) await ensureAgentStoreFresh();
+  })();
+}
+
+/** The CELL step trace + the ACTIVE viewer's output mapping (the two roots the
+ *  Trace panel shows for a cell). Assumes freshness has been dealt with.
+ *
+ *  ⚠ BUFFER NOTE. `buildLoopArgs()` hands the sandbox `readAttrs` / `writeAttrs`
+ *  as they stand NOW. In sync mode that is the post-swap state — exactly what
+ *  the next `runStep` will read — and under WASM a paint may have left
+ *  `readAttrs !== attrsA`; that only changes WHICH buffer object holds the
+ *  values, never the values, so the trace reads the same numbers the engine
+ *  will. `runStep`'s own normalisation copy happens after this and is invisible
+ *  to a reader. */
+function traceCellRoots(idx: number): string | null {
+  const target: TraceTarget = { kind: 'cell', idx };
+  const hit = traceRootSync(TRACE_ROOT_STEP, buildLoopArgs(true, idx), idx, target);
+  if (hit !== null) traceLastHitRoot = TRACE_ROOT_STEP;
+  // The output mapping is traced for the ACTIVE viewer only — the others are not
+  // on screen, and each is a whole extra evaluation. Its records are NOT
+  // breakpoint-matched: the colour pass runs once per BATCH in production, so a
+  // pause "before this generation" cannot be attributed to it.
+  const omKey = traceOutputMappingKey(activeViewer);
+  if (traceFns.has(omKey)) traceRootSync(omKey, buildLoopArgs(false, idx), idx, target);
+  return hit;
+}
+
+/** The AGENT behaviour trace + the active agent viewer's output mapping. */
+function traceAgentRoots(id: number): string | null {
+  const s = agentStore;
+  if (!s) return null;
+  const target: TraceTarget = { kind: 'agent', id };
+  const hit = traceRootSync(TRACE_ROOT_AGENT_BEHAVIOUR, buildAgentLoopArgs(s), id, target);
+  if (hit !== null) traceLastHitRoot = TRACE_ROOT_AGENT_BEHAVIOUR;
+  const omKey = traceAgentOutputMappingKey(agentColorViewer);
+  if (traceFns.has(omKey)) {
+    traceRootSync(omKey, buildAgentLoopArgs(s, agentColorViewer), id, target);
+  }
+  return hit;
+}
+
+/** Trace every targeted root against the state AS IT STANDS — no awaits, so the
+ *  caller controls exactly where in a generation this lands. Returns the first
+ *  breakpoint id hit (cell roots first, then agent). */
+function traceCurrentStateSync(): string | null {
+  if (!traceArmed() || traceFns.size === 0 || traceCodesStale) return null;
+  let hit: string | null = null;
+  const cellIdx = traceCellIdx();
+  if (cellIdx !== null) hit = traceCellRoots(cellIdx);
+  const agentId = traceAgentId();
+  if (agentId !== null) {
+    const agentHit = traceAgentRoots(agentId);
+    if (hit === null) hit = agentHit;
+  }
+  return hit;
+}
+
+/** THE SAMPLED CADENCE + `requestTrace`: trace whatever is targeted, against the
+ *  state as it stands. Awaits a GPU readback only when one is owed. */
+async function traceCurrentState(): Promise<void> {
+  if (!traceArmed() || traceFns.size === 0 || traceCodesStale) return;
+  const fresh = traceAwaitFreshness();
+  if (fresh) await fresh;
+  traceCurrentStateSync();
+}
+
+/** THE ON-DEMAND CADENCE. Coalesced through a microtask so a paint stroke, a
+ *  region write and an import that all land in one task trace ONCE. */
+function scheduleTraceOfCurrentState(): void {
+  if (!traceArmed() || traceFns.size === 0) return;
+  if (traceRequestPending) return;
+  traceRequestPending = true;
+  queueMicrotask(() => {
+    traceRequestPending = false;
+    void traceCurrentState();
+  });
+}
+
+/** THE EVERY-GENERATION CADENCE (opt-in). Called at the TOP of a generation,
+ *  BEFORE anything of that generation has run, from all three batch loops.
+ *  Returns true when a breakpoint hit and the generation must NOT run.
+ *
+ *  A breakpoint fires once per generation: `traceBreakGen` remembers the
+ *  generation that already broke, so the `step` the user sends to resume runs it
+ *  through (and the NEXT generation can break again). */
+function traceBeforeGenerationSync(traceable: boolean): boolean {
+  if (!traceable || !traceEveryGen || !traceArmed() || traceFns.size === 0 || traceCodesStale) return false;
+  // A breakpoint fires ONCE per generation: the generation that already broke
+  // is traced again (the panel keeps showing it) but does not break again, so
+  // the `step` the user sends to resume runs it through.
+  const suppressBreak = generation === traceBreakGen;
+  const hit = traceCurrentStateSync();
+  if (hit === null || suppressBreak) return false;
+  traceBreakGen = generation;
+  tracePendingBreak = { root: traceLastHitRoot, gen: generation, nodeId: hit };
+  return true;
+}
+
+async function traceBeforeGeneration(traceable: boolean): Promise<boolean> {
+  if (!traceable || !traceEveryGen || !traceArmed() || traceFns.size === 0 || traceCodesStale) return false;
+  const fresh = traceAwaitFreshness();
+  if (fresh) await fresh;
+  return traceBeforeGenerationSync(traceable);
+}
+
+/** Post a pending break — AFTER the batch has posted its own `stepped`, so the
+ *  main thread sees an ordinary completed batch and then the reason it stopped.
+ *
+ *  I4's other half: DROP the play loop's queued `step` batches, exactly as
+ *  `cancelStep` does. Every `sendColors()` posts a `stepped`, and the play loop
+ *  treats any `stepped` as "my batch finished" and issues the next one — so
+ *  without this the batch that was already in the queue when the break fired
+ *  would replay immediately and run straight through the pause. Overseer batches
+ *  (reqId set) are never dropped: the runtime awaits that exact reqId. */
+function flushTraceBreak(): void {
+  const b = tracePendingBreak;
+  if (!b) return;
+  tracePendingBreak = null;
+  if (deferredDuringAsyncBatch.length > 0) {
+    deferredDuringAsyncBatch = deferredDuringAsyncBatch.filter(m => m.type !== 'step' || m.reqId !== undefined);
+  }
+  self.postMessage({ type: 'traceBreak', root: b.root, gen: b.gen, nodeId: b.nodeId });
+}
+
+/** The SAMPLED hook every batch tail calls. Separate from `traceCurrentState`
+ *  only to carry the Overseer exclusion + the break-suppression rule: the batch
+ *  that just broke has already posted its trace of exactly this state. */
+async function traceAfterBatch(traceable: boolean): Promise<void> {
+  if (!traceable || !traceArmed() || traceFns.size === 0) return;
+  if (tracePendingBreak !== null) return;
+  if (traceEveryGen && generation === traceBreakGen) return;
+  await traceCurrentState();
+}
+
+// ---------------------------------------------------------------------------
 // Message handler
 // ---------------------------------------------------------------------------
 
@@ -7270,6 +7890,40 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
   }
 
   switch (msg.type) {
+    // --- RULE TRACE (P2) ---------------------------------------------------
+    case 'setTrace': {
+      // `target` is the COMPLETE intent (see traceProtocol): one target sets its
+      // kind and clears the other, an array sets both, null clears both.
+      const list = msg.target === null ? [] : (Array.isArray(msg.target) ? msg.target : [msg.target]);
+      const cell = list.find(t => t.kind === 'cell');
+      const agent = list.find(t => t.kind === 'agent');
+      traceCellTarget = cell ? (cell as { idx: number }).idx : null;
+      traceAgentTarget = agent ? (agent as { id: number }).id : null;
+      if (msg.codes) installTraceCodes(msg.codes);
+      if (msg.breakpoints) traceBreakIds = new Set(msg.breakpoints);
+      if (msg.everyGen !== undefined) traceEveryGen = !!msg.everyGen;
+      // A fresh session must not inherit the previous one's "already broke here".
+      traceBreakGen = -1;
+      // Trace once immediately: the user just pointed at an element and expects
+      // to see its rule, whether or not the simulation is running.
+      scheduleTraceOfCurrentState();
+      break;
+    }
+    case 'requestTrace': {
+      void traceCurrentState();
+      break;
+    }
+    case 'clearTrace': {
+      traceCellTarget = null; traceAgentTarget = null;
+      traceFns.clear();
+      traceBreakIds = new Set();
+      traceEveryGen = false;
+      traceBreakGen = -1;
+      tracePendingBreak = null;
+      traceCodesStale = false;
+      break;
+    }
+
     case 'init': {
       width = msg.width;
       height = msg.height;
@@ -7537,6 +8191,11 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
       // yields for responsiveness but never cancels.
       stepCancelRequested = false;
       const cancellable = msg.reqId === undefined;
+      // RULE TRACE — the Overseer's batches (reqId set) never trace and never
+      // break: they are a fixed-count ensemble run, and a pause would silently
+      // bias the statistics. Same predicate as `cancellable`, named separately
+      // because they answer different questions.
+      const traceable = msg.reqId === undefined;
 
       if (webgpuActive) {
         // Async WebGPU path: dispatch N steps + finalize each (we need stop-flag
@@ -7580,6 +8239,11 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
               sinceDrain = 0;
             }
             sinceDrain++;
+            // RULE TRACE — the EVERY-GENERATION hook, at the very top of the
+            // generation: before the periodic events, before the agent step,
+            // before the cell dispatch. A breakpoint hit therefore pauses with
+            // NOTHING of this generation applied (invariant I4).
+            if (await traceBeforeGeneration(traceable)) break;
             // ── GLOBAL periodic events (WebGPU GRID branch) ───────────────
             // THE STALE-MIRROR CASE. After a GPU step the live cell state is
             // GPU-resident and the CPU `readAttrs` mirror is stale, so a grid
@@ -7732,6 +8396,11 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
           if (stoppedByEvent !== null) {
             self.postMessage({ type: 'stopEvent', message: stoppedByEvent, reqId: msg.reqId });
           }
+          // RULE TRACE — the SAMPLED cadence (post-batch state = the pre-step
+          // state of the next generation), then the break (posted AFTER this
+          // batch's `stepped`, and dropping the play loop's queued batches).
+          await traceAfterBatch(traceable);
+          flushTraceBreak();
         })().catch(e => {
           const m = (e instanceof Error) ? e.message : String(e);
           self.postMessage({ type: 'error', message: '[webgpu] step pipeline failed: ' + m });
@@ -7803,6 +8472,11 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
                 if (!msg.skipColorPass) runColorPass(true);
               }
               sendColors();
+              // RULE TRACE — the sampled cadence for the RESIDENT batch. The
+              // agent store may be a frame behind here (free-mode residency
+              // skips the readback), so this awaits the one-shot; an every-gen
+              // session never reaches this branch (see agentResidentEligible).
+              await traceAfterBatch(traceable);
               return;
             }
             // A slice FAILED: the generations it did are already committed, so the
@@ -7821,6 +8495,8 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
               if (cancellable && stepCancelRequested) break;
               pacer.reset();
             }
+            // RULE TRACE — the EVERY-GENERATION hook (see the WebGPU-grid loop).
+            if (await traceBeforeGeneration(traceable)) break;
             // GLOBAL periodic events at the TOP of the generation. The grid is
             // JS/WASM in this branch (only the AGENTS are on the GPU), so the grid
             // half needs no residency round trip; the agent half runs on the CPU
@@ -7862,6 +8538,9 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
           if (stepFn && gridCellsEnabled && !msg.skipColorPass) runColorPass(true);
           sendColors();
           if (stoppedByEvent !== null) self.postMessage({ type: 'stopEvent', message: stoppedByEvent, reqId: msg.reqId });
+          // RULE TRACE — sampled cadence + the deferred break (see the grid loop).
+          await traceAfterBatch(traceable);
+          flushTraceBreak();
         })().catch(e => {
           self.postMessage({ type: 'error', message: '[agents] WebGPU step batch failed: ' + ((e as Error)?.message || e) });
         }).finally(endAsyncStepBatch);
@@ -7949,10 +8628,17 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
               if (cancellable && stepCancelRequested) break;
               pacer.reset();
             }
+            // RULE TRACE — the EVERY-GENERATION hook. This branch is a JS/WASM
+            // grid with CPU agents by construction (both GPU branches returned
+            // above), so `traceAwaitFreshness` never actually awaits here; the
+            // async form is used anyway because the loop is already async.
+            if (await traceBeforeGeneration(traceable)) break;
             stoppedByEvent = runOneGeneration();
             if (stoppedByEvent !== null) break;
           }
           finishBatch(stoppedByEvent);
+          await traceAfterBatch(traceable);
+          flushTraceBreak();
         })().catch(e => {
           self.postMessage({ type: 'error', message: 'Step batch failed: ' + ((e as Error)?.message || e) });
         }).finally(endAsyncStepBatch);
@@ -7961,7 +8647,22 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
 
       // G/F 1 (the default): the historical fully-synchronous path, untouched —
       // no promise, no deferral, no chunk bookkeeping.
+      //
+      // RULE TRACE — the SYNCHRONOUS hooks. This path is reached only for a
+      // JS/WASM grid with CPU agents (both GPU branches broke out above), so no
+      // readback is ever owed and the sync cores are complete: no promise is
+      // created and the historical path stays one task, as documented above.
+      if (traceBeforeGenerationSync(traceable)) {
+        // The generation is NOT run. The batch still ends normally (`stepped`),
+        // so the main thread's play loop sees a completed batch, then the break.
+        finishBatch(null);
+        flushTraceBreak();
+        break;
+      }
       finishBatch(runOneGeneration());
+      if (traceable && traceArmed() && traceFns.size > 0 && !(traceEveryGen && generation === traceBreakGen)) {
+        traceCurrentStateSync();
+      }
       break;
     }
 
@@ -7989,6 +8690,23 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
           if (!inBounds3d(lyr, c.row, c.col)) continue;
           const idx = cellIndexOf(lyr, c.row, c.col);
 
+          // RULE TRACE — a brush stroke that covers the traced cell runs its Input
+          // Mapping graph on it, so trace that root with the STROKE's own channel
+          // payload, BEFORE the real call rewrites the cell. ABOVE the target
+          // branch on purpose: the mapping runs on WASM, on the JS fn, or through
+          // the fallback, and the traced ROOT is the same graph in all three — a
+          // trace that only fired on the JS arm would go silent on exactly the
+          // targets this project refuses to treat as second class.
+          // The mapping id resolves EXACTLY as the handler's own `icEntry` did
+          // (the message's id, else the first mapping) — a trace of a different
+          // mapping than the one that ran would be worse than no trace.
+          const traceIcId = msg.mappingId ?? icEntry?.mappingId;
+          if (traceCellTarget === idx && !traceCodesStale && traceIcId) {
+            const icKey = traceInputColorKey(traceIcId);
+            if (traceFns.has(icKey)) {
+              traceRootSync(icKey, [...msg.values, ...buildCellArgs(idx, idx)], idx, { kind: 'cell', idx });
+            }
+          }
           if (wasmIcFn) {
             // WASM InputColor writes via baked-in attrWriteOffset. `values` is the
             // resolved CHANNEL payload (legacy = [r, g, b] → the historical call).
@@ -8017,6 +8735,11 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
             }
           }
         }
+
+        // RULE TRACE — the board changed under the user's hand: re-trace what the
+        // rule does next. Coalesced, so a drag (one message per frame) and every
+        // other mutation handler below share ONE trace per task.
+        scheduleTraceOfCurrentState();
 
         // Update display.
         const webgpuPaint = useWebGPU && webgpuRuntime?.stepReady;
@@ -8185,6 +8908,29 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
         uploadAttrs(webgpuRuntime, readAttrs);
         if (orientationReadView) uploadOrientation(webgpuRuntime, orientationReadView);
       }
+      // RULE TRACE — the Init roots are traced against the PRE-init state, which
+      // is why these calls sit BEFORE the real runs: `resetGrid` has just written
+      // the defaults, so the sandbox sees exactly what the real init is about to
+      // read. Synchronous for the same reason — an `await` here would let the
+      // real init run first and the trace would show its output as its input.
+      // (No readback is owed: the CPU mirror IS the authority at this point, and
+      // the GPU-init arm uploaded from it a few lines above.)
+      if (traceArmed() && traceFns.size > 0 && !traceCodesStale) {
+        const initIdx = traceCellIdx();
+        if (initIdx !== null && traceFns.has(TRACE_ROOT_INIT)) {
+          traceRootSync(TRACE_ROOT_INIT, buildLoopArgs(true, initIdx), initIdx, { kind: 'cell', idx: initIdx });
+        }
+        if (gridCellsEnabled && traceFns.has(TRACE_ROOT_GRID_INIT)) {
+          traceRootSync(TRACE_ROOT_GRID_INIT, buildLoopArgs(), undefined, traceGlobalTarget());
+        }
+        if (agentsEnabled && agentStore && traceFns.has(TRACE_ROOT_AGENT_INIT)) {
+          traceRootSync(
+            TRACE_ROOT_AGENT_INIT,
+            buildAgentInitArgs(agentStore, agentBehaviourCreate, agentBehaviourAddToWorld, agentStore.highWater),
+            undefined, traceGlobalTarget(),
+          );
+        }
+      }
       runInit();
       // Grid Init Event — the GLOBAL seeding pass, AFTER the per-cell Init Event
       // (so a global seed is the final word). Writes CPU readAttrs; on WebGPU a
@@ -8214,15 +8960,31 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
         syncIndicatorsCpuToGpu();
         gpuOwnsAttrs = useGPUInit;
         refreshColorsAfterInputWebGPU();
-        finalizeStepWebGPU({ needColors: true }).then(() => sendColors())
+        // RULE TRACE — the post-Reset board is a new "state on screen", so the
+        // on-demand cadence traces it. CHAINED after the finalize rather than
+        // queued now: the trace may itself owe a GPU→CPU readback (the GPU-init
+        // arm leaves `gpuOwnsAttrs` set), and two readbacks in flight over one
+        // runtime is exactly what the one-shot discipline exists to avoid.
+        finalizeStepWebGPU({ needColors: true }).then(() => { sendColors(); scheduleTraceOfCurrentState(); })
           .catch(e => self.postMessage({ type: 'error', message: '[webgpu] reset colorPass failed: ' + ((e instanceof Error) ? e.message : String(e)) }));
         break;
       }
       sendColors();
+      scheduleTraceOfCurrentState();
       break;
     }
 
     case 'recompile': {
+      // RULE TRACE — the fns in hand were built from the PREVIOUS graph, and the
+      // engine is about to run the new one. They are held (not cleared) but
+      // marked stale, so every hook goes quiet until the main thread's `setTrace`
+      // arrives with the re-compiled trace build. The ORDER is fixed by the
+      // engine's needs: the recompile must not wait on a second JS compile, so it
+      // always lands first, and a trace of the old graph against the new engine
+      // would be a lie with a plausible face — the exact failure this project's
+      // rules are written against.
+      if (traceFns.size > 0) traceCodesStale = true;
+      traceBreakGen = -1;
       updateMode = msg.updateMode || updateMode;
       asyncScheme = msg.asyncScheme || asyncScheme;
       if ((msg as RecompileMsg).viewerIds) {
@@ -10162,4 +10924,12 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
       break;
     }
   }
+  // RULE TRACE - the ON-DEMAND cadence, in ONE place for every message that
+  // changes the state a trace reads. It runs AFTER the handler (the microtask
+  // fires when this task ends) and it coalesces, so a paint drag, a region write
+  // and an import landing in one task cost ONE trace. Handlers that finish
+  // ASYNCHRONOUSLY (the WebGPU paint / reset readback arms) schedule again from
+  // their own continuation - that later schedule is the one that sees the
+  // applied state.
+  if (TRACE_RETRACE_TYPES.has(msg.type)) scheduleTraceOfCurrentState();
 };

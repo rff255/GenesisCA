@@ -209,6 +209,18 @@ export interface RunTraceOptions {
    *  the same element at the same generation gives the same draws (D1). */
   generation?: number;
   maxEvents?: number;
+  /** ALIAS BY IDENTITY (default true): the SAME array object passed under two
+   *  parameter names (`r_x` and `w_x` in asynchronous cell mode, `attrRead` and
+   *  `attrWrite` in the default async agent mode) gets ONE shadow, so a self-read
+   *  after a self-write sees the write — exactly the single-buffer semantics the
+   *  engine has there. Two independent shadows for one buffer would de-alias
+   *  what the model deliberately aliases (the Snake's read-after-write turn).
+   *
+   *  Set it FALSE only where the CPU aliases what the engine does NOT: the
+   *  WebGPU grid target that dropped its separate sync WRITE buffer for memory
+   *  (`attrWriteAliased`) — there the GPU still has two buffers, so the trace
+   *  must keep reads pre-state and writes shadowed apart. */
+  sharedProxies?: boolean;
 }
 
 /** Deterministic per-(element, generation) RNG seed. The engine's shared stream
@@ -240,6 +252,10 @@ export function runTrace(o: RunTraceOptions): TraceResult {
   const shadows: ShadowEntry[] = [];
   const elementIdx = o.elementIdx ?? 0;
   const generation = o.generation ?? 0;
+  const shared = o.sharedProxies !== false;
+  /** base array → its proxy, so an aliased buffer is wrapped ONCE (see
+   *  `sharedProxies`). The first parameter name to reach a buffer names it. */
+  const proxyByBase = new Map<object, unknown>();
 
   const wrapped: unknown[] = o.args.map((arg, i) => {
     const name = o.paramNames[i] ?? `arg${i}`;
@@ -259,7 +275,16 @@ export function runTrace(o: RunTraceOptions): TraceResult {
         return isCreate ? -1 : undefined;
       };
     }
-    if (isArrayLike(arg)) return wrapArray(arg as ArrayLike<number>, name, shadows);
+    if (isArrayLike(arg)) {
+      if (shared) {
+        const existing = proxyByBase.get(arg as object);
+        if (existing !== undefined) return existing;
+        const p = wrapArray(arg as ArrayLike<number>, name, shadows);
+        proxyByBase.set(arg as object, p);
+        return p;
+      }
+      return wrapArray(arg as ArrayLike<number>, name, shadows);
+    }
     return wrapObject(arg as Record<string, unknown>);
   });
 

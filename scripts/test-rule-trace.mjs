@@ -873,6 +873,22 @@ section('F. THE RUNNER — cap, escape, error capture, private RNG, shadow reads
     };
     const r = M.runTrace({ fn, args: [base, rng, stub], paramNames, elementIdx: 1, generation: 0 });
     check('runner: a read after a write sees the WRITE', readBack === 99, String(readBack));
+    // ALIASING BY IDENTITY: the same array under two names (async `r === w`) is
+    // ONE shadow — a write through `w` is visible through `r` (the engine's
+    // single-buffer semantics); with `sharedProxies: false` (the WebGPU dropped-
+    // write-buffer case) the two names keep separate shadows and `r` stays pre-state.
+    {
+      const aliased = new Float64Array([10, 20, 30]);
+      const names = ['r_a', 'w_a', '_rngState', '_traceIdx', '_tr'];
+      let seenShared = null, seenSplit = null;
+      const fnA = (r, w, rs, idx, tr) => { w[idx] = 77; seenShared = r[idx]; };
+      M.runTrace({ fn: fnA, args: [aliased, aliased, rng], paramNames: names, elementIdx: 1, generation: 0 });
+      const fnB = (r, w, rs, idx, tr) => { w[idx] = 77; seenSplit = r[idx]; };
+      M.runTrace({ fn: fnB, args: [aliased, aliased, rng], paramNames: names, elementIdx: 1, generation: 0, sharedProxies: false });
+      check('runner: an ALIASED buffer (r === w) shares ONE shadow by default — r sees the write through w', seenShared === 77, String(seenShared));
+      check('runner: with sharedProxies:false the aliased names keep separate shadows — r stays pre-state', seenSplit === 20, String(seenSplit));
+      check('runner: the aliased base array is untouched either way', aliased[1] === 20, String(aliased[1]));
+    }
     check('runner: the base array is untouched', base[1] === 2, String(base[1]));
     const w = r.writes.find(x => x.param === 'arr' && x.index === 1);
     check('runner: the write is recorded with its previous value', w && w.value === 99 && w.prev === 2, JSON.stringify(w));
