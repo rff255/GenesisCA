@@ -32,6 +32,7 @@ import type { ImportPlan, ImportRow } from '../../model/macroImportPlan';
 import { MacroExportDialog } from '../../components/MacroExportDialog';
 import { MacroImportDialog } from '../../components/MacroImportDialog';
 import { getLiveShown, getLiveFocus, setLiveGraphDragging, dispatchCanvasFullscreen } from '../../live/liveState';
+import { overlayOwnsKeyboard } from '../../live/liveKeyboard';
 import { getNodeDef, getAllNodeDefs } from './nodes/registry';
 
 /** Graph → model write-back debounce. The long value is the LIVE stretch: see
@@ -55,6 +56,12 @@ import type { PortDef, NodeTypeDef } from './types';
 import { MODEL_ELEMENT_DRAG_MIME, RELATED_NODES, payloadElementId, relatedEntriesForPayload, computeCompatibleHandlesForDrag, findNearestCompatibleHandle } from './modelElementDrag';
 import type { ModelElementDragPayload } from './modelElementDrag';
 import { getEffectivePorts } from './effectivePorts';
+// "Organize" — the auto-layout on the graph context menu. Plan + risk map:
+// docs/PLAN_AUTO_ORGANIZE.md. The algorithm is DOM-free and lives entirely in
+// autoLayout.ts; everything below is the gesture, the snapshot and the write-back.
+import { computeAutoLayout, STYLE_PADDING } from './autoLayout';
+import type { LayoutEdgeIn, LayoutNodeIn } from './autoLayout';
+import { portYOffsets } from './nodeGeometry';
 import { vectorPortDims } from './compiler/vectorAttr';
 import { slotVectorDims } from './compiler/multiAttrExpand';
 import { makeCompositeTypeResolver, editorPortCompositeType, rerouteCompositeType, RELAY_BRANCH_PORTS } from './compiler/compositeRelay';
@@ -191,7 +198,7 @@ function graphKindLabel(kind: ActiveGraphKind): string {
   return kind === 'cells' ? 'Cells' : kind === 'agents' ? 'Agents' : 'Overseer';
 }
 
-import { setIsConnecting, setConnectingFrom, isConnectingGlobal, setShowPortLabels, showPortLabelsGlobal, showGridGlobal, setShowGrid as setShowGridGlobal, snapEnabledGlobal, setSnapEnabled as setSnapEnabledGlobal, setConnectedHandlesFromEdges, setConnectionHazards, getSavedGraphViewport, setSavedGraphViewport, savedCurrentScope, setSavedCurrentScope, subscribeCurrentModelElementDrag, setCompatibleHandlesForDrag, clearCompatibleHandlesForDrag, setCurrentModelElementDrag, compatibleHandlesForDrag, currentModelElementDrag, setQuickAddApi, setActiveGraphKind, hasPendingMacroImport, takePendingMacroImport, displayNodeLabel, displayNodeDescription, setControlPick, getControlPick, setOpenMacroScope, getOpenMacroScope, setScopeMoveApi, setScopeDrag, getScopeDrag, type ScopeDragPointer, type ActiveGraphKind } from './graphState';
+import { setIsConnecting, setConnectingFrom, isConnectingGlobal, setShowPortLabels, showPortLabelsGlobal, showGridGlobal, setShowGrid as setShowGridGlobal, snapEnabledGlobal, setSnapEnabled as setSnapEnabledGlobal, setConnectedHandlesFromEdges, setConnectionHazards, getSavedGraphViewport, setSavedGraphViewport, savedCurrentScope, setSavedCurrentScope, subscribeCurrentModelElementDrag, setCompatibleHandlesForDrag, clearCompatibleHandlesForDrag, setCurrentModelElementDrag, compatibleHandlesForDrag, currentModelElementDrag, setQuickAddApi, setActiveGraphKind, hasPendingMacroImport, takePendingMacroImport, displayNodeLabel, displayNodeDescription, setControlPick, getControlPick, setOpenMacroScope, getOpenMacroScope, setScopeMoveApi, setScopeDrag, getScopeDrag, organizeStyleGlobal, setOrganizeStyle, type OrganizeStyle, type ScopeDragPointer, type ActiveGraphKind } from './graphState';
 import { modelerUiState } from '../modelerUiState';
 import type { QuickAddPayload } from './graphState';
 import { detectEdgeHazard, isNodeAvailable } from './nodes/nodeValidation';
@@ -732,6 +739,43 @@ function nodeCenter(n: Node): { x: number; y: number } {
 }
 
 // ---------------------------------------------------------------------------
+// Organize (auto-layout) — see `autoLayout.ts` and docs/PLAN_AUTO_ORGANIZE.md
+// ---------------------------------------------------------------------------
+
+/** Which kind of thing the layout sees. `comment` / `group` are translated by
+ *  the anchor delta only in P1/P2 (P3 gives them the super-node treatment). */
+function layoutKindOf(n: Node): LayoutNodeIn['kind'] {
+  if (n.type === 'groupNode') return 'group';
+  if (n.type === 'commentNode') return 'comment';
+  if (n.type === 'rerouteNode') return 'reroute';
+  return 'node';
+}
+
+/** Root ORDERING only (§4.4). The root SET is structural — "no incoming flow
+ *  edge" — so a node type missing from this table costs an odd vertical order
+ *  and never correctness. The ids are the declared `category: 'event'` types
+ *  that have no flow INPUT; `stopEvent` is deliberately absent (it HAS a flow
+ *  input, so it is never a root), and the two periodic ids are `gridPeriodic` /
+ *  `agentPeriodic` — the plan named them `gridPeriodicEvent` /
+ *  `agentPeriodicEvent`, which do not exist in the registry. */
+const ORGANIZE_ROOT_RANK: Readonly<Record<string, number>> = {
+  step: 0, initEvent: 1, gridInit: 2, behaviourStep: 3, divisionEvent: 4,
+  agentInit: 5, experiment: 6, inputColor: 7, agentInputMapping: 8,
+  outputMapping: 9, agentOutputMapping: 10, periodicStep: 11,
+  gridPeriodic: 12, agentPeriodic: 13,
+};
+
+const ORGANIZE_STYLE_TITLE: Readonly<Record<OrganizeStyle, string>> = {
+  tidy: 'Keep your columns: align them, straighten the flow chains, remove overlaps and snap to the grid. One Ctrl+Z restores every position.',
+  compact: 'Lay the graph out from scratch, tightly packed. One Ctrl+Z restores every position.',
+  expanded: 'Lay the graph out from scratch with roomy spacing — readable at low zoom. One Ctrl+Z restores every position.',
+};
+const ORGANIZE_STYLE_LABEL: Readonly<Record<OrganizeStyle, string>> = {
+  tidy: 'Tidy', compact: 'Compact', expanded: 'Expanded',
+};
+const ORGANIZE_STYLES: readonly OrganizeStyle[] = ['tidy', 'compact', 'expanded'];
+
+// ---------------------------------------------------------------------------
 // Ctrl-drag alignment guides (PowerPoint-style). While Ctrl/Cmd is held during
 // a node drag, the moving node(s) snap so their left/center/right edges and
 // top/center/bottom edges line up with nearby nodes, and dashed guide lines
@@ -913,6 +957,10 @@ export function GraphEditorInner() {
   // remounts (tab switches) AND page reloads (graphState write-through).
   const [showGrid, setShowGrid] = useState(showGridGlobal);
   const [snapEnabled, setSnapEnabled] = useState(snapEnabledGlobal);
+  // The last Organize style, seeded from the persisted view-settings block (the
+  // editor unmounts on every Modeler ↔ Simulator switch). It is what the bare
+  // `O` shortcut applies; picking a leaf from the submenu updates both.
+  const [organizeStyleState, setOrganizeStyleState] = useState<OrganizeStyle>(organizeStyleGlobal);
   const [portLabelsVisible, setPortLabelsVisible] = useState(showPortLabelsGlobal);
   // Theme-reactive canvas colors (Background grid + MiniMap). Defaults match
   // the Blender values so they're correct even before the tokens resolve.
@@ -4537,6 +4585,130 @@ export function GraphEditorInner() {
 
   // Keyboard shortcuts for copy/paste
   //
+  // --- Organize (auto-layout) -----------------------------------------------
+  // The pane menu's `Organize ›`, the selection menu's `Organize Selection ›`
+  // and the bare `O` shortcut all land here. Plan + risk map:
+  // docs/PLAN_AUTO_ORGANIZE.md (§6 is this function).
+  //
+  // Discipline, in order: read the LIVE refs (never a render closure — the same
+  // source `handleNodesChange` reads), one `pushCurrentSnapshot()` BEFORE one
+  // `setNodes` that changes only `position`, one `scheduleSync()`. No
+  // `fitView` (the canvas must not jump under a Ctrl+Z), no
+  // `updateNodeInternals` (a position change moves no handle offset), and no
+  // select changes at all, so `selected` / `measured` / `data` identity all
+  // survive.
+  const organizeIds = useCallback((ids: Set<string> | null, style: OrganizeStyle): boolean => {
+    const all = nodesRef.current;
+    const subject = ids ? all.filter(n => ids.has(n.id)) : all;
+    const boxes = subject.filter(n => layoutKindOf(n) === 'node');
+    if (subject.filter(n => layoutKindOf(n) !== 'comment' && layoutKindOf(n) !== 'group').length < 2) return false;
+    if (boxes.length === 0) return false;
+
+    // R4 — THE MEASUREMENT GATE. `measured` is populated only after React Flow
+    // lays out, so right after a scope switch or a fresh model load every
+    // caNode can still be at the 200×100 fallback and a layout on those sizes
+    // produces real overlaps. Defer a frame and retry, bounded; then proceed on
+    // the documented fallbacks rather than refusing to do anything.
+    const attempt = (frame: number): void => {
+      const live = nodesRef.current;
+      const subj = ids ? live.filter(n => ids.has(n.id)) : live;
+      const ca = subj.filter(n => n.type === 'caNode');
+      const unmeasured = ca.filter(n => !(n as { measured?: { height?: number } }).measured?.height).length;
+      if (ca.length > 0 && unmeasured > 0.2 * ca.length && frame < 3) {
+        requestAnimationFrame(() => attempt(frame + 1));
+        return;
+      }
+
+      // every handle that carries a wire, per node — the collapsed fan needs it
+      const own = new Map<string, Set<string>>();
+      const addHandle = (nodeId: string, h: string | null | undefined) => {
+        if (!h) return;
+        const s = own.get(nodeId);
+        if (s) s.add(h); else own.set(nodeId, new Set([h]));
+      };
+      for (const e of edgesRef.current) { addHandle(e.source, e.sourceHandle); addHandle(e.target, e.targetHandle); }
+
+      const layoutNodes: LayoutNodeIn[] = subj.map(n => {
+        const kind = layoutKindOf(n);
+        const { w, h } = nodeSize(n);
+        const d = n.data as Record<string, unknown> | undefined;
+        const portY = kind === 'node'
+          ? portYOffsets(d?.nodeType as string, d?.config as Record<string, unknown> | undefined, model, {
+            label: !!d?.label,
+            collapsed: !!d?.isCollapsed,
+            height: h,
+            connectedHandles: own.get(n.id),
+          })
+          : {};
+        return {
+          id: n.id, kind, x: n.position.x, y: n.position.y, w, h, portY,
+          rootRank: ORGANIZE_ROOT_RANK[d?.nodeType as string],
+        };
+      });
+      const layoutEdges: LayoutEdgeIn[] = edgesRef.current.map(e => ({
+        id: e.id,
+        source: e.source, sourceHandle: e.sourceHandle ?? '',
+        target: e.target, targetHandle: e.targetHandle ?? '',
+      }));
+
+      // The anchor is the bbox top-left of the laid-out NODE boxes — the same
+      // set `computeAutoLayout` measures its result over (a reroute rides its
+      // wire and must not define the origin). Keeping them in step is what
+      // makes Organize-twice a no-op.
+      const boxNow = subj.filter(n => layoutKindOf(n) === 'node');
+      const anchor = {
+        x: Math.min(...boxNow.map(n => n.position.x)),
+        y: Math.min(...boxNow.map(n => n.position.y)),
+      };
+      if (!Number.isFinite(anchor.x)) return;
+
+      const result = computeAutoLayout(layoutNodes, layoutEdges, {
+        style,
+        ...STYLE_PADDING[style],
+        // Match the canvas's own drag behaviour: React Flow rounds a DRAG to 20
+        // only while the snap toggle is on, and a programmatic setNodes is never
+        // snapped by React Flow at all, so the layout does it itself.
+        grid: snapEnabled ? 20 : 0,
+        anchor,
+        groupPad: 24,
+        commentPad: 16,
+      });
+
+      pushCurrentSnapshot();          // BEFORE the mutation, OUTSIDE the updater
+      setNodes(nds => nds.map(n => {
+        const p = result.positions[n.id];
+        if (!p || (n.position.x === p.x && n.position.y === p.y)) return n;
+        // spread the node so `selected` / `data` / `measured` survive; only the
+        // position changes. (P3: `result.boxes` will also carry group / comment
+        // rects here, written through style + data.width/height.)
+        return { ...n, position: p };
+      }));
+      scheduleSync();
+    };
+    attempt(0);
+    return true;
+  }, [model, snapEnabled, setNodes, scheduleSync, pushCurrentSnapshot]);
+
+  /** How many nodes in the current scope Organize would actually move — the
+   *  pane entry is HIDDEN below 2 (doctrine: a control that structurally cannot
+   *  do anything is not shown greyed). */
+  const organizeEligibleCount = useMemo(
+    () => nodes.filter(n => layoutKindOf(n) === 'node' || layoutKindOf(n) === 'reroute').length,
+    [nodes],
+  );
+
+  const organize = useCallback((scopeSel: 'scope' | 'selection', style: OrganizeStyle) => {
+    // The selection ids are captured BEFORE the menu closes — `contextMenu` is
+    // null by the time a later frame runs.
+    const ids = scopeSel === 'selection' && contextMenu?.target.type === 'selection'
+      ? new Set(contextMenu.target.nodeIds)
+      : null;
+    setOrganizeStyle(style);
+    setOrganizeStyleState(style);
+    organizeIds(ids, style);
+    setContextMenu(null);
+  }, [contextMenu, organizeIds]);
+
   // ⚠ LIVE (Phase 4) — `Ctrl+C/V/X` USED TO BE BOUND TWICE: here and in
   // `SimulatorView`'s main handler, both bubble-phase on `document`, neither
   // stopping propagation. On the Modeler tab the simulator's arm mostly no-ops
@@ -4565,10 +4737,24 @@ export function GraphEditorInner() {
       if (mod && e.key === 'v') { handlePaste(); e.preventDefault(); }
       if (mod && e.key === 'x') { handleCut(); e.preventDefault(); }
       if (mod && e.key === 'd') { duplicateSelection(); e.preventDefault(); }
+
+      // ORGANIZE — bare `O` (docs/PLAN_AUTO_ORGANIZE.md §3.3). It applies the
+      // LAST-USED style to the selection when ≥2 nodes are selected, else to the
+      // whole scope — the same rule the two menu entries express. Guards: the
+      // field guard above, plus `overlayOwnsKeyboard()` (the context menu
+      // carries `role="menu"`, and a bare letter must not fire while one is
+      // open) and, in Live, the graph must own the focus.
+      if (!mod && !e.altKey && (e.key === 'o' || e.key === 'O')) {
+        if (overlayOwnsKeyboard()) return;
+        if (getLiveShown() && getLiveFocus() !== 'graph') return;
+        const selected = nodesRef.current.filter(n => n.selected).map(n => n.id);
+        organizeIds(selected.length >= 2 ? new Set(selected) : null, organizeStyleGlobal);
+        e.preventDefault();
+      }
     };
     document.addEventListener('keydown', handler);
     return () => document.removeEventListener('keydown', handler);
-  }, [handleCopy, handlePaste, handleCut, duplicateSelection, handleUndo, handleRedo]);
+  }, [handleCopy, handlePaste, handleCut, duplicateSelection, handleUndo, handleRedo, organizeIds]);
 
   const renameNode = useCallback(async () => {
     if (!contextMenu || contextMenu.target.type !== 'node') return;
@@ -5297,8 +5483,16 @@ export function GraphEditorInner() {
       morphNode(nodeId, spec);
       return true;
     };
-    return () => { delete w.__dissolveNode; delete w.__morphOptions; delete w.__morphNode; };
-  }, [dissolveNode, morphNode]);
+    // ORGANIZE — the submenu is CSS-hover-gated and a box-select cannot be
+    // driven synthetically, so a browser-side check drives the same function the
+    // menu item calls. `scopeSel: 'selection'` reads the live React Flow
+    // selection rather than a context-menu payload, which is what a test can set.
+    w.__organize = (scopeSel: 'scope' | 'selection', style: OrganizeStyle) => {
+      const selected = nodesRef.current.filter(n => n.selected).map(n => n.id);
+      return organizeIds(scopeSel === 'selection' ? new Set(selected) : null, style);
+    };
+    return () => { delete w.__dissolveNode; delete w.__morphOptions; delete w.__morphNode; delete w.__organize; };
+  }, [dissolveNode, morphNode, organizeIds]);
 
   // DEV-only test hook: box-select multi-selection can't be driven by synthetic
   // events either (same limitation), so browser-eval tests open the selection
@@ -6380,6 +6574,37 @@ export function GraphEditorInner() {
               >
                 Import Macro&hellip;
               </button>
+              {/* ORGANIZE (auto-layout). Hidden — not greyed — below two
+                  layout-eligible nodes: with nothing to arrange the user cannot
+                  reach the working state from this menu, so a greyed row would
+                  be pure clutter (the doctrine's "structurally impossible ⇒
+                  HIDE" arm). Same hover-submenu shape as Align / Distribute /
+                  Morph into: the TRIGGER has no onClick, the leaves do the work,
+                  and every leaf explains itself (and the single-undo) in its
+                  `title`. */}
+              {organizeEligibleCount >= 2 && (
+                <div className={styles.contextSubmenuTrigger}>
+                  <button className={styles.contextItem}>
+                    Organize
+                    <span style={{ marginLeft: 'auto', fontSize: '0.6rem', color: '#6080a0' }}>&rsaquo;</span>
+                  </button>
+                  <div className={styles.contextSubmenu}>
+                    {ORGANIZE_STYLES.map(s => (
+                      <button
+                        key={s}
+                        className={styles.contextItem}
+                        title={`${ORGANIZE_STYLE_TITLE[s]}${s === organizeStyleState ? ' Pressing O applies this one.' : ''}`}
+                        onClick={e => { e.stopPropagation(); organize('scope', s); }}
+                      >
+                        {ORGANIZE_STYLE_LABEL[s]}
+                        {s === organizeStyleState && (
+                          <span style={{ marginLeft: 'auto', fontSize: '0.6rem', color: '#6080a0' }}>O</span>
+                        )}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
               <hr style={{ border: 'none', borderTop: '1px solid var(--color-border)', margin: '4px 0' }} />
               {renderQuickAddSearch('Search nodes… (Enter adds)', `No nodes${dropMenuSearch ? ' match' : ''}`)}
             </>
@@ -6581,6 +6806,33 @@ export function GraphEditorInner() {
               <button className={styles.contextItem} onClick={e => { e.stopPropagation(); createMacroFromSelection(); }}>Create Macro</button>
               <button className={styles.contextItem} onClick={e => { e.stopPropagation(); createGroup(); }}>Create Group</button>
               <hr style={{ border: 'none', borderTop: '1px solid var(--color-border)', margin: '4px 0' }} />
+              {/* ORGANIZE SELECTION — the same three styles applied to the
+                  selected nodes only. Edges to unselected nodes are ignored, so
+                  the selection's roots are "nodes with no SELECTED flow
+                  predecessor", and the result is anchored on the selection's own
+                  bbox top-left. The `selection` menu target only exists at ≥2
+                  nodes, so there is no hidden/greyed case to handle here. */}
+              <div className={styles.contextSubmenuTrigger}>
+                <button className={styles.contextItem}>
+                  Organize Selection
+                  <span style={{ marginLeft: 'auto', fontSize: '0.6rem', color: '#6080a0' }}>&rsaquo;</span>
+                </button>
+                <div className={styles.contextSubmenu}>
+                  {ORGANIZE_STYLES.map(s => (
+                    <button
+                      key={s}
+                      className={styles.contextItem}
+                      title={`${ORGANIZE_STYLE_TITLE[s]}${s === organizeStyleState ? ' Pressing O applies this one.' : ''}`}
+                      onClick={e => { e.stopPropagation(); organize('selection', s); }}
+                    >
+                      {ORGANIZE_STYLE_LABEL[s]}
+                      {s === organizeStyleState && (
+                        <span style={{ marginLeft: 'auto', fontSize: '0.6rem', color: '#6080a0' }}>O</span>
+                      )}
+                    </button>
+                  ))}
+                </div>
+              </div>
               <div className={styles.contextSubmenuTrigger}>
                 <button className={styles.contextItem}>
                   Align

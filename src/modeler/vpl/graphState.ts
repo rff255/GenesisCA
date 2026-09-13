@@ -187,7 +187,15 @@ type GraphViewSettings = {
   showPortLabels?: boolean;
   showGrid?: boolean;
   snapEnabled?: boolean;
+  organizeStyle?: OrganizeStyle;
 };
+
+/** The auto-layout style the "Organize" context-menu submenu last applied — see
+ *  [autoLayout.ts](autoLayout.ts) and `docs/PLAN_AUTO_ORGANIZE.md`. It is what
+ *  the bare `O` shortcut uses, so it belongs with the other canvas view settings
+ *  rather than in a `useState` that a Modeler ↔ Simulator round-trip resets. */
+export type OrganizeStyle = 'tidy' | 'compact' | 'expanded';
+const ORGANIZE_STYLES: readonly OrganizeStyle[] = ['tidy', 'compact', 'expanded'];
 
 function loadViewSettings(): GraphViewSettings {
   try {
@@ -208,6 +216,7 @@ function persistViewSettings(): void {
       showPortLabels: showPortLabelsGlobal,
       showGrid: showGridGlobal,
       snapEnabled: snapEnabledGlobal,
+      organizeStyle: organizeStyleGlobal,
     }));
   } catch {
     // localStorage unavailable (private mode / quota) — settings just won't persist
@@ -229,6 +238,20 @@ export let snapEnabledGlobal = savedViewSettings.snapEnabled ?? true;
 export function setSnapEnabled(val: boolean): void {
   if (snapEnabledGlobal === val) return;
   snapEnabledGlobal = val;
+  persistViewSettings();
+}
+
+/** The last Organize style the user picked. Validated on load exactly like its
+ *  siblings — a hand-edited / older localStorage entry falls back to the
+ *  default rather than reaching `computeAutoLayout` as an unknown style. */
+export let organizeStyleGlobal: OrganizeStyle =
+  ORGANIZE_STYLES.includes(savedViewSettings.organizeStyle as OrganizeStyle)
+    ? savedViewSettings.organizeStyle as OrganizeStyle
+    : 'compact';
+
+export function setOrganizeStyle(val: OrganizeStyle): void {
+  if (organizeStyleGlobal === val) return;
+  organizeStyleGlobal = val;
   persistViewSettings();
 }
 

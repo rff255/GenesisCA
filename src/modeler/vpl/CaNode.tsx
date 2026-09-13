@@ -17,6 +17,7 @@ import { ExpressionFormula, namesFromVarMap } from './widgets/ExpressionFormula'
 import { LogicalFormula } from './widgets/LogicalFormula';
 import { handleId } from './types';
 import type { NodeConfig, PortDef } from './types';
+import { portTopBase, PORT_SPACING, COLLAPSED_HANDLE_SPREAD } from './nodeGeometry';
 import type { MacroPort, MacroControl } from '../../model/types';
 
 /** Stable empty list for the boundary-editor memos — a fresh `[]` literal in a
@@ -1591,10 +1592,14 @@ function CaNodeComponent({ id, data, selected }: NodeProps) {
   // main flow handles need no adjustment: they live INSIDE the header (top:50%)
   // and move with it. USER_LABEL_HEIGHT mirrors .userLabel in CaNode.module.css
   // (var(--space-1) padding ×2 + ~14px line + 1px border-bottom ≈ 21px, measured).
-  const USER_LABEL_HEIGHT = 21;
-  const PORT_TOP_BASE = 30 + (userLabel ? USER_LABEL_HEIGHT : 0);
+  // ⚠ The four numbers live in `nodeGeometry.ts` and are IMPORTED here, because
+  // the auto-layout ("Organize", autoLayout.ts) recomputes this same formula to
+  // straighten a flow chain onto its predecessor's handle row. One definition,
+  // two consumers — see nodeGeometry.ts's header and
+  // scripts/verify-auto-layout.mjs section B.
+  const PORT_TOP_BASE = portTopBase(!!userLabel);
   const maxPorts = Math.max(bodyInputPorts.length, bodyOutputPorts.length);
-  const portSpacing = 22;
+  const portSpacing = PORT_SPACING;
   const nodeMinHeight = showExpanded ? Math.max(50, PORT_TOP_BASE + maxPorts * portSpacing) : undefined;
 
   // --- Expression node: user-resizable WIDTH -------------------------------
@@ -1954,7 +1959,7 @@ function CaNodeComponent({ id, data, selected }: NodeProps) {
             port without expanding the node; unconnected ports stay stacked at
             the centre (they're only drag targets). */}
         {(() => {
-          const SPREAD = 11; // px between connected handles (tighter than expanded rows)
+          const SPREAD = COLLAPSED_HANDLE_SPREAD; // px between connected handles (tighter than expanded rows)
           const spreadTop = (i: number, n: number): string =>
             n <= 1 ? '50%' : `calc(50% + ${Math.round((i - (n - 1) / 2) * SPREAD)}px)`;
           const renderSide = (ports: PortDef[], kind: 'input' | 'output') => {

@@ -34,6 +34,7 @@ const GROUPS: { title: string; rows: Row[]; wide?: boolean }[] = [
       ['Ctrl + C / V / X', 'Copy / paste / cut nodes (also between browser tabs)'],
       ['Ctrl + D', 'Duplicate nodes'],
       ['Ctrl + drag', 'Align while dragging'],
+      ['O', 'Organize (auto-layout) — the selection, or the whole graph'],
       ['Right-click', 'Context / add-node menu'],
       ['Press-hold on a wire', 'Drop a reroute point'],
     ],
