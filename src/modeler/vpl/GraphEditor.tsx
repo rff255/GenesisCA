@@ -34,6 +34,11 @@ import { MacroImportDialog } from '../../components/MacroImportDialog';
 import { getLiveShown, getLiveFocus, setLiveGraphDragging, dispatchCanvasFullscreen } from '../../live/liveState';
 import { overlayOwnsKeyboard } from '../../live/liveKeyboard';
 import { getNodeDef, getAllNodeDefs } from './nodes/registry';
+import {
+  buildHoverIndex, computeHoverMarks, zoneForRatio, hoverGlowColor, hoverSoftColor,
+  categoryBaseColor, HOVER_DWELL_MS, HOVER_WIRE_GLOW_L, HOVER_FALLBACK_COLOR,
+} from './hoverHighlight';
+import type { HoverIndex, HoverMarks, HoverZone } from './hoverHighlight';
 
 /** Graph → model write-back debounce. The long value is the LIVE stretch: see
  *  `scheduleSync` for why it is scoped to "a pointer is held in the editor" and
@@ -679,6 +684,20 @@ function toRFEdges(graphEdges: GraphEdge[]): Edge[] {
   }));
 }
 
+/** HOVER HIGHLIGHT — where in the node's SCREEN box the cursor is, as
+ *  `(clientX - left) / width`. React Flow's `onNodeMouseMove` fires on the node
+ *  WRAPPER, so `currentTarget` is the node's own box and the ratio is
+ *  zoom-independent (both terms are screen px). ⚠ ONE layout read per move, and
+ *  the caller writes the DOM only when the resulting ZONE changes — so a hover
+ *  can never force a layout in the same frame it read one. */
+function ratioWithin(event: React.MouseEvent): number {
+  const el = event.currentTarget as HTMLElement | null;
+  if (!el || typeof el.getBoundingClientRect !== 'function') return 0.5;
+  const r = el.getBoundingClientRect();
+  if (!(r.width > 0)) return 0.5;
+  return (event.clientX - r.left) / r.width;
+}
+
 function toGraphNodes(rfNodes: Node[]): GraphNode[] {
   return rfNodes.map(n => {
     const nAny = n as { width?: number; height?: number; measured?: { width?: number; height?: number } };
@@ -1185,9 +1204,14 @@ export function GraphEditorInner() {
    *  every trace and a state write here would defeat the whole exercise. */
   const traceViewRef = useRef<TraceGraphView | null>(null);
   const [traceHover, setTraceHover] = useState<TraceHoverTarget | null>(null);
-  /** Elements already located, so a trace costs a Map hit rather than a
-   *  `querySelector` per marked element. `isConnected` catches a remount. */
-  const traceElsRef = useRef(new Map<string, HTMLElement>());
+  /** Elements already located, so a trace (or a hover) costs a Map hit rather
+   *  than a `querySelector` per marked element. `isConnected` catches a remount.
+   *  ⚠ SHARED by the trace highlighter and the HOVER HIGHLIGHT below (the cache
+   *  is about the DOM, not about either feature); each keeps its OWN marked-set,
+   *  so neither can clear the other's attribute. Scoped to `editorWrapperRef`,
+   *  hence per editor instance — which is what makes Live's second mounted
+   *  editor safe. */
+  const markElsRef = useRef(new Map<string, HTMLElement>());
   /** What currently carries a `data-trace`, so it can be cleared. */
   const traceMarkedRef = useRef<{ nodes: Set<string>; edges: Set<string> }>({ nodes: new Set(), edges: new Set() });
   /** The wire index, rebuilt only when the GRAPH changes (never per trace).
@@ -1207,6 +1231,25 @@ export function GraphEditorInner() {
    *  group-drag bookkeeping inside them). */
   const nodeDragActiveRef = useRef(false);
 
+  // HOVER HIGHLIGHT — the state, declared HERE (beside the trace's) because the
+  // unmount cleanup below clears both features' marks in one pass over the
+  // SHARED element cache. The behaviour lives further down, in the
+  // § HOVER HIGHLIGHT block.
+  /** What currently carries a `data-hover`, so it can be cleared. Kept apart
+   *  from `traceMarkedRef` — the two features mark the same elements with
+   *  different attributes and must never clear each other. */
+  const hoverMarkedRef = useRef<{ nodes: Set<string>; edges: Set<string> }>({ nodes: new Set(), edges: new Set() });
+  /** The live gesture. `zone` is the last zone the ratio resolved to (fed back
+   *  into `zoneForRatio` for the hysteresis); `lit` says the DWELL has elapsed,
+   *  so a later third-switch applies at once. NO React state — a mouse moves
+   *  60–120×/s. */
+  const hoverStateRef = useRef<{
+    originId: string | null;
+    zone: HoverZone | null;
+    lit: boolean;
+    dwell: ReturnType<typeof setTimeout> | null;
+  }>({ originId: null, zone: null, lit: false, dwell: null });
+
   /** Every macro INSTANCE in this model → the DEF it instantiates. The trace's
    *  `macroPath` is in INSTANCE ids, the editor's scope stack is in DEF ids —
    *  see the header of `src/trace/traceGraphMap.ts`. Published to the store so
@@ -1221,9 +1264,9 @@ export function GraphEditorInner() {
   /** def id → which of the instance's OUTPUT ports carries which inner port. */
   const macroOutputMap = useMemo(() => buildMacroOutputMap(model.macroDefs), [model.macroDefs]);
 
-  const traceElFor = useCallback((id: string, kind: 'node' | 'edge'): HTMLElement | null => {
+  const markElFor = useCallback((id: string, kind: 'node' | 'edge'): HTMLElement | null => {
     const key = `${kind}:${id}`;
-    const cache = traceElsRef.current;
+    const cache = markElsRef.current;
     const hit = cache.get(key);
     if (hit && hit.isConnected) return hit;
     const root = editorWrapperRef.current;
@@ -1438,20 +1481,20 @@ export function GraphEditorInner() {
 
     // --- write the DOM ---------------------------------------------------
     const marked = traceMarkedRef.current;
-    for (const id of marked.nodes) if (!nextNodes.has(id)) traceElFor(id, 'node')?.removeAttribute('data-trace');
-    for (const id of marked.edges) if (!nextEdges.has(id)) traceElFor(id, 'edge')?.removeAttribute('data-trace');
+    for (const id of marked.nodes) if (!nextNodes.has(id)) markElFor(id, 'node')?.removeAttribute('data-trace');
+    for (const id of marked.edges) if (!nextEdges.has(id)) markElFor(id, 'edge')?.removeAttribute('data-trace');
     // Applied UNCONDITIONALLY for every current member rather than only for the
     // diff's additions: React Flow can remount an element (which drops the
     // attribute) without the set changing, and `setAttribute` on an unchanged
     // value is free.
     let missing = 0;
     for (const [id, tok] of nextNodes) {
-      const el = traceElFor(id, 'node');
+      const el = markElFor(id, 'node');
       if (!el) { missing++; continue; }
       if (el.getAttribute('data-trace') !== tok) el.setAttribute('data-trace', tok);
     }
     for (const [id, tok] of nextEdges) {
-      const el = traceElFor(id, 'edge');
+      const el = markElFor(id, 'edge');
       if (!el) { missing++; continue; }
       if (el.getAttribute('data-trace') !== tok) el.setAttribute('data-trace', tok);
     }
@@ -1480,7 +1523,7 @@ export function GraphEditorInner() {
       const p = tracePerfRef.current;
       p.n++; p.total += dt; if (dt > p.max) p.max = dt;
     }
-  }, [activeGraph, macroDefIndex, macroOutputMap, traceElFor]);
+  }, [activeGraph, macroDefIndex, macroOutputMap, markElFor]);
 
   const applyTraceMarksRef = useRef(applyTraceMarks);
   applyTraceMarksRef.current = applyTraceMarks;
@@ -1502,9 +1545,21 @@ export function GraphEditorInner() {
   useEffect(() => () => {
     const retry = traceRetryRef.current;
     if (retry.raf !== null) { cancelAnimationFrame(retry.raf); retry.raf = null; }
-    for (const el of traceElsRef.current.values()) if (el.isConnected) el.removeAttribute('data-trace');
-    traceElsRef.current.clear();
+    // The element cache is SHARED with the hover highlighter, so one pass drops
+    // every imperative mark this editor ever wrote — a React Flow remount would
+    // otherwise reuse a marked element.
+    for (const el of markElsRef.current.values()) {
+      if (!el.isConnected) continue;
+      el.removeAttribute('data-trace');
+      el.removeAttribute('data-hover');
+      el.style.removeProperty('--hover-c');
+      el.style.removeProperty('--hover-c-soft');
+    }
+    markElsRef.current.clear();
     traceMarkedRef.current = { nodes: new Set(), edges: new Set() };
+    hoverMarkedRef.current = { nodes: new Set(), edges: new Set() };
+    if (hoverStateRef.current.dwell !== null) clearTimeout(hoverStateRef.current.dwell);
+    hoverStateRef.current = { originId: null, zone: null, lit: false, dwell: null };
     traceViewRef.current = null;
   }, []);
 
@@ -1514,8 +1569,8 @@ export function GraphEditorInner() {
     if (!import.meta.env.DEV) return undefined;
     const w = window as unknown as Record<string, unknown>;
     w.__traceMarks = () => ({
-      nodes: [...traceMarkedRef.current.nodes].map(id => ({ id, tok: traceElFor(id, 'node')?.getAttribute('data-trace') ?? null })),
-      edges: [...traceMarkedRef.current.edges].map(id => ({ id, tok: traceElFor(id, 'edge')?.getAttribute('data-trace') ?? null })),
+      nodes: [...traceMarkedRef.current.nodes].map(id => ({ id, tok: markElFor(id, 'node')?.getAttribute('data-trace') ?? null })),
+      edges: [...traceMarkedRef.current.edges].map(id => ({ id, tok: markElFor(id, 'edge')?.getAttribute('data-trace') ?? null })),
     });
     w.__traceView = () => {
       const v = traceViewRef.current;
@@ -1534,7 +1589,7 @@ export function GraphEditorInner() {
       return out;
     };
     return () => { delete w.__traceMarks; delete w.__traceView; delete w.__tracePerf; };
-  }, [traceElFor]);
+  }, [markElFor]);
 
   /** The hovered node's data, for the tooltip (which never touches RF's store). */
   const traceLookupNode = useCallback((id: string): TraceHoverNode | null => {
@@ -1562,6 +1617,283 @@ export function GraphEditorInner() {
     setTraceHover({ kind: 'edge', id: edge.id, x: event.clientX, y: event.clientY });
   }, [traceHoverAllowed]);
   const onTraceHoverLeave = useCallback(() => setTraceHover(null), []);
+
+  // =========================================================================
+  // HOVER HIGHLIGHT (P1) — the node, its wires, its neighbours
+  // =========================================================================
+  // Plan: docs/PLAN_HOVER_HIGHLIGHT.md. Hovering a node rings the node; the
+  // LEFT third additionally lights every wire INTO it (through reroute chains,
+  // dots included) and the real producer at the far end of each, the RIGHT third
+  // does the same downstream, the MIDDLE third is "just looking".
+  //
+  // ⚠ THE MECHANISM IS THE RULE TRACE'S, FOR A STRONGER REASON. A trace lands
+  // ≤30×/s; a mouse moves 60–120×/s. So: no React state, `setNodes`/`setEdges`
+  // are never called, `CaNode` never re-renders because of a hover, and the mark
+  // is a `data-hover` ATTRIBUTE (never a class — React Flow rebuilds `className`
+  // on every render and would wipe it the moment the node was selected).
+  //
+  // COLOUR — user decision D1, which OVERRODE the plan's §3.2: every element
+  // glows in its OWN colour, not in one hue per gesture. So the colour cannot
+  // live in the stylesheet: it is written per element as an inline custom
+  // property `--hover-c` (+ `--hover-c-soft` for the translucent halo). React
+  // Flow renders only ITS OWN style keys on the node wrapper and no style at all
+  // on the edge `<g>`, so a custom property set imperatively survives every
+  // re-render (verified live — plan §2.10).
+
+  /** Adjacency, rebuilt only when the GRAPH changes. Keyed exactly like
+   *  `traceIndexRef` (edge array identity + node COUNT) — a node drag replaces
+   *  the node array 60×/s while changing neither the wiring nor the reroutes. */
+  const hoverIndexRef = useRef<{ edges: unknown; nodeCount: number; index: HoverIndex } | null>(null);
+  /** DEV measurement of the DOM writer (see `window.__hoverPerf`). */
+  const hoverPerfRef = useRef({ n: 0, total: 0, max: 0 });
+  /** A rubber-band selection owns the pointer — React Flow still fires
+   *  `onNodeMouseEnter` as the band crosses a node. */
+  const boxSelectingRef = useRef(false);
+  /** A context menu is up. Mirrored into a ref because the stand-down has to
+   *  IGNORE later enters too, not just clear once when the menu opened. */
+  const contextMenuOpenRef = useRef(false);
+
+  const hoverIndexNow = useCallback((): HoverIndex => {
+    const nodesNow = nodesRef.current;
+    const edgesNow = edgesRef.current;
+    let ix = hoverIndexRef.current;
+    if (!ix || ix.edges !== edgesNow || ix.nodeCount !== nodesNow.length) {
+      ix = { edges: edgesNow, nodeCount: nodesNow.length, index: buildHoverIndex(nodesNow, edgesNow) };
+      hoverIndexRef.current = ix;
+    }
+    return ix.index;
+  }, []);
+
+  /** The glow colour of ONE marked element (decision D1). A node glows in its
+   *  own category colour — `def.color`, LIGHTENED, because the raw fills are
+   *  deliberately dark and a ring in the node's own border colour reads as no
+   *  change (plan §2.3). A reroute dot and a wire glow in their wire's category
+   *  colour, lifted further (a stroke on the canvas, not a ring on a header). */
+  const hoverColorFor = useCallback((
+    kind: 'node' | 'edge', id: string, index: HoverIndex,
+    nodeById: Map<string, Node>,
+  ): string => {
+    if (kind === 'edge') {
+      const w = index.wireById.get(id);
+      return hoverGlowColor(categoryBaseColor(w?.category ?? 'value'), HOVER_WIRE_GLOW_L);
+    }
+    const n = nodeById.get(id);
+    const d = n?.data as { nodeType?: string; portCategory?: string } | undefined;
+    if (index.reroutes.has(id)) {
+      const cat = d?.portCategory === 'flow' ? 'flow' : 'value';
+      return hoverGlowColor(categoryBaseColor(cat), HOVER_WIRE_GLOW_L);
+    }
+    return hoverGlowColor(getNodeDef(d?.nodeType ?? '')?.color ?? HOVER_FALLBACK_COLOR);
+  }, []);
+
+  /** THE ONE WRITER. Removes the attribute + both properties from everything no
+   *  longer marked, then sets them UNCONDITIONALLY on every current member (the
+   *  trace's discipline: React Flow can remount an element, dropping the
+   *  attribute, without the set changing — and `setAttribute` on an unchanged
+   *  value is free). */
+  const applyHoverMarks = useCallback((marks: HoverMarks | null) => {
+    const t0 = import.meta.env.DEV ? performance.now() : 0;
+    const prev = hoverMarkedRef.current;
+    const nextNodes = marks?.nodes;
+    const nextEdges = marks?.edges;
+
+    for (const id of prev.nodes) {
+      if (nextNodes?.has(id)) continue;
+      const el = markElFor(id, 'node');
+      if (!el) continue;
+      el.removeAttribute('data-hover');
+      el.style.removeProperty('--hover-c');
+      el.style.removeProperty('--hover-c-soft');
+    }
+    for (const id of prev.edges) {
+      if (nextEdges?.has(id)) continue;
+      const el = markElFor(id, 'edge');
+      if (!el) continue;
+      el.removeAttribute('data-hover');
+      el.style.removeProperty('--hover-c');
+      el.style.removeProperty('--hover-c-soft');
+    }
+
+    if (marks && nextNodes && nextEdges) {
+      const index = hoverIndexNow();
+      // One pass over the node array per APPLY (a zone change, not a mouse
+      // move), so the per-element colour lookup is a Map hit.
+      const nodeById = new Map(nodesRef.current.map(n => [n.id, n]));
+      const write = (el: HTMLElement, tok: string, colour: string) => {
+        if (el.getAttribute('data-hover') !== tok) el.setAttribute('data-hover', tok);
+        el.style.setProperty('--hover-c', colour);
+        el.style.setProperty('--hover-c-soft', hoverSoftColor(colour));
+      };
+      for (const [id, tok] of nextNodes) {
+        const el = markElFor(id, 'node');
+        if (el) write(el, tok, hoverColorFor('node', id, index, nodeById));
+      }
+      for (const [id, tok] of nextEdges) {
+        const el = markElFor(id, 'edge');
+        if (el) write(el, tok, hoverColorFor('edge', id, index, nodeById));
+      }
+      hoverMarkedRef.current = { nodes: new Set(nextNodes.keys()), edges: new Set(nextEdges.keys()) };
+    } else {
+      hoverMarkedRef.current = { nodes: new Set(), edges: new Set() };
+    }
+
+    if (import.meta.env.DEV) {
+      const dt = performance.now() - t0;
+      const p = hoverPerfRef.current;
+      p.n++; p.total += dt; if (dt > p.max) p.max = dt;
+    }
+  }, [hoverColorFor, hoverIndexNow, markElFor]);
+
+  /** Clear everything and disarm the dwell. Every stand-down routes here. */
+  const clearHover = useCallback(() => {
+    const st = hoverStateRef.current;
+    if (st.dwell !== null) { clearTimeout(st.dwell); st.dwell = null; }
+    st.originId = null; st.zone = null; st.lit = false;
+    if (hoverMarkedRef.current.nodes.size > 0 || hoverMarkedRef.current.edges.size > 0) {
+      applyHoverMarks(null);
+    }
+  }, [applyHoverMarks]);
+  /** A ref so the stand-downs that live in effects with their own dep lists
+   *  (the scope effect) do not have to take `clearHover` as a dependency. */
+  const clearHoverRef = useRef(clearHover);
+  clearHoverRef.current = clearHover;
+
+  /** Recompute + write for the CURRENT gesture. `neighbourhood` is false until
+   *  the dwell elapses, which is what makes the node's own ring immediate and
+   *  the wires patient. */
+  const paintHover = useCallback((neighbourhood: boolean) => {
+    const st = hoverStateRef.current;
+    if (!st.originId) return;
+    const index = hoverIndexNow();
+    const zone: HoverZone = neighbourhood ? (st.zone ?? 'self') : 'self';
+    applyHoverMarks(computeHoverMarks(index, { kind: 'node', id: st.originId, zone }));
+  }, [applyHoverMarks, hoverIndexNow]);
+
+  /** The stand-down list (plan §2.7). A wire drag owns the canvas with its own
+   *  magenta compatibility glow; a node drag and a rubber band own the pointer;
+   *  a context menu means the user has stopped pointing at things. */
+  const hoverAllowed = useCallback(
+    () => !isConnectingGlobal && !nodeDragActiveRef.current
+      && !boxSelectingRef.current && !contextMenuOpenRef.current, []);
+
+  const onHoverNodeEnter = useCallback((event: React.MouseEvent, node: Node) => {
+    if (!hoverAllowed()) return;
+    const index = hoverIndexNow();
+    const kind = index.kindOf.get(node.id);
+    // Groups and comments are skipped BY TYPE: they carry no wires, so there is
+    // nothing to light and a group-header hover must do nothing.
+    if (!kind || kind === 'other') { clearHover(); return; }
+    const st = hoverStateRef.current;
+    if (st.dwell !== null) clearTimeout(st.dwell);
+    st.originId = node.id;
+    // A 16 px dot has no thirds (`computeHoverMarks` enforces `both` for it).
+    st.zone = kind === 'reroute' ? 'both' : zoneForRatio(ratioWithin(event), null);
+    st.lit = false;
+    paintHover(false);
+    st.dwell = setTimeout(() => {
+      const s = hoverStateRef.current;
+      s.dwell = null;
+      if (!s.originId) return;
+      s.lit = true;
+      paintHover(true);
+    }, HOVER_DWELL_MS);
+  }, [clearHover, hoverAllowed, hoverIndexNow, paintHover]);
+
+  const onHoverNodeMove = useCallback((event: React.MouseEvent, node: Node) => {
+    const st = hoverStateRef.current;
+    if (st.originId !== node.id) {
+      // React Flow fires `mousemove` on a node we never got an enter for when
+      // the gesture was stood down and the blocker is gone again (a node drag
+      // that ended with the cursor still on the node).
+      if (hoverAllowed()) onHoverNodeEnter(event, node);
+      return;
+    }
+    if (!hoverAllowed()) { clearHover(); return; }
+    if (st.zone === 'both') return;             // a dot: no thirds to switch
+    const next = zoneForRatio(ratioWithin(event), st.zone);
+    if (next === st.zone) return;               // ⚠ ONE layout read, and the DOM
+    st.zone = next;                             //   is written ONLY on a change
+    if (st.lit) paintHover(true);
+  }, [clearHover, hoverAllowed, onHoverNodeEnter]);
+
+  const onHoverNodeLeave = useCallback(() => { clearHover(); }, [clearHover]);
+
+  // The composed seams. The trace tooltip and the hover highlight both live on
+  // `onNodeMouseEnter` / `onNodeMouseLeave`; neither can be dropped in favour of
+  // the other, and each keeps its own gate rather than sharing one.
+  const onNodeMouseEnterCombined = useCallback((event: React.MouseEvent, node: Node) => {
+    onTraceNodeEnter(event, node);
+    onHoverNodeEnter(event, node);
+  }, [onHoverNodeEnter, onTraceNodeEnter]);
+  const onNodeMouseLeaveCombined = useCallback(() => {
+    onTraceHoverLeave();
+    onHoverNodeLeave();
+  }, [onHoverNodeLeave, onTraceHoverLeave]);
+  const onSelectionStartCombined = useCallback(() => {
+    boxSelectingRef.current = true;
+    clearHover();
+  }, [clearHover]);
+  const onSelectionEndCombined = useCallback(() => { boxSelectingRef.current = false; }, []);
+
+  // A context menu (any of them — pane, node, selection, connection-drop,
+  // link-splice) stands the hover down. ONE effect rather than a line at every
+  // `setContextMenu` site, and it also covers risk R7: with a menu over the
+  // node, `mouseleave` may never fire, so the mark would otherwise stick.
+  useEffect(() => {
+    contextMenuOpenRef.current = !!contextMenu;
+    if (contextMenu) clearHoverRef.current();
+  }, [contextMenu]);
+
+  // The hovered node can vanish under the cursor (Delete with no `mouseleave`),
+  // and a wire can be drawn or cut while the set is lit. Deliberately NOT keyed
+  // on the node array identity — that is replaced on every drag tick.
+  useEffect(() => {
+    const st = hoverStateRef.current;
+    if (!st.originId) return;
+    if (!nodesRef.current.some(n => n.id === st.originId)) { clearHoverRef.current(); return; }
+    if (st.lit) paintHover(true);
+  }, [nodes.length, edges, paintHover]);
+
+  // DEV hooks. `window.__hoverSet` exists because React Flow IGNORES synthetic
+  // mouse events (the standing Key Patterns gotcha), so the real-UI pass drives
+  // the gesture with a REAL hover and uses these only to READ what it produced.
+  useEffect(() => {
+    if (!import.meta.env.DEV) return undefined;
+    const w = window as unknown as Record<string, unknown>;
+    const readBack = (id: string, kind: 'node' | 'edge') => {
+      const el = markElFor(id, kind);
+      return {
+        id,
+        tok: el?.getAttribute('data-hover') ?? null,
+        c: el?.style.getPropertyValue('--hover-c') || null,
+        soft: el?.style.getPropertyValue('--hover-c-soft') || null,
+      };
+    };
+    w.__hoverMarks = () => ({
+      origin: hoverStateRef.current.originId,
+      zone: hoverStateRef.current.zone,
+      lit: hoverStateRef.current.lit,
+      nodes: [...hoverMarkedRef.current.nodes].map(id => readBack(id, 'node')),
+      edges: [...hoverMarkedRef.current.edges].map(id => readBack(id, 'edge')),
+    });
+    w.__hoverPerf = (reset?: boolean) => {
+      const p = hoverPerfRef.current;
+      const out = { n: p.n, mean: p.n ? p.total / p.n : 0, max: p.max };
+      if (reset) { p.n = 0; p.total = 0; p.max = 0; }
+      return out;
+    };
+    w.__hoverSet = (nodeId: string | null, zone?: HoverZone) => {
+      if (!nodeId) { clearHoverRef.current(); return null; }
+      const st = hoverStateRef.current;
+      if (st.dwell !== null) { clearTimeout(st.dwell); st.dwell = null; }
+      st.originId = nodeId;
+      st.zone = zone ?? 'self';
+      st.lit = true;
+      paintHover(true);
+      return (w.__hoverMarks as () => unknown)();
+    };
+    return () => { delete w.__hoverMarks; delete w.__hoverPerf; delete w.__hoverSet; };
+  }, [markElFor, paintHover]);
 
   // --- Browser "back" exits the macro view instead of leaving the site ---
   // One same-document pushState entry per macro level currently entered,
@@ -2157,6 +2489,10 @@ export function GraphEditorInner() {
     // scope change, a graph swap, AND a model load (`modelVersion` is in this
     // effect's deps). Unmount is covered by the cleanup below.
     setControlPick(null);
+    // HOVER HIGHLIGHT (R6) — a scope change, a Cells/Agents swap and a model
+    // load all re-mount the node set, so a mark written for the old one would be
+    // stranded on a reused element.
+    clearHoverRef.current();
     // EXPLICIT CONTROLS (R7) — mirror the open scope so a CLOSED INSTANCE of a
     // def that is open for editing renders its controls DISABLED instead of
     // letting an instance-side write be clobbered by the next debounce tick.
@@ -2809,6 +3145,9 @@ export function GraphEditorInner() {
       // stands down for EVERY node drag, not just a group's.
       nodeDragActiveRef.current = true;
       setTraceHover(null);
+      // HOVER HIGHLIGHT — same position, same reason: the stand-down must be
+      // BEFORE the group-only early return, so it covers every node drag.
+      clearHoverRef.current();
       if (node.type !== 'groupNode') return;
       const members: Array<{ id: string; startX: number; startY: number }> = [];
       for (const n of nodesRef.current) {
@@ -5562,6 +5901,9 @@ export function GraphEditorInner() {
   const onConnectStart: OnConnectStart = useCallback((_event, params) => {
     isConnecting.current = true;
     setIsConnecting(true);
+    // HOVER HIGHLIGHT — a wire drag owns the canvas with the magenta handle
+    // compatibility glow; two glows at once is noise (risk R8).
+    clearHoverRef.current();
     connectionOriginRef.current = null;
     if (params.handleId && params.nodeId) {
       const parsed = parseHandleId(params.handleId);
@@ -6337,10 +6679,19 @@ export function GraphEditorInner() {
         onNodeDragStart={onNodeDragStart}
         onNodeDragStop={onNodeDragStop}
         onNodeDoubleClick={onNodeDoubleClick}
-        onNodeMouseEnter={onTraceNodeEnter}
-        onNodeMouseLeave={onTraceHoverLeave}
+        // TWO features share these four seams — the Rule Trace tooltip and the
+        // HOVER HIGHLIGHT — so each prop is ONE composed callback and each
+        // feature keeps its own gate (risk R14). `onNodeMouseMove` was an unused
+        // React Flow seam until the hover's thirds needed it.
+        onNodeMouseEnter={onNodeMouseEnterCombined}
+        onNodeMouseMove={onHoverNodeMove}
+        onNodeMouseLeave={onNodeMouseLeaveCombined}
         onEdgeMouseEnter={onTraceEdgeEnter}
         onEdgeMouseLeave={onTraceHoverLeave}
+        // A rubber band owns the pointer, but React Flow keeps firing
+        // `onNodeMouseEnter` as it crosses a node.
+        onSelectionStart={onSelectionStartCombined}
+        onSelectionEnd={onSelectionEndCombined}
         onEdgeDoubleClick={(_event, edge) => { setEdges(eds => eds.filter(e => e.id !== edge.id)); scheduleSync(); }}
         nodeTypes={nodeTypes}
         // Restore the user's last pan/zoom across ModelerView unmounts (tab

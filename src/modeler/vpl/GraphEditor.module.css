@@ -477,3 +477,73 @@
     animation: none;
   }
 }
+
+/* =========================================================================
+   HOVER HIGHLIGHT (P1) — the node under the cursor, its wires, its neighbours.
+   =========================================================================
+   ⚠ PLACED AFTER THE RULE TRACE BLOCK ON PURPOSE. The wire rules below and the
+   trace's are the same specificity, so source order decides: a wire that is
+   both trace-lit and hovered shows the HOVER colour while the cursor is on it
+   and returns to the trace violet on leave. That is the intended precedence —
+   the hover answers a question the user is asking right now.
+
+   Same `data-*` ATTRIBUTE contract as the trace (React Flow owns `className`
+   and would wipe an imperative class). Tokens:
+
+     self    (nodes) the hovered node, or the hovered reroute dot
+     peer    (nodes) a real producer / consumer at the far end of a lit wire
+     relay   (nodes) a reroute dot on a lit chain
+     in      (edges) a wire INTO the hovered node (left third)
+     out     (edges) a wire OUT of it (right third)
+
+   ⚠ THE COLOUR IS NOT IN THIS FILE. User decision D1: every element glows in
+   its OWN colour — the hovered node in its lightened `def.color`, each peer in
+   ITS own, a dot and a wire in their wire's category colour. So `GraphEditor`
+   writes `--hover-c` (and `--hover-c-soft`, the translucent halo) as an INLINE
+   custom property per element; a custom property survives React Flow's
+   re-renders because React diffs only the style keys it rendered itself.
+
+   ⚠ THE NODE RING IS ON THE INNER ELEMENT (`> *` = CaNode's `.node` root, or
+   the `.reroute` dot), never on the `.react-flow__node` wrapper. The wrapper
+   already carries two box-shadow languages — the red `.selected` ring and the
+   violet `data-trace` halo — with PAIRED rules so they compose; a third shadow
+   there would need 2³ combination rules. Inside, the hover ring simply sits
+   within both and composes with them for free.
+*/
+
+:global(.react-flow__node[data-hover~="self"] > *) {
+  box-shadow:
+    0 0 0 2px var(--hover-c),
+    0 0 16px 3px var(--hover-c-soft);
+  transition: box-shadow var(--duration-base);
+}
+
+/* Fainter, so the ORIGIN of the gesture stays obvious in a lit set. */
+:global(.react-flow__node[data-hover~="peer"] > *) {
+  box-shadow:
+    0 0 0 1.5px var(--hover-c),
+    0 0 10px 1px var(--hover-c-soft);
+  transition: box-shadow var(--duration-base);
+}
+
+/* A 16px dot: a ring only — a halo that size is a blob. */
+:global(.react-flow__node[data-hover~="relay"] > *) {
+  box-shadow: 0 0 0 2px var(--hover-c);
+  transition: box-shadow var(--duration-base);
+}
+
+/* The lit WIRES. `!important` is required for the same reason the trace's rule
+   needs it: `toRFEdges` puts the stroke in an INLINE style on the path. The
+   `:not(.selected)` guard keeps a deliberately selected wire red. Colour and
+   width only — no `filter: drop-shadow`, which Chromium rasterises per filtered
+   path and which the prototype showed is not needed (plan §2.8 / risk R9). */
+:global(.react-flow__edge:not(.selected)[data-hover] .react-flow__edge-path) {
+  stroke: var(--hover-c) !important;
+  stroke-width: 3.2 !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :global(.react-flow__node[data-hover] > *) {
+    transition: none;
+  }
+}
