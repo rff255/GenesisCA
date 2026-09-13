@@ -1,0 +1,604 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Hover highlight — node, wires, neighbours</title>
+<style>
+  :root{
+    --bg:#0c0d10; --panel:#14161b; --panel2:#1a1d24; --line:#2a2f3a;
+    --ink:#e6e9ef; --dim:#8f9bb0; --accent:#e8a13a; --val:#4cc9f0; --flow:#66bb6a;
+    --bad:#e05252; --ok:#4caf50; --trace:#c85ce0; --sel:#c95151;
+    /* real node fills, from src/modeler/vpl/nodes/*.ts */
+    --cEvent:#ffffff; --cFlow:#1b5e20; --cData:#b71c1c; --cOut:#4a148c; --cLogic:#b8860b; --cAgg:#e65100; --cMacro:#5e35b1;
+    /* the lightened glow hues the mockups use (indicative; P1 settles the curve) */
+    --gFlow:#7fd98a; --gData:#e88080; --gOut:#b48ee0; --gEvent:#ffffff; --gLogic:#e6c86a; --gAgg:#f2a070; --gMacro:#a690d4;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font:14px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;}
+  .wrap{max-width:1120px;margin:0 auto;padding:40px 28px 90px}
+  h1{font-size:1.7rem;margin:0 0 6px;letter-spacing:-.01em}
+  h2{font-size:1.05rem;margin:46px 0 14px;padding-bottom:7px;border-bottom:1px solid var(--line);
+     color:var(--accent);letter-spacing:.02em;text-transform:uppercase;font-weight:600}
+  h3{font-size:.92rem;margin:22px 0 8px;color:var(--ink);font-weight:600}
+  .sub{color:var(--dim);margin:0 0 8px}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:18px 20px;margin:16px 0}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+  .grid3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px}
+  @media (max-width:900px){.grid2,.grid3{grid-template-columns:1fr}}
+  .tag{display:inline-block;font-size:.68rem;letter-spacing:.06em;text-transform:uppercase;
+       padding:2px 8px;border-radius:999px;border:1px solid var(--line);color:var(--dim);margin-bottom:10px}
+  .tag.before{border-color:#4a3a3a;color:#c98a8a}
+  .tag.after{border-color:#3a4a3a;color:#8ac98a}
+  .tag.alt{border-color:#3a3f4a;color:#9aa8c0}
+  .tag.no{border-color:#4a3a3a;color:#c98a8a}
+  code{background:#0a0b0e;border:1px solid var(--line);border-radius:4px;padding:1px 5px;font-size:.86em;color:#cfe3ee}
+  ul{margin:8px 0 0;padding-left:20px} li{margin:5px 0}
+  table{width:100%;border-collapse:collapse;margin-top:10px;font-size:.87rem}
+  th,td{text-align:left;padding:7px 10px;border-bottom:1px solid var(--line);vertical-align:top}
+  th{color:var(--dim);font-weight:600;font-size:.74rem;text-transform:uppercase;letter-spacing:.05em}
+  .note{border-left:3px solid var(--accent);background:#1a160d;padding:10px 14px;border-radius:0 6px 6px 0;margin:14px 0}
+  .note b{color:var(--accent)}
+  .warn{border-left:3px solid var(--bad);background:#1c1111;padding:10px 14px;border-radius:0 6px 6px 0;margin:14px 0}
+  .warn b{color:var(--bad)}
+  .ok{border-left:3px solid var(--ok);background:#0f1a10;padding:10px 14px;border-radius:0 6px 6px 0;margin:14px 0}
+  .ok b{color:var(--ok)}
+  svg{display:block;max-width:100%}
+  .legend{display:flex;gap:18px;flex-wrap:wrap;color:var(--dim);font-size:.8rem;margin-top:10px}
+  .sw{display:inline-block;width:12px;height:12px;border-radius:3px;vertical-align:-2px;margin-right:6px}
+  .swatches{display:grid;grid-template-columns:repeat(7,1fr);gap:8px;margin-top:8px}
+  @media (max-width:900px){.swatches{grid-template-columns:repeat(4,1fr)}}
+  .swatch{border:1px solid var(--line);border-radius:8px;overflow:hidden;font-size:.72rem;color:var(--dim);text-align:center}
+  .swatch .raw{height:26px}
+  .swatch .lit{height:26px;border-top:1px solid #000}
+  .swatch .lbl{padding:5px 4px;background:var(--panel2)}
+  kbd{background:#0a0b0e;border:1px solid var(--line);border-bottom-width:2px;border-radius:4px;padding:0 5px;font-size:.82em}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>Hover highlight — a node, its wires, its neighbours</h1>
+<p class="sub">Editor layer only: one pure module (<code>src/modeler/vpl/hoverHighlight.ts</code>), a CSS block, and
+wiring on three <code>&lt;ReactFlow&gt;</code> mouse props the Rule Trace left unused. No compiler, no schema,
+no worker message — every emitted surface must come out byte-identical. Written plan:
+<b>PLAN_HOVER_HIGHLIGHT.md</b>. Status: <b>proposed</b>; the mechanism was prototyped live (section 6).</p>
+
+<div class="legend">
+  <span><span class="sw" style="background:var(--cEvent)"></span>event root</span>
+  <span><span class="sw" style="background:var(--cFlow)"></span>flow control</span>
+  <span><span class="sw" style="background:var(--cData)"></span>data / read</span>
+  <span><span class="sw" style="background:var(--cOut)"></span>output / write</span>
+  <span><span class="sw" style="background:var(--flow)"></span>flow wire</span>
+  <span><span class="sw" style="background:var(--val)"></span>value wire</span>
+  <span><span class="sw" style="background:var(--gFlow)"></span>hover glow (the hovered node's hue, lightened)</span>
+</div>
+
+<!-- Shared symbols: the little Game-of-Life-shaped graph every state mockup reuses, plus the glow filter. -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <filter id="glow" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur stdDeviation="3" result="b"/>
+      <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <filter id="glowSoft" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur stdDeviation="2" result="b"/>
+      <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <marker id="arw" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+      <path d="M0,0 L6,3 L0,6 z" fill="#e8a13a"/>
+    </marker>
+    <!-- cursor -->
+    <g id="cursor">
+      <path d="M0,0 L0,16 L4,12.5 L7,19 L9.5,18 L6.5,11.5 L11.5,11.5 z" fill="#fff" stroke="#000" stroke-width="1"/>
+    </g>
+    <!-- the base graph, 900 x 300 -->
+    <g id="gBase">
+      <!-- wires -->
+      <path d="M160,142 C 270,142 270,127 380,127" stroke="#66bb6a" stroke-width="2" fill="none"/>
+      <path d="M295,250 C 340,250 335,160 380,160" stroke="#4cc9f0" stroke-width="2" fill="none"/>
+      <path d="M550,155 C 625,155 625,52 700,52" stroke="#66bb6a" stroke-width="2" fill="none"/>
+      <path d="M550,180 C 625,180 625,227 700,227" stroke="#66bb6a" stroke-width="2" fill="none"/>
+      <!-- GENERATION STEP (event root, white header) -->
+      <rect x="20" y="120" width="140" height="44" rx="8" fill="#1a1d24" stroke="#b0b8c0" stroke-width="2"/>
+      <rect x="21" y="121" width="138" height="42" rx="7" fill="#ffffff"/>
+      <text x="90" y="147" fill="#111" font-size="10.5" font-weight="700" text-anchor="middle" letter-spacing=".6">GENERATION STEP</text>
+      <path d="M156,136 L166,142 L156,148 z" fill="#4caf50" stroke="#1b5e20" stroke-width="1"/>
+      <!-- GET CELL ATTRIBUTE -->
+      <rect x="130" y="205" width="165" height="64" rx="8" fill="#1a1d24" stroke="#b71c1c" stroke-width="2"/>
+      <rect x="131" y="206" width="163" height="22" rx="6" fill="#b71c1c"/>
+      <text x="140" y="221" fill="#fff" font-size="9.5" font-weight="700" letter-spacing=".6">GET CELL ATTRIBUTE</text>
+      <rect x="140" y="236" width="120" height="20" rx="3" fill="#0c0d10" stroke="#2a2f3a"/>
+      <text x="148" y="250" fill="#e6e9ef" font-size="10">Alive</text>
+      <circle cx="295" cy="250" r="5" fill="#4cc9f0" stroke="#0d47a1" stroke-width="1.5"/>
+      <text x="304" y="253" fill="#8f9bb0" font-size="8">VALUE</text>
+      <!-- IF / THEN / ELSE -->
+      <rect x="380" y="105" width="170" height="90" rx="8" fill="#1a1d24" stroke="#1b5e20" stroke-width="2"/>
+      <rect x="381" y="106" width="168" height="22" rx="6" fill="#1b5e20"/>
+      <text x="465" y="121" fill="#fff" font-size="9.5" font-weight="700" text-anchor="middle" letter-spacing=".6">IF / THEN / ELSE</text>
+      <path d="M376,121 L386,127 L376,133 z" fill="#4caf50" stroke="#1b5e20" stroke-width="1"/>
+      <path d="M545,121 L555,127 L545,133 z" fill="#4caf50" stroke="#1b5e20" stroke-width="1"/>
+      <text x="560" y="130" fill="#8f9bb0" font-size="8">DONE</text>
+      <circle cx="380" cy="160" r="5" fill="#4cc9f0" stroke="#0d47a1" stroke-width="1.5"/>
+      <text x="390" y="163" fill="#c4ccd8" font-size="8.5">CHECK</text>
+      <path d="M545,149 L555,155 L545,161 z" fill="#4caf50" stroke="#1b5e20" stroke-width="1"/>
+      <text x="560" y="158" fill="#8f9bb0" font-size="8">THEN</text>
+      <path d="M545,174 L555,180 L545,186 z" fill="#4caf50" stroke="#1b5e20" stroke-width="1"/>
+      <text x="560" y="183" fill="#8f9bb0" font-size="8">ELSE</text>
+      <!-- SET ATTRIBUTE A -->
+      <rect x="700" y="30" width="170" height="64" rx="8" fill="#1a1d24" stroke="#4a148c" stroke-width="2"/>
+      <rect x="701" y="31" width="168" height="22" rx="6" fill="#4a148c"/>
+      <text x="712" y="46" fill="#fff" font-size="9.5" font-weight="700" letter-spacing=".6">SET ATTRIBUTE</text>
+      <path d="M696,46 L706,52 L696,58 z" fill="#4caf50" stroke="#1b5e20" stroke-width="1"/>
+      <rect x="712" y="61" width="120" height="20" rx="3" fill="#0c0d10" stroke="#2a2f3a"/>
+      <text x="720" y="75" fill="#e6e9ef" font-size="10">Alive ← true</text>
+      <!-- SET ATTRIBUTE B -->
+      <rect x="700" y="205" width="170" height="64" rx="8" fill="#1a1d24" stroke="#4a148c" stroke-width="2"/>
+      <rect x="701" y="206" width="168" height="22" rx="6" fill="#4a148c"/>
+      <text x="712" y="221" fill="#fff" font-size="9.5" font-weight="700" letter-spacing=".6">SET ATTRIBUTE</text>
+      <path d="M696,221 L706,227 L696,233 z" fill="#4caf50" stroke="#1b5e20" stroke-width="1"/>
+      <rect x="712" y="236" width="120" height="20" rx="3" fill="#0c0d10" stroke="#2a2f3a"/>
+      <text x="720" y="250" fill="#e6e9ef" font-size="10">Alive ← false</text>
+    </g>
+    <!-- the IF node's own ring, reused by every state -->
+    <g id="ringIf">
+      <rect x="378" y="103" width="174" height="94" rx="9" fill="none" stroke="#7fd98a" stroke-width="2.5" filter="url(#glow)"/>
+    </g>
+  </defs>
+</svg>
+
+<!-- ================================================================= -->
+<h2>1 · The gesture — three zones on one node</h2>
+
+<div class="card">
+<p class="sub">The cursor's horizontal position over the node picks what lights: the <b>left third</b> asks
+"what feeds this?", the <b>right third</b> asks "what does this feed?", the <b>middle</b> just marks the
+node. The bands are computed from the node's screen box, so they are the same at every zoom; the
+boundaries carry hysteresis so a cursor resting on one cannot flap.</p>
+
+<svg viewBox="0 0 1060 250" role="img" aria-label="A node divided into three hover zones with hysteresis bands at the two boundaries">
+  <!-- node -->
+  <rect x="120" y="60" width="480" height="130" rx="10" fill="#1a1d24" stroke="#1b5e20" stroke-width="2.5"/>
+  <rect x="121" y="61" width="478" height="30" rx="8" fill="#1b5e20"/>
+  <text x="360" y="81" fill="#fff" font-size="12" font-weight="700" text-anchor="middle" letter-spacing=".8">IF / THEN / ELSE</text>
+  <!-- zone tints -->
+  <rect x="121" y="92" width="159" height="97" fill="#4cc9f0" opacity=".10"/>
+  <rect x="440" y="92" width="159" height="97" fill="#e8a13a" opacity=".10"/>
+  <!-- hysteresis bands -->
+  <rect x="264" y="92" width="32" height="97" fill="url(#hatch)" opacity=".9"/>
+  <rect x="424" y="92" width="32" height="97" fill="url(#hatch)" opacity=".9"/>
+  <defs>
+    <pattern id="hatch" width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
+      <line x1="0" y1="0" x2="0" y2="6" stroke="#8f9bb0" stroke-width="1.2" opacity=".5"/>
+    </pattern>
+  </defs>
+  <!-- boundary lines -->
+  <line x1="280" y1="60" x2="280" y2="190" stroke="#8f9bb0" stroke-dasharray="3 3"/>
+  <line x1="440" y1="60" x2="440" y2="190" stroke="#8f9bb0" stroke-dasharray="3 3"/>
+  <!-- labels -->
+  <text x="200" y="145" fill="#4cc9f0" font-size="13" font-weight="600" text-anchor="middle">INPUTS</text>
+  <text x="200" y="163" fill="#8f9bb0" font-size="10.5" text-anchor="middle">wires in + producers</text>
+  <text x="360" y="145" fill="#e6e9ef" font-size="13" font-weight="600" text-anchor="middle">NODE ONLY</text>
+  <text x="360" y="163" fill="#8f9bb0" font-size="10.5" text-anchor="middle">"just looking"</text>
+  <text x="520" y="145" fill="#e8a13a" font-size="13" font-weight="600" text-anchor="middle">OUTPUTS</text>
+  <text x="520" y="163" fill="#8f9bb0" font-size="10.5" text-anchor="middle">wires out + consumers</text>
+  <!-- ratio axis -->
+  <line x1="120" y1="215" x2="600" y2="215" stroke="#2a2f3a"/>
+  <text x="120" y="235" fill="#8f9bb0" font-size="10.5" text-anchor="middle">0</text>
+  <text x="280" y="235" fill="#8f9bb0" font-size="10.5" text-anchor="middle">⅓</text>
+  <text x="440" y="235" fill="#8f9bb0" font-size="10.5" text-anchor="middle">⅔</text>
+  <text x="600" y="235" fill="#8f9bb0" font-size="10.5" text-anchor="middle">1</text>
+  <text x="360" y="235" fill="#5e6a7d" font-size="10">ratio = (clientX − rect.left) / rect.width</text>
+  <!-- side notes -->
+  <text x="640" y="80" fill="#e6e9ef" font-size="12" font-weight="600">Hysteresis (hatched)</text>
+  <text x="640" y="100" fill="#8f9bb0" font-size="11">enter LEFT below 0.30 · leave it above 0.36</text>
+  <text x="640" y="118" fill="#8f9bb0" font-size="11">enter RIGHT above 0.70 · leave it below 0.64</text>
+  <text x="640" y="150" fill="#e6e9ef" font-size="12" font-weight="600">Where thirds do not apply</text>
+  <text x="640" y="170" fill="#8f9bb0" font-size="11">reroute dot (16 px): hover = both sides</text>
+  <text x="640" y="188" fill="#8f9bb0" font-size="11">group / comment: no wires, no effect</text>
+  <text x="640" y="206" fill="#8f9bb0" font-size="11">collapsed strip: still ≥ 80 px wide, thirds work</text>
+</svg>
+</div>
+
+<!-- ================================================================= -->
+<h2>2 · Before / after — the three states on a real shape (Game of Life)</h2>
+
+<div class="card">
+<span class="tag before">before · today</span>
+<p class="sub">Nothing on the canvas reacts to the mouse except a reroute dot brightening. To learn what feeds
+the If node you read the wires by eye — and behind a dense region, or through a reroute chain, you
+follow them with the cursor.</p>
+<svg viewBox="0 0 900 300" role="img" aria-label="The Game of Life rule graph with no hover feedback">
+  <use href="#gBase"/>
+  <use href="#cursor" x="430" y="150"/>
+</svg>
+</div>
+
+<div class="grid3">
+<div class="card">
+<span class="tag after">after · LEFT third</span>
+<p class="sub">The If node rings in its own hue (lightened); both wires INTO it re-stroke in that hue with a
+halo; Generation Step and Get Cell Attribute get a fainter ring — <i>these feed what I'm pointing at</i>.</p>
+<svg viewBox="0 0 900 300" role="img" aria-label="Hovering the left third: the If node, its two incoming wires and their two producers glow">
+  <use href="#gBase"/>
+  <rect x="381" y="128" width="56" height="66" fill="#4cc9f0" opacity=".08"/>
+  <path d="M160,142 C 270,142 270,127 380,127" stroke="#7fd98a" stroke-width="3.4" fill="none" filter="url(#glowSoft)"/>
+  <path d="M295,250 C 340,250 335,160 380,160" stroke="#7fd98a" stroke-width="3.4" fill="none" filter="url(#glowSoft)"/>
+  <use href="#ringIf"/>
+  <rect x="18" y="118" width="144" height="48" rx="9" fill="none" stroke="#7fd98a" stroke-width="1.6" opacity=".85" filter="url(#glowSoft)"/>
+  <rect x="128" y="203" width="169" height="68" rx="9" fill="none" stroke="#7fd98a" stroke-width="1.6" opacity=".85" filter="url(#glowSoft)"/>
+  <use href="#cursor" x="400" y="150"/>
+</svg>
+</div>
+<div class="card">
+<span class="tag after">after · MIDDLE</span>
+<p class="sub">Only the node marks. This is the "just looking" zone, kept exactly as specified (alternative A2 —
+both sides faint — is listed in section 7).</p>
+<svg viewBox="0 0 900 300" role="img" aria-label="Hovering the middle: only the If node glows">
+  <use href="#gBase"/>
+  <use href="#ringIf"/>
+  <use href="#cursor" x="460" y="152"/>
+</svg>
+</div>
+<div class="card">
+<span class="tag after">after · RIGHT third</span>
+<p class="sub">The THEN and ELSE wires and both Set Attribute consumers light; the incoming side stays as it
+was — <i>this is what I'm pointing at affects</i>.</p>
+<svg viewBox="0 0 900 300" role="img" aria-label="Hovering the right third: the If node, its two outgoing wires and both consumers glow">
+  <use href="#gBase"/>
+  <rect x="493" y="128" width="56" height="66" fill="#e8a13a" opacity=".08"/>
+  <path d="M550,155 C 625,155 625,52 700,52" stroke="#7fd98a" stroke-width="3.4" fill="none" filter="url(#glowSoft)"/>
+  <path d="M550,180 C 625,180 625,227 700,227" stroke="#7fd98a" stroke-width="3.4" fill="none" filter="url(#glowSoft)"/>
+  <use href="#ringIf"/>
+  <rect x="698" y="28" width="174" height="68" rx="9" fill="none" stroke="#7fd98a" stroke-width="1.6" opacity=".85" filter="url(#glowSoft)"/>
+  <rect x="698" y="203" width="174" height="68" rx="9" fill="none" stroke="#7fd98a" stroke-width="1.6" opacity=".85" filter="url(#glowSoft)"/>
+  <use href="#cursor" x="520" y="150"/>
+</svg>
+</div>
+</div>
+
+<div class="note"><b>One hue per gesture.</b> Everything lit by one hover uses the hovered node's own hue,
+lightened — the peers fainter than the origin, so the source of the gesture stays obvious. The flow/value
+distinction is not lost: the port glyphs (triangle vs circle) still carry it. Alternative A1 (wires
+keep their own green/cyan, only brighter) is in section 7 and is the first decision for the user.</div>
+
+<!-- ================================================================= -->
+<h2>3 · Colour — why the raw hue cannot be the glow</h2>
+
+<div class="card">
+<p class="sub">The header fill is <code>def.color</code>, a hex literal per node definition. The
+<code>--color-node-*</code> tokens in <code>tokens.css</code> exist but nothing reads them. Those fills are
+deliberately dark and muted (the Blender compositor palette) — as a 2 px ring on the node's own border, which
+is already that colour, they read as <i>no change</i>. The prototype's first pass proved it: the raw
+<code>#1b5e20</code> ring on the If node was invisible at 1×. The glow is therefore a <b>lightened
+derivative</b>, computed in TypeScript (<code>hoverGlowColor(hex)</code>) and written as one custom property
+<code>--hover-c</code> on each marked element.</p>
+<div class="swatches">
+  <div class="swatch"><div class="raw" style="background:var(--cFlow)"></div><div class="lit" style="background:var(--gFlow)"></div><div class="lbl">flow control<br>#1b5e20</div></div>
+  <div class="swatch"><div class="raw" style="background:var(--cData)"></div><div class="lit" style="background:var(--gData)"></div><div class="lbl">data / read<br>#b71c1c</div></div>
+  <div class="swatch"><div class="raw" style="background:var(--cOut)"></div><div class="lit" style="background:var(--gOut)"></div><div class="lbl">output / write<br>#4a148c</div></div>
+  <div class="swatch"><div class="raw" style="background:var(--cLogic)"></div><div class="lit" style="background:var(--gLogic)"></div><div class="lbl">logic / math<br>#b8860b</div></div>
+  <div class="swatch"><div class="raw" style="background:var(--cAgg)"></div><div class="lit" style="background:var(--gAgg)"></div><div class="lbl">aggregation<br>#e65100</div></div>
+  <div class="swatch"><div class="raw" style="background:var(--cMacro)"></div><div class="lit" style="background:var(--gMacro)"></div><div class="lbl">macro instance<br>#5e35b1</div></div>
+  <div class="swatch"><div class="raw" style="background:var(--cEvent)"></div><div class="lit" style="background:var(--gEvent)"></div><div class="lbl">event root<br>#ffffff → itself</div></div>
+</div>
+<p class="sub" style="margin-top:10px">Top row: the header fill. Bottom row: the glow hue (indicative — P1 settles the exact curve:
+a 55/45 white mix desaturates slightly, an HSL lightness lift keeps more saturation; the harness pins whichever ships).
+Light fills (the white event roots) lighten to themselves and read fine on the dark canvas.</p>
+</div>
+
+<!-- ================================================================= -->
+<h2>4 · Reroutes, and the two refinements worth shipping with it</h2>
+
+<div class="grid2">
+<div class="card">
+<span class="tag after">reroute chains are transparent</span>
+<p class="sub">A reroute is an editor-only relay. Hovering B's left third walks the chain back to the real
+producer: every <b>segment</b> lights, every <b>dot</b> rings, and A is the peer. Hovering a dot itself
+lights both sides (no thirds on 16 px).</p>
+<svg viewBox="0 0 520 170" role="img" aria-label="A value wire through two reroute dots; hovering the consumer lights all three segments, both dots and the producer">
+  <!-- nodes -->
+  <rect x="14" y="60" width="120" height="50" rx="8" fill="#1a1d24" stroke="#b71c1c" stroke-width="2"/>
+  <rect x="15" y="61" width="118" height="18" rx="6" fill="#b71c1c"/>
+  <text x="24" y="74" fill="#fff" font-size="8.5" font-weight="700">GET CELL ATTRIBUTE</text>
+  <circle cx="134" cy="95" r="4.5" fill="#4cc9f0" stroke="#0d47a1" stroke-width="1.5"/>
+  <rect x="380" y="40" width="126" height="90" rx="8" fill="#1a1d24" stroke="#b8860b" stroke-width="2"/>
+  <rect x="381" y="41" width="124" height="18" rx="6" fill="#b8860b"/>
+  <text x="392" y="54" fill="#111" font-size="8.5" font-weight="700">COMPARE</text>
+  <circle cx="380" cy="80" r="4.5" fill="#4cc9f0" stroke="#0d47a1" stroke-width="1.5"/>
+  <text x="390" y="83" fill="#c4ccd8" font-size="8">X</text>
+  <circle cx="380" cy="104" r="4.5" fill="#4cc9f0" stroke="#0d47a1" stroke-width="1.5"/>
+  <text x="390" y="107" fill="#c4ccd8" font-size="8">Y</text>
+  <!-- lit segments -->
+  <path d="M134,95 C 170,95 170,130 210,130" stroke="#e6c86a" stroke-width="3.2" fill="none" filter="url(#glowSoft)"/>
+  <path d="M210,130 C 250,130 250,60 300,60" stroke="#e6c86a" stroke-width="3.2" fill="none" filter="url(#glowSoft)"/>
+  <path d="M300,60 C 340,60 340,80 380,80" stroke="#e6c86a" stroke-width="3.2" fill="none" filter="url(#glowSoft)"/>
+  <!-- dots -->
+  <circle cx="210" cy="130" r="7" fill="#4cc9f0" stroke="#0d47a1" stroke-width="2"/>
+  <circle cx="210" cy="130" r="10" fill="none" stroke="#e6c86a" stroke-width="2" filter="url(#glowSoft)"/>
+  <text x="210" y="152" fill="#8f9bb0" font-size="9" text-anchor="middle">r1 · relay</text>
+  <circle cx="300" cy="60" r="7" fill="#4cc9f0" stroke="#0d47a1" stroke-width="2"/>
+  <circle cx="300" cy="60" r="10" fill="none" stroke="#e6c86a" stroke-width="2" filter="url(#glowSoft)"/>
+  <text x="300" y="40" fill="#8f9bb0" font-size="9" text-anchor="middle">r2 · relay</text>
+  <!-- rings -->
+  <rect x="378" y="38" width="130" height="94" rx="9" fill="none" stroke="#e6c86a" stroke-width="2.5" filter="url(#glow)"/>
+  <rect x="12" y="58" width="124" height="54" rx="9" fill="none" stroke="#e6c86a" stroke-width="1.6" opacity=".85" filter="url(#glowSoft)"/>
+  <use href="#cursor" x="392" y="90"/>
+</svg>
+</div>
+<div class="card">
+<span class="tag after">I2 · hovering a WIRE</span>
+<p class="sub">The wire and both of its real endpoints light (through any chain), in the producer's hue. The
+15 px interaction path already exists (<code>interactionWidth: 15</code>). This is the biggest win for long
+wires — the question there is always <i>where does this go?</i></p>
+<svg viewBox="0 0 520 170" role="img" aria-label="Hovering a wire lights the wire and both endpoint nodes">
+  <rect x="14" y="30" width="120" height="50" rx="8" fill="#1a1d24" stroke="#1b5e20" stroke-width="2"/>
+  <rect x="15" y="31" width="118" height="18" rx="6" fill="#1b5e20"/>
+  <text x="24" y="44" fill="#fff" font-size="8.5" font-weight="700">IF / THEN / ELSE</text>
+  <path d="M130,60 L138,65 L130,70 z" fill="#4caf50" stroke="#1b5e20"/>
+  <rect x="380" y="100" width="126" height="50" rx="8" fill="#1a1d24" stroke="#4a148c" stroke-width="2"/>
+  <rect x="381" y="101" width="124" height="18" rx="6" fill="#4a148c"/>
+  <text x="392" y="114" fill="#fff" font-size="8.5" font-weight="700">SET ATTRIBUTE</text>
+  <path d="M376,130 L384,135 L376,140 z" fill="#4caf50" stroke="#1b5e20"/>
+  <!-- other wire, untouched -->
+  <path d="M138,50 C 260,50 260,20 500,20" stroke="#66bb6a" stroke-width="2" fill="none" opacity=".9"/>
+  <!-- the hovered wire -->
+  <path d="M138,65 C 260,65 260,135 380,135" stroke="#7fd98a" stroke-width="3.4" fill="none" filter="url(#glowSoft)"/>
+  <rect x="12" y="28" width="124" height="54" rx="9" fill="none" stroke="#7fd98a" stroke-width="1.6" opacity=".85" filter="url(#glowSoft)"/>
+  <rect x="378" y="98" width="130" height="54" rx="9" fill="none" stroke="#7fd98a" stroke-width="1.6" opacity=".85" filter="url(#glowSoft)"/>
+  <use href="#cursor" x="258" y="92"/>
+</svg>
+</div>
+</div>
+
+<div class="card">
+<span class="tag after">I1 · hovering a PORT narrows the set</span>
+<p class="sub">The thirds are the coarse default; a handle is the precise one. Over the CHECK socket only its
+wire and its producer light — the answer to "which of these five inputs is that wire?". A CaNode
+<code>&lt;Handle onMouseEnter&gt;</code> publishes <code>{nodeId, handleId}</code> on a graphState channel;
+the editor treats it as a zone override. An unwired port lights the node alone.</p>
+<svg viewBox="0 0 900 300" role="img" aria-label="Hovering the CHECK port lights only the value wire and Get Cell Attribute">
+  <use href="#gBase"/>
+  <path d="M295,250 C 340,250 335,160 380,160" stroke="#7fd98a" stroke-width="3.4" fill="none" filter="url(#glowSoft)"/>
+  <circle cx="380" cy="160" r="8" fill="none" stroke="#7fd98a" stroke-width="2" filter="url(#glowSoft)"/>
+  <use href="#ringIf"/>
+  <rect x="128" y="203" width="169" height="68" rx="9" fill="none" stroke="#7fd98a" stroke-width="1.6" opacity=".85" filter="url(#glowSoft)"/>
+  <use href="#cursor" x="382" y="162"/>
+</svg>
+</div>
+
+<!-- ================================================================= -->
+<h2>5 · Timing — the interaction sequence</h2>
+
+<div class="card">
+<p class="sub">The node's own mark is immediate (a 120 ms shadow transition). The neighbourhood waits a short
+dwell so that crossing a dense graph on the way somewhere does not strobe every wire the cursor passes.
+Once lit, switching thirds is instant. Any gesture that owns the canvas stands the whole thing down.</p>
+<svg viewBox="0 0 1060 250" role="img" aria-label="Timeline of a hover: enter, dwell, neighbourhood, zone switch, leave, and the stand-down gestures">
+  <line x1="40" y1="120" x2="1020" y2="120" stroke="#2a2f3a" stroke-width="2"/>
+  <!-- events -->
+  <g>
+    <circle cx="80" cy="120" r="6" fill="#e8a13a"/>
+    <text x="80" y="95" fill="#e6e9ef" font-size="11.5" font-weight="600" text-anchor="middle">enter node</text>
+    <text x="80" y="150" fill="#7fd98a" font-size="11" text-anchor="middle">self ring</text>
+    <text x="80" y="166" fill="#8f9bb0" font-size="10" text-anchor="middle">at once</text>
+  </g>
+  <g>
+    <rect x="86" y="112" width="120" height="16" fill="#e8a13a" opacity=".18"/>
+    <text x="146" y="95" fill="#8f9bb0" font-size="11" text-anchor="middle">dwell · 90 ms</text>
+  </g>
+  <g>
+    <circle cx="206" cy="120" r="6" fill="#e8a13a"/>
+    <text x="206" y="150" fill="#7fd98a" font-size="11" text-anchor="middle">neighbourhood lights</text>
+    <text x="206" y="166" fill="#8f9bb0" font-size="10" text-anchor="middle">for the current third</text>
+  </g>
+  <g>
+    <circle cx="400" cy="120" r="6" fill="#e8a13a"/>
+    <text x="400" y="95" fill="#e6e9ef" font-size="11.5" font-weight="600" text-anchor="middle">cursor crosses ⅔</text>
+    <text x="400" y="150" fill="#7fd98a" font-size="11" text-anchor="middle">inputs → outputs</text>
+    <text x="400" y="166" fill="#8f9bb0" font-size="10" text-anchor="middle">instant · hysteresis</text>
+  </g>
+  <g>
+    <circle cx="580" cy="120" r="6" fill="#e8a13a"/>
+    <text x="580" y="95" fill="#e6e9ef" font-size="11.5" font-weight="600" text-anchor="middle">leave node</text>
+    <text x="580" y="150" fill="#8f9bb0" font-size="11" text-anchor="middle">everything clears</text>
+    <text x="580" y="166" fill="#8f9bb0" font-size="10" text-anchor="middle">120 ms fade · none under reduced-motion</text>
+  </g>
+  <g>
+    <rect x="760" y="60" width="250" height="122" rx="8" fill="#1c1111" stroke="#4a3a3a"/>
+    <text x="885" y="82" fill="#c98a8a" font-size="11.5" font-weight="600" text-anchor="middle">STAND-DOWN · clears and ignores enters</text>
+    <text x="774" y="104" fill="#c4ccd8" font-size="10.5">wire drag — the magenta port glow owns the canvas</text>
+    <text x="774" y="122" fill="#c4ccd8" font-size="10.5">node drag · box-select · a context menu opening</text>
+    <text x="774" y="140" fill="#c4ccd8" font-size="10.5">scope change · graph-kind switch · editor unmount</text>
+    <text x="774" y="158" fill="#c4ccd8" font-size="10.5">the hovered node deleted under the cursor</text>
+    <text x="774" y="176" fill="#8f9bb0" font-size="10">(re-validated on every nodes/edges change)</text>
+  </g>
+  <text x="40" y="225" fill="#5e6a7d" font-size="10.5">The trace tooltip stands down for the same drag / connection gestures; the two share the enter/leave props through one composed handler.</text>
+</svg>
+</div>
+
+<!-- ================================================================= -->
+<h2>6 · How it works — no React state, and what the prototype proved</h2>
+
+<div class="grid2">
+<div class="card">
+<span class="tag alt">control / data flow</span>
+<svg viewBox="0 0 520 420" role="img" aria-label="Data flow from mouse events through zone detection and the pure module to DOM attributes and CSS">
+  <defs><marker id="ar2" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 z" fill="#8f9bb0"/></marker></defs>
+  <rect x="20" y="16" width="480" height="44" rx="8" fill="#1a1d24" stroke="#2a2f3a"/>
+  <text x="260" y="35" fill="#e6e9ef" font-size="11.5" font-weight="600" text-anchor="middle">React Flow · onNodeMouseEnter / Move / Leave · onEdgeMouseEnter / Leave</text>
+  <text x="260" y="51" fill="#8f9bb0" font-size="10" text-anchor="middle">existing props (6340–6343) · the two Move props are unused today</text>
+  <path d="M260,60 L260,84" stroke="#8f9bb0" marker-end="url(#ar2)"/>
+  <rect x="20" y="88" width="480" height="44" rx="8" fill="#1a1d24" stroke="#2a2f3a"/>
+  <text x="260" y="107" fill="#e6e9ef" font-size="11.5" font-weight="600" text-anchor="middle">ratio = (clientX − rect.left) / rect.width · zoneForRatio(ratio, prev)</text>
+  <text x="260" y="123" fill="#8f9bb0" font-size="10" text-anchor="middle">one layout read per move · writes only when the zone changes · hysteresis</text>
+  <path d="M260,132 L260,156" stroke="#8f9bb0" marker-end="url(#ar2)"/>
+  <rect x="20" y="160" width="300" height="60" rx="8" fill="#1a1d24" stroke="#e8a13a"/>
+  <text x="170" y="181" fill="#e8a13a" font-size="11.5" font-weight="600" text-anchor="middle">hoverHighlight.ts · computeHoverMarks</text>
+  <text x="170" y="197" fill="#c4ccd8" font-size="10" text-anchor="middle">pure, DOM-free · reroute walk · cycle-guarded</text>
+  <text x="170" y="211" fill="#8f9bb0" font-size="10" text-anchor="middle">nodes: self | peer | relay · edges: in | out | wire</text>
+  <rect x="336" y="160" width="164" height="60" rx="8" fill="#1a1d24" stroke="#2a2f3a"/>
+  <text x="418" y="181" fill="#e6e9ef" font-size="11" font-weight="600" text-anchor="middle">buildHoverIndex</text>
+  <text x="418" y="197" fill="#8f9bb0" font-size="10" text-anchor="middle">cached per graph change</text>
+  <text x="418" y="211" fill="#8f9bb0" font-size="10" text-anchor="middle">key = edges identity + N</text>
+  <path d="M336,190 L322,190" stroke="#8f9bb0" marker-end="url(#ar2)"/>
+  <path d="M170,220 L170,244" stroke="#8f9bb0" marker-end="url(#ar2)"/>
+  <rect x="20" y="248" width="480" height="60" rx="8" fill="#1a1d24" stroke="#2a2f3a"/>
+  <text x="260" y="269" fill="#e6e9ef" font-size="11.5" font-weight="600" text-anchor="middle">applyHoverMarks · imperative DOM writes only</text>
+  <text x="260" y="285" fill="#c4ccd8" font-size="10" text-anchor="middle">data-hover="self|peer|relay|in|out" + style --hover-c on .react-flow__node / .react-flow__edge</text>
+  <text x="260" y="300" fill="#8f9bb0" font-size="10" text-anchor="middle">elements by data-id, cached, revalidated with isConnected (the trace's markElFor)</text>
+  <path d="M260,308 L260,332" stroke="#8f9bb0" marker-end="url(#ar2)"/>
+  <rect x="20" y="336" width="480" height="44" rx="8" fill="#1a1d24" stroke="#2a2f3a"/>
+  <text x="260" y="355" fill="#e6e9ef" font-size="11.5" font-weight="600" text-anchor="middle">CSS · [data-hover] rules in GraphEditor.module.css, after the trace block</text>
+  <text x="260" y="371" fill="#8f9bb0" font-size="10" text-anchor="middle">ring + halo from var(--hover-c) · wires !important over the inline stroke</text>
+  <text x="260" y="405" fill="#4caf50" font-size="11" font-weight="600" text-anchor="middle">never setNodes / setEdges · no React state · CaNode never re-renders</text>
+</svg>
+</div>
+<div class="card">
+<span class="tag alt">layering — why the ring goes on the INNER element</span>
+<svg viewBox="0 0 520 300" role="img" aria-label="Cross-section of a node's layers: the wrapper carries the selection ring and trace halo, the inner node carries the hover ring">
+  <!-- trace halo -->
+  <rect x="60" y="40" width="400" height="180" rx="16" fill="none" stroke="#c85ce0" stroke-width="10" opacity=".22"/>
+  <!-- selection ring -->
+  <rect x="70" y="50" width="380" height="160" rx="12" fill="none" stroke="#c95151" stroke-width="3"/>
+  <rect x="75" y="55" width="370" height="150" rx="10" fill="none" stroke="#0c0d10" stroke-width="3"/>
+  <!-- wrapper label -->
+  <text x="80" y="72" fill="#8f9bb0" font-size="9.5">.react-flow__node  (React Flow's wrapper)</text>
+  <!-- inner node -->
+  <rect x="100" y="84" width="320" height="108" rx="8" fill="#1a1d24" stroke="#1b5e20" stroke-width="2"/>
+  <rect x="98" y="82" width="324" height="112" rx="9" fill="none" stroke="#7fd98a" stroke-width="2.5" filter="url(#glow)"/>
+  <rect x="101" y="85" width="318" height="22" rx="6" fill="#1b5e20"/>
+  <text x="260" y="100" fill="#fff" font-size="9.5" font-weight="700" text-anchor="middle">IF / THEN / ELSE</text>
+  <text x="110" y="128" fill="#8f9bb0" font-size="9.5">.node  (CaNode's root · data-hover ring lives here)</text>
+  <text x="110" y="150" fill="#c4ccd8" font-size="10">selected + trace-lit + hovered:</text>
+  <text x="110" y="166" fill="#c4ccd8" font-size="10">three languages, zero combination rules</text>
+  <!-- callouts -->
+  <line x1="460" y1="60" x2="500" y2="40" stroke="#c85ce0"/><text x="503" y="38" fill="#c85ce0" font-size="10">trace halo (wrapper)</text>
+  <line x1="450" y1="80" x2="500" y2="70" stroke="#c95151"/><text x="503" y="68" fill="#c95151" font-size="10">selection ring (wrapper)</text>
+  <line x1="422" y1="110" x2="500" y2="100" stroke="#7fd98a"/><text x="503" y="98" fill="#7fd98a" font-size="10">hover ring (inner)</text>
+  <text x="60" y="250" fill="#8f9bb0" font-size="10.5">The wrapper already pairs .selected × data-trace (2 × 2 rules). A third shadow there</text>
+  <text x="60" y="266" fill="#8f9bb0" font-size="10.5">would need 2³. One level down it composes with both for free — the prototype showed</text>
+  <text x="60" y="282" fill="#8f9bb0" font-size="10.5">the red ring and the mint ring readable together on the same node.</text>
+</svg>
+</div>
+</div>
+
+<div class="ok"><b>Prototyped live (Game of Life, dev server, page console).</b> A throwaway <code>&lt;style&gt;</code> plus
+<code>data-hover</code> / <code>--hover-c</code> written on the If node, its wires and its peers reproduced the
+left and right states above pixel-for-pixel in spirit; applying a degree-2 set cost <b>0.3 ms</b>. Then
+<code>addSelectedNodes([if])</code> forced a React Flow re-render of the wrapper (it gained
+<code>z-index: 1000</code> and the <code>selected</code> class) and <b>both the attribute and the custom property
+survived</b> on the node and on the edge — the one claim the whole design rests on. The dark raw hue was
+invisible on the first pass; the lightened hue was not. Everything was removed afterwards; 0 console errors.</div>
+
+<!-- ================================================================= -->
+<h2>7 · Alternatives, improvements, and what is deliberately not proposed</h2>
+
+<div class="grid2">
+<div class="card">
+<span class="tag alt">I3 · Alt + hover = the transitive cone (v2)</span>
+<p class="sub">With <kbd>Alt</kbd> held the left / right third extends to the full upstream / downstream closure
+(Blender <i>Select Linked</i>, Houdini upstream). Bounded BFS, cap 200 nodes, dots included. Valuable for
+"what does this eventually affect" — but a modifier-hover is a discoverability problem, so it ships after
+the basic gesture has been lived with.</p>
+<svg viewBox="0 0 520 120" role="img" aria-label="A five-node chain; Alt-hovering the last node's left third lights everything upstream">
+  <g font-size="8.5" font-weight="700" fill="#fff">
+    <rect x="10" y="40" width="70" height="36" rx="7" fill="#1a1d24" stroke="#b71c1c" stroke-width="2"/><rect x="11" y="41" width="68" height="14" rx="5" fill="#b71c1c"/><text x="18" y="52">GET</text>
+    <rect x="120" y="40" width="70" height="36" rx="7" fill="#1a1d24" stroke="#b8860b" stroke-width="2"/><rect x="121" y="41" width="68" height="14" rx="5" fill="#b8860b"/><text x="128" y="52" fill="#111">MATH</text>
+    <rect x="230" y="40" width="70" height="36" rx="7" fill="#1a1d24" stroke="#b8860b" stroke-width="2"/><rect x="231" y="41" width="68" height="14" rx="5" fill="#b8860b"/><text x="238" y="52" fill="#111">COMPARE</text>
+    <rect x="340" y="40" width="70" height="36" rx="7" fill="#1a1d24" stroke="#1b5e20" stroke-width="2"/><rect x="341" y="41" width="68" height="14" rx="5" fill="#1b5e20"/><text x="348" y="52">IF</text>
+    <rect x="450" y="40" width="60" height="36" rx="7" fill="#1a1d24" stroke="#4a148c" stroke-width="2"/><rect x="451" y="41" width="58" height="14" rx="5" fill="#4a148c"/><text x="458" y="52">SET</text>
+  </g>
+  <path d="M80,62 L120,62 M190,62 L230,62 M300,62 L340,62 M410,62 L450,62" stroke="#b48ee0" stroke-width="3.2" filter="url(#glowSoft)"/>
+  <rect x="448" y="38" width="64" height="40" rx="8" fill="none" stroke="#b48ee0" stroke-width="2.5" filter="url(#glow)"/>
+  <g fill="none" stroke="#b48ee0" stroke-width="1.5" opacity=".8" filter="url(#glowSoft)">
+    <rect x="8" y="38" width="74" height="40" rx="8"/><rect x="118" y="38" width="74" height="40" rx="8"/><rect x="228" y="38" width="74" height="40" rx="8"/><rect x="338" y="38" width="74" height="40" rx="8"/>
+  </g>
+  <use href="#cursor" x="456" y="60"/>
+  <text x="10" y="105" fill="#8f9bb0" font-size="10">Alt held · cursor on SET's left third · the whole upstream cone, in SET's hue</text>
+</svg>
+</div>
+<div class="card">
+<span class="tag no">I4 · dim everything else — NOT the default</span>
+<p class="sub">Unreal-style focus dimming would make a dense graph very legible, but the trace doctrine is
+<i>adds light, never greys the graph</i>, and a transient dim on every mouse pass flickers the whole
+canvas. If wanted at all, it is the look of the Alt variant, decided after I3.</p>
+<svg viewBox="0 0 520 120" role="img" aria-label="The same chain with unrelated nodes dimmed — the rejected default">
+  <g opacity=".28">
+    <g font-size="8.5" font-weight="700" fill="#fff">
+      <rect x="10" y="40" width="70" height="36" rx="7" fill="#1a1d24" stroke="#b71c1c" stroke-width="2"/><rect x="11" y="41" width="68" height="14" rx="5" fill="#b71c1c"/><text x="18" y="52">GET</text>
+      <rect x="120" y="40" width="70" height="36" rx="7" fill="#1a1d24" stroke="#b8860b" stroke-width="2"/><rect x="121" y="41" width="68" height="14" rx="5" fill="#b8860b"/><text x="128" y="52" fill="#111">MATH</text>
+      <rect x="230" y="40" width="70" height="36" rx="7" fill="#1a1d24" stroke="#b8860b" stroke-width="2"/><rect x="231" y="41" width="68" height="14" rx="5" fill="#b8860b"/><text x="238" y="52" fill="#111">COMPARE</text>
+    </g>
+    <path d="M80,62 L120,62 M190,62 L230,62 M300,62 L340,62" stroke="#4cc9f0" stroke-width="2"/>
+  </g>
+  <g font-size="8.5" font-weight="700" fill="#fff">
+    <rect x="340" y="40" width="70" height="36" rx="7" fill="#1a1d24" stroke="#1b5e20" stroke-width="2"/><rect x="341" y="41" width="68" height="14" rx="5" fill="#1b5e20"/><text x="348" y="52">IF</text>
+    <rect x="450" y="40" width="60" height="36" rx="7" fill="#1a1d24" stroke="#4a148c" stroke-width="2"/><rect x="451" y="41" width="58" height="14" rx="5" fill="#4a148c"/><text x="458" y="52">SET</text>
+  </g>
+  <path d="M410,62 L450,62" stroke="#b48ee0" stroke-width="3.2" filter="url(#glowSoft)"/>
+  <rect x="448" y="38" width="64" height="40" rx="8" fill="none" stroke="#b48ee0" stroke-width="2.5" filter="url(#glow)"/>
+  <rect x="338" y="38" width="74" height="40" rx="8" fill="none" stroke="#b48ee0" stroke-width="1.5" opacity=".8" filter="url(#glowSoft)"/>
+  <use href="#cursor" x="456" y="60"/>
+  <text x="10" y="105" fill="#8f9bb0" font-size="10">Rejected as the ambient behaviour: every pass over the canvas would dim and restore everything.</text>
+</svg>
+</div>
+</div>
+
+<div class="card">
+<table>
+  <tr><th style="width:26%">Idea</th><th>What</th><th style="width:16%">Verdict</th></tr>
+  <tr><td><b>I1</b> port-precise</td><td>hovering a handle narrows to that port's wire(s) and endpoint(s)</td><td>v1 (P2)</td></tr>
+  <tr><td><b>I2</b> wire hover</td><td>hovering a wire lights it and both real endpoints, in the producer's hue</td><td>v1 (P2)</td></tr>
+  <tr><td><b>I3</b> Alt cone</td><td>transitive upstream / downstream closure, capped</td><td>v2</td></tr>
+  <tr><td>I4 dim the rest</td><td>focus dimming</td><td>not as default</td></tr>
+  <tr><td>I5 off-screen chevron</td><td>a marker at the viewport edge for a lit peer that is out of view</td><td>note only — Organize removes most of the need</td></tr>
+  <tr><td>I6 sticky on selection</td><td>a selected node keeps its in/out lit</td><td>no — collides with the red selection language and the trace's lit path</td></tr>
+  <tr><td>I7 Explorer cross-highlight</td><td>hovering a Node Explorer row lights that node on the canvas</td><td>v2 — same DOM writer, one more caller</td></tr>
+  <tr><td><b>A1</b> wires keep their own hue</td><td>brighten + thicken the flow green / value cyan instead of restroking in the node hue</td><td><b>decision D1</b> — the plan recommends the node hue</td></tr>
+  <tr><td><b>A2</b> middle = both sides, faint</td><td>instead of node-only</td><td><b>decision D2</b> — the plan keeps the spec</td></tr>
+  <tr><td><b>A3</b> no dwell</td><td>neighbourhood lights on enter</td><td><b>decision D3</b> — the plan recommends 90 ms</td></tr>
+  <tr><td>a view-settings toggle</td><td>hoverHighlightGlobal in the persisted block (port-labels precedent)</td><td><b>decision D6</b> — not in v1; a ten-line follow-up if it proves noisy</td></tr>
+</table>
+</div>
+
+<!-- ================================================================= -->
+<h2>8 · Verification and phases</h2>
+
+<div class="grid2">
+<div class="card">
+<h3>The harness — <code>scripts/verify-hover-highlight.mjs</code></h3>
+<ul>
+  <li><b>H1–H3</b> the three zones on a chain with a value feed: exactly the in-side, exactly the out-side, self only.</li>
+  <li><b>H4–H6</b> reroute chain and fan-out: every segment, every dot, the real endpoints; a dot hovers both sides.</li>
+  <li><b>H7–H8</b> wire hover and port hover (I2 / I1).</li>
+  <li><b>H9</b> hysteresis on a ratio sequence; <b>H10</b> the Alt cone's cap and cycle guard; <b>H11</b> the lightening function.</li>
+  <li><b>H12</b> the library sweep: 31 models, every scope, every node, all three zones — no id outside the scope, every lit wire touches a lit node, |in| + |out| through reroutes equals the real degree.</li>
+  <li><b>Controls</b>: ≥ 5 source mutations (drop the reroute walk, swap in/out, drop hysteresis, drop the cap, wrong lightening ratio) — each must make the suite FAIL.</li>
+</ul>
+</div>
+<div class="card">
+<h3>Through the real UI, then the gates</h3>
+<ul>
+  <li>Game of Life (the three zones, mouse-driven) · Accretor (5 reroutes) · Amphiphile (91 nodes, fan-outs, <code>__hoverPerf</code> &lt; 1 ms) · Kelp War inside a macro def.</li>
+  <li>Selection keeps the marks; drag / wire drag / box-select stand it down; Delete under the cursor clears; the trace tooltip still appears in Live.</li>
+  <li>Live while playing: zero re-renders attributable to hover. Both themes. Reduced-motion. 0 console errors.</li>
+  <li><code>tsc -b</code> · <code>build</code> · <code>check-compile-identity</code> 31 models unchanged · the auto-layout and handle-remeasure harnesses still green.</li>
+</ul>
+<table>
+  <tr><th>Phase</th><th>Delivers</th></tr>
+  <tr><td><b>P1</b></td><td>the module (zones, reroute walk, lightening, hysteresis), editor wiring, CSS, harness + controls, the real-UI pass</td></tr>
+  <tr><td><b>P2</b></td><td>I1 + I2, the Help line, the modeler-ui.md section, project-structure + harness index</td></tr>
+  <tr><td>P3 (opt.)</td><td>I3 Alt cone, I7 Explorer cross-highlight, the toggle if asked for</td></tr>
+</table>
+</div>
+</div>
+
+<div class="warn"><b>The one thing that must not happen:</b> driving this through <code>setNodes</code> / node
+<code>data</code> / any React state. A mouse moves 60–120×/s; the trace's invariant I5 ("a trace never
+re-renders a node") exists for a signal that is <i>slower</i> than this one. The attribute + custom-property
+path is the design, and the prototype is the proof it survives React Flow.</div>
+
+</div>
+</body>
+</html>
