@@ -1,6 +1,6 @@
 # Verification harnesses (`scripts/*.mjs`)
 
-> Area doc for **GenesisCA**. The project's regression net: 68 Node harnesses that run the SHIPPED
+> Area doc for **GenesisCA**. The project's regression net: 69 Node harnesses that run the SHIPPED
 > modules (esbuild-bundled where needed) rather than re-implementations. Generated from the script
 > headers on 2026-09-06 — regenerate rather than hand-editing when scripts are added.
 >
@@ -32,6 +32,7 @@ Run one with `node scripts/<name>.mjs`. Several take flags (`--wasm`, `--mutate`
 | `verify-3d-depth-precision.mjs` | 3D depth-precision harness — the bond-vs-agent occlusion contract. |
 | `verify-agent-render.mjs` | Agent RENDER-LAYER regression harness. |
 | `verify-graph-rewrite.mjs` | GRAPH-REWRITING AUTOMATA — the invariant + oracle harness. |
+| `verify-auto-layout.mjs` | AUTO-LAYOUT ("Organize") harness — the pure module behind the graph-canvas context-menu entry. **Section A** the invariants A1-A17 on 15 synthetic fixtures x 3 styles (no two boxes overlap · flow points right · value producer left of consumer · handle-row straightness · 100-shuffle determinism · idempotence incl. the group/comment RECTS · anchor · grid · cycle safety · component stacking · the 300/1000-node budget · Tidy column membership · **A14 groups: `pre ⊆ post` and no outsider captured** · **A15 comments** · reroute placement · the `nodeSize` fallbacks); **section B** the port-geometry mirror (`nodeGeometry.ts` ⇄ CaNode ⇄ `portYOffsets` on a real Switch / formula / collapsed fan / macro branches) **and the containment mirror** (`rectContainsCentre` is what `onNodeDragStart` imports); **section C** the 31-model library sweep over every scope. `--controls` = **9** source-mutation negative controls. Node POSITIONS are not compiled, so `check-compile-identity` proves nothing here — this harness is the whole net. |
 | `verify-handle-remeasure.mjs` | HANDLE-REMEASURE invariant harness (VPL editor layer). |
 | `verify-render-uniform-layouts.mjs` | GPU uniform-layout regression harness — WGSL struct  ⇄  TypedArray writer. |
 | `verify-sparse-stepping.mjs` | Correctness proof for "Skip Isolated Empty Cells" (docs/PLAN_LARGE_GRID_PERF.md). |

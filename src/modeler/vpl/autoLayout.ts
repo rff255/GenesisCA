@@ -41,9 +41,10 @@ import { parseHandleId } from './types';
 
 export type LayoutStyle = 'tidy' | 'compact' | 'expanded';
 
-/** `node` / `reroute` take part in the layout. `comment` / `group` are P3 — in
- *  P1/P2 they are translated by the anchor delta (honest, and never worse than
- *  leaving them where they were). */
+/** `node` / `reroute` take part in the layout directly. A `group` is contracted
+ *  to an opaque SUPER-NODE and its members are laid out inside it (§4.10,
+ *  decision G1); a `comment` has no edges, so it is translated and re-wrapped
+ *  around whatever it used to contain (§4.11). */
 export type LayoutKind = 'node' | 'reroute' | 'comment' | 'group';
 
 export interface LayoutNodeIn {
@@ -89,8 +90,11 @@ export interface LayoutResult {
   /** id → new absolute position. Every input node is present (the harness
    *  asserts on the full set); the editor writes back only what it finds. */
   positions: Record<string, { x: number; y: number }>;
-  /** P3: group / comment rects written back through `data.width/height`. Empty
-   *  in P1/P2 — see the `// P3` seam in `placePassiveNodes`. */
+  /** Group / comment rects that the editor must write back through the
+   *  documented NodeResizer persistence triple (top-level `width`/`height` +
+   *  `measured` + `style` seed + `data.width/height`). Only the rects that
+   *  actually got re-fitted appear here — an empty group and a comment that
+   *  contained nothing keep the size they had. */
   boxes: Record<string, { w: number; h: number }>;
   stats: { columns: number; crossings: number; backEdges: number; components: number; ms: number };
 }
@@ -111,14 +115,71 @@ export const STYLE_PADDING: Readonly<Record<LayoutStyle, { gapX: number; gapY: n
 const REROUTE_T_MIN = 0.15;
 const REROUTE_T_MAX = 0.85;
 
-/** Barycentre sweeps (down, up, down, up). Fixed count, no randomness. */
-const SWEEPS = 4;
+/** Barycentre sweeps (down, up, down, up, …). No randomness, and the loop stops
+ *  as soon as a sweep changes no ordering at all, so the usual cost is the same
+ *  two or three sweeps it always was.
+ *
+ *  ⚠ The CEILING is load-bearing for idempotence, not just for quality. The
+ *  ordering seed is the previous y, so the first Organize starts from the user's
+ *  arrangement and the second from the layout's own — different seeds. With a
+ *  fixed four sweeps the first run could stop at a worse ordering than the
+ *  second one reached (Elementary CA 1D: 21 crossings then 17), and A7 failed on
+ *  the transition. Sweeping to CONVERGENCE makes both seeds land on the same
+ *  local optimum, which is what makes Organize-twice a no-op. */
+const MAX_SWEEPS = 12;
+/** How many times the sweeps are RE-SEEDED with their own accepted answer. See
+ *  `orderColumns` — this is the loop that makes the ordering a fixed point. */
+const ORDER_ROUNDS = 4;
 /** A FLOW edge counts this much more than a value wire in both the barycentre
  *  and the crossing cost: a flow chain should come out straight, a value wire
  *  may bend. Load-bearing — negative control 4 drops it. */
 const FLOW_WEIGHT = 4;
 /** Straightening iterations (left→right, then right→left). */
 const STRAIGHTEN_PASSES = 2;
+
+// ---------------------------------------------------------------------------
+// §4.10 — containment. THE ONE predicate.
+// ---------------------------------------------------------------------------
+
+export interface LayoutBox { x: number; y: number; w: number; h: number }
+
+/** Group membership in this editor is **purely geometric**: a node belongs to a
+ *  group when its CENTRE is strictly inside the group's rectangle. Groups carry
+ *  no React Flow `parentId` at all (`toRFNodes` actively scrubs a stray one), so
+ *  there is nothing else to ask.
+ *
+ *  ⚠ This is THE definition, and it has exactly two consumers: `GraphEditor`'s
+ *  `onNodeDragStart`, which freezes the member set a group drag will carry, and
+ *  the layout's super-node contraction below. They MUST be the same predicate —
+ *  if they drifted, Organize would re-fit a group's rect around a set that the
+ *  very next drag would not pick up, which is the group-desync bug (risk R2)
+ *  this extraction exists to make impossible. `scripts/verify-auto-layout.mjs`
+ *  section B pins that `onNodeDragStart` really imports it. */
+export function rectContainsCentre(rect: LayoutBox, box: LayoutBox): boolean {
+  const cx = box.x + box.w / 2;
+  const cy = box.y + box.h / 2;
+  return cx > rect.x && cx < rect.x + rect.w && cy > rect.y && cy < rect.y + rect.h;
+}
+
+/** The group chrome a member must clear. The header strip IS the group's drag
+ *  handle (`dragHandle: '[data-drag-handle="true"]'`), so nothing may be laid
+ *  out under it or the group becomes ungrabbable. Mirrors
+ *  `GroupNodeComponent.module.css`: 1 px border + the header (its 20 px colour
+ *  swatch + `--space-1` padding + a 1 px rule) + the `--space-2` margin below
+ *  it — measured at 32 px in the real UI. */
+export const GROUP_HEADER_H = 32;
+/** `NodeResizer`'s own floors ([GroupNodeComponent.tsx] `minWidth`/`minHeight`) —
+ *  a re-fit must never emit a rect the user could not have dragged to. */
+const GROUP_MIN_W = 100;
+const GROUP_MIN_H = 60;
+/** The comment defaults ([GraphEditor.tsx] `addComment`). A re-wrap never goes
+ *  below them unless the comment was ALREADY smaller. */
+const COMMENT_DEFAULT_W = 200;
+const COMMENT_DEFAULT_H = 80;
+/** The comment re-wrap runs to a FIXED POINT, bounded (see `placeComments`):
+ *  wrapping a set can enlarge the rect enough to swallow one more node, and a
+ *  set that is not a fixed point would make Organize-twice move it (A7). */
+const COMMENT_WRAP_ITERATIONS = 8;
 
 // ---------------------------------------------------------------------------
 // Internal model
@@ -169,13 +230,101 @@ export function computeAutoLayout(
 
   // --- §4.1 partition -------------------------------------------------------
   const active = nodes.filter(n => n.kind === 'node' || n.kind === 'reroute');
-  const passive = nodes.filter(n => n.kind === 'comment' || n.kind === 'group');
+  const groups = nodes.filter(n => n.kind === 'group');
+  const comments = nodes.filter(n => n.kind === 'comment');
+
+  if (active.length === 0) {
+    for (const p of groups) positions[p.id] = { x: p.x, y: p.y };
+    for (const p of comments) positions[p.id] = { x: p.x, y: p.y };
+    return { positions, boxes, stats: { columns: 0, crossings: 0, backEdges: 0, components: 0, ms: now() - t0 } };
+  }
+
+  // The anchor is rounded FIRST and every coordinate is then rounded relative to
+  // it, so two pre-round-equal y values stay equal (A5) while every coordinate
+  // is still a grid multiple (A9).
+  const g = opts.grid > 0 ? opts.grid : 0;
+  const ax = g ? Math.round(opts.anchor.x / g) * g : opts.anchor.x;
+  const ay = g ? Math.round(opts.anchor.y / g) * g : opts.anchor.y;
+
+  const laid: {
+    positions: Record<string, { x: number; y: number }>;
+    boxes?: Record<string, { w: number; h: number }>;
+    stats: LayoutResult['stats'];
+  } = groups.length === 0
+    ? layoutFlat(active, edges, opts, { x: ax, y: ay })
+    : layoutWithGroups(active, groups, edges, opts, { x: ax, y: ay });
+  Object.assign(positions, laid.positions);
+  if (laid.boxes) Object.assign(boxes, laid.boxes);
+
+  // --- §4.12 re-anchor on the NODE boxes ------------------------------------
+  // ⚠ The editor measures `opts.anchor` over the caNode boxes ONLY — a reroute
+  // rides its wire, and a group's top-left sits a whole pad ABOVE its first
+  // member — so once the groups have been expanded the result is translated one
+  // final time to put THAT bbox back on the anchor. Without it every grouped
+  // model drifts down-right by the group padding on every Organize (and A7 dies
+  // with it). The delta is a difference of two grid multiples, so nothing
+  // leaves the grid.
+  let bx = Infinity, by = Infinity;
+  for (const n of active) {
+    if (n.kind !== 'node') continue;
+    const p = positions[n.id];
+    if (!p) continue;
+    if (p.x < bx) bx = p.x;
+    if (p.y < by) by = p.y;
+  }
+  if (Number.isFinite(bx) && (bx !== ax || by !== ay)) {
+    const dx = ax - bx, dy = ay - by;
+    for (const id of Object.keys(positions)) {
+      const p = positions[id]!;
+      positions[id] = { x: p.x + dx, y: p.y + dy };
+    }
+  }
+
+  // --- §4.11 comments: translate, and wrap what they annotate ---------------
+  // ⚠ The translate delta is in INPUT space: it is (final anchor) − (the
+  // laid-out set's ORIGINAL node bbox top-left), so when the editor passes that
+  // same bbox as `opts.anchor` — which it does — the delta is zero and a comment
+  // that contained nothing simply stays put. Measuring it against the internal
+  // origin translated every comment by the whole anchor and broke idempotence:
+  // A7 caught it on 13 shipped models before this feature ever reached the UI.
+  let obx = Infinity, oby = Infinity;
+  for (const n of active) {
+    if (n.kind !== 'node') continue;   // same reason as the bbox above
+    if (n.x < obx) obx = n.x;
+    if (n.y < oby) oby = n.y;
+  }
+  if (!Number.isFinite(obx)) { obx = opts.anchor.x; oby = opts.anchor.y; }
+  placeComments(comments, [...active, ...groups], positions, boxes, opts,
+    { grid: g, ax, ay, dx: ax - obx, dy: ay - oby });
+
+  return {
+    positions,
+    boxes,
+    stats: { ...laid.stats, ms: now() - t0 },
+  };
+}
+
+// ---------------------------------------------------------------------------
+// The FLAT layout — one set of `node` / `reroute` boxes, no groups, no comments.
+// This is §4.2 … §4.9 + §4.12's anchor/grid pass, and it is called BOTH for a
+// whole scope (no groups) and, recursively, once per group level (§4.10).
+// ---------------------------------------------------------------------------
+
+function layoutFlat(
+  activeIn: readonly LayoutNodeIn[],
+  edges: readonly LayoutEdgeIn[],
+  opts: LayoutOptions,
+  /** already grid-rounded */
+  anchor: { x: number; y: number },
+): { positions: Record<string, { x: number; y: number }>; stats: LayoutResult['stats'] } {
+  const t0 = now();
+  const positions: Record<string, { x: number; y: number }> = {};
+  const active = activeIn;
   const rerouteIds = new Set(active.filter(n => n.kind === 'reroute').map(n => n.id));
   const byId = new Map<string, LayoutNodeIn>(active.map(n => [n.id, n]));
 
   if (active.length === 0) {
-    for (const p of passive) positions[p.id] = { x: p.x, y: p.y };
-    return { positions, boxes, stats: { columns: 0, crossings: 0, backEdges: 0, components: 0, ms: now() - t0 } };
+    return { positions, stats: { columns: 0, crossings: 0, backEdges: 0, components: 0, ms: 0 } };
   }
 
   // --- §4.1 reroute transparency + §4.2 edge classification -----------------
@@ -255,15 +404,15 @@ export function computeAutoLayout(
   let bx = Infinity;
   let by = Infinity;
   for (const n of lnodes.values()) { if (n.nx < bx) bx = n.nx; if (n.ny < by) by = n.ny; }
-  if (!Number.isFinite(bx)) { bx = opts.anchor.x; by = opts.anchor.y; }
+  if (!Number.isFinite(bx)) { bx = anchor.x; by = anchor.y; }
 
   const g = opts.grid > 0 ? opts.grid : 0;
-  // The anchor itself is rounded first, and every coordinate is then rounded
+  // The caller rounded the anchor already; every coordinate is then rounded
   // RELATIVE to it. Two nodes whose pre-round y was equal therefore stay equal
   // (harness A5 asserts exact handle-y equality POST-grid), and every final
   // coordinate is still a grid multiple (A9) because the anchor is one.
-  const ax = g ? Math.round(opts.anchor.x / g) * g : opts.anchor.x;
-  const ay = g ? Math.round(opts.anchor.y / g) * g : opts.anchor.y;
+  const ax = anchor.x;
+  const ay = anchor.y;
   const snap = (v: number, a: number): number =>
     g ? a + Math.round((v - a) / g) * g : Math.round(v);
 
@@ -280,29 +429,24 @@ export function computeAutoLayout(
   //    re-projects the rounded point, gets a different `t`, and moves it again.
   //    Keeping the exact lerp makes `t` recover exactly on a second run. A9
   //    (grid) is therefore stated over the laid-out NODES.
-  const reroutePos = placeReroutes(active, rerouteIds, rerouteIn, rerouteOut, lnodes, byId, positions);
-  for (const [id, p] of reroutePos) positions[id] = p;
-
-  // --- comments / groups: the anchor delta only (P3 does the real work) -----
-  // ⚠ The delta is in INPUT space, not the internal one: it is
-  // (final anchor) − (the laid-out set's ORIGINAL bbox top-left), so when the
-  // editor passes that same bbox as `opts.anchor` — which it does — the delta is
-  // zero and a comment simply stays put. Measuring it against the internal
-  // `bx`/`by` (which start at 0 per component) translated every comment by the
-  // whole anchor and broke idempotence: the harness's A7 caught it on 13 shipped
-  // models before this feature ever reached the UI.
+  // A STRANDED reroute (no endpoint left in this set — the common case inside a
+  // group, where the wire's other end is outside) follows the same translation
+  // the node boxes got, rather than staying at a raw old coordinate that means
+  // nothing in the level's own space.
   let obx = Infinity, oby = Infinity;
   for (const n of active) {
     if (n.kind === 'reroute') continue;   // same reason as the bbox above
     if (n.x < obx) obx = n.x;
     if (n.y < oby) oby = n.y;
   }
-  if (!Number.isFinite(obx)) { obx = opts.anchor.x; oby = opts.anchor.y; }
-  placePassiveNodes(passive, positions, { x: ax - obx, y: ay - oby }, g, ax, ay);
+  const strandedDelta = Number.isFinite(obx)
+    ? { x: ax - obx, y: ay - oby }
+    : { x: 0, y: 0 };
+  const reroutePos = placeReroutes(active, rerouteIds, rerouteIn, rerouteOut, lnodes, byId, positions, strandedDelta);
+  for (const [id, p] of reroutePos) positions[id] = p;
 
   return {
     positions,
-    boxes,
     stats: {
       columns: totalColumns,
       crossings: totalCrossings,
@@ -692,44 +836,67 @@ function orderColumns(
   };
   const cost = (weighted: boolean) => crossingCost(columns, lnodes, outE, weighted);
 
+  // ⚠ THE ROUNDS ARE WHAT MAKE THE ORDERING A FIXED POINT, and that is an
+  // idempotence requirement, not a quality nicety. The sweeps are seeded by the
+  // previous y, so the first Organize starts from the user's arrangement and the
+  // second from the layout's own answer — and a single pass of sweeps can reach
+  // a better ordering from the second seed than it did from the first
+  // (Elementary CA 1D: 21 crossings, then 17 on the re-run, moving 43 nodes).
+  // Re-seeding with the accepted ordering and sweeping again until nothing
+  // improves removes that: the answer this returns is one no further round can
+  // beat, so re-running on it returns it unchanged. `bestW` strictly decreases
+  // across rounds, so the loop terminates; the bound is belt and braces.
   let best = columns.map(c => c.slice());
-  let bestW = cost(true);
-  const seedU = cost(false);
+  for (let round = 0; round < ORDER_ROUNDS; round++) {
+    const seedOrder = columns.map(c => c.join('\u0000'));
+    let bestW = cost(true);
+    const seedU = cost(false);
+    best = columns.map(c => c.slice());
 
-  for (let s = 0; s < SWEEPS; s++) {
-    const down = s % 2 === 0;
-    const pos = posOf();
-    const range = down
-      ? columns.map((_, i) => i)
-      : columns.map((_, i) => columns.length - 1 - i);
-    for (const ci of range) {
-      const col = columns[ci]!;
-      const bary = new Map<string, number>();
-      col.forEach((id, i) => {
-        const edgesHere = down ? inE.get(id)! : outE.get(id)!;
-        let num = 0, den = 0;
-        for (const e of edgesHere) {
-          if (e.back) continue;
-          const other = down ? e.source : e.target;
-          const op = pos.get(other);
-          if (op === undefined) continue;
-          const w = e.flow ? FLOW_WEIGHT : 1;
-          num += w * op; den += w;
-        }
-        bary.set(id, den > 0 ? num / den : i);
-      });
-      // Stable sort: equal barycentres keep the previous order.
-      const idxOf = new Map<string, number>(col.map((id, i) => [id, i]));
-      col.sort((a, b) => (bary.get(a)! - bary.get(b)!) || (idxOf.get(a)! - idxOf.get(b)!));
-      col.forEach((id, i) => pos.set(id, i));
+    let quiet = 0;
+    for (let s = 0; s < MAX_SWEEPS; s++) {
+      const before = columns.map(c => c.join('\u0000'));
+      const down = s % 2 === 0;
+      const pos = posOf();
+      const range = down
+        ? columns.map((_, i) => i)
+        : columns.map((_, i) => columns.length - 1 - i);
+      for (const ci of range) {
+        const col = columns[ci]!;
+        const bary = new Map<string, number>();
+        col.forEach((id, i) => {
+          const edgesHere = down ? inE.get(id)! : outE.get(id)!;
+          let num = 0, den = 0;
+          for (const e of edgesHere) {
+            if (e.back) continue;
+            const other = down ? e.source : e.target;
+            const op = pos.get(other);
+            if (op === undefined) continue;
+            const w = e.flow ? FLOW_WEIGHT : 1;
+            num += w * op; den += w;
+          }
+          bary.set(id, den > 0 ? num / den : i);
+        });
+        // Stable sort: equal barycentres keep the previous order.
+        const idxOf = new Map<string, number>(col.map((id, i) => [id, i]));
+        col.sort((a, b) => (bary.get(a)! - bary.get(b)!) || (idxOf.get(a)! - idxOf.get(b)!));
+        col.forEach((id, i) => pos.set(id, i));
+      }
+      const w = cost(true);
+      const u = cost(false);
+      // Accept only a strict weighted improvement that also does not increase the
+      // plain crossing count vs the SEED — harness A4 states both halves.
+      if (w < bestW && u <= seedU) { bestW = w; best = columns.map(c => c.slice()); }
+      // ⚠ TWO consecutive quiet sweeps, never one: the sweeps alternate direction,
+      // and a down-sweep that changes nothing says nothing about what the up-sweep
+      // would still find. Breaking on the first quiet sweep left Elementary CA 1D
+      // one ordering short of its own fixed point.
+      quiet = columns.every((c, i) => c.join('\u0000') === before[i]) ? quiet + 1 : 0;
+      if (quiet >= 2) break;
     }
-    const w = cost(true);
-    const u = cost(false);
-    // Accept only a strict weighted improvement that also does not increase the
-    // plain crossing count vs the SEED — harness A4 states both halves.
-    if (w < bestW && u <= seedU) { bestW = w; best = columns.map(c => c.slice()); }
+    for (let i = 0; i < columns.length; i++) columns[i] = best[i]!;
+    if (columns.every((c, i) => c.join('\u0000') === seedOrder[i])) break;
   }
-  for (let i = 0; i < columns.length; i++) columns[i] = best[i]!;
   return crossingCost(columns, lnodes, outE, false);
 }
 
@@ -1011,6 +1178,7 @@ function placeReroutes(
   lnodes: Map<string, LNode>,
   byId: ReadonlyMap<string, LayoutNodeIn>,
   finalPos: Readonly<Record<string, { x: number; y: number }>>,
+  strandedDelta: { x: number; y: number },
 ): Map<string, { x: number; y: number }> {
   const out = new Map<string, { x: number; y: number }>();
 
@@ -1046,8 +1214,9 @@ function placeReroutes(
     const sN = src ? lnodes.get(src.id) : undefined;
     const tN = tgt ? lnodes.get(tgt.id) : undefined;
     if (!sN || !tN || !src || !tgt) {
-      // Stranded (no endpoint left in the laid-out set): leave it where it was.
-      out.set(r.id, { x: r.x, y: r.y });
+      // Stranded (no endpoint left in the laid-out set): follow the set's own
+      // translation so it keeps its relation to the graph it belongs to.
+      out.set(r.id, { x: r.x + strandedDelta.x, y: r.y + strandedDelta.y });
       continue;
     }
     const sOldRaw = byId.get(src.id)!;
@@ -1089,32 +1258,452 @@ function clamp(v: number, lo: number, hi: number): number {
 }
 
 // ---------------------------------------------------------------------------
-// Comments + groups — the P3 seam
+// §4.10 — GROUPS as opaque super-nodes (decision G1)
 // ---------------------------------------------------------------------------
 
-/** P1/P2: a comment or a group is translated by the anchor delta and nothing
- *  else — it keeps its relation to the canvas, and since the editor passes the
- *  laid-out set's own bbox top-left as the anchor, that delta is normally zero.
+/** What one group contributes to the level ABOVE it. */
+interface SuperNode {
+  /** every descendant (active nodes AND nested groups), positioned RELATIVE to
+   *  this group's own top-left — the padding and the header strip already in */
+  rel: Map<string, { x: number; y: number }>;
+  /** nested groups' re-fitted sizes, keyed by id */
+  boxes: Map<string, { w: number; h: number }>;
+  w: number;
+  h: number;
+  /** true when the size above was FITTED (an empty group keeps what it had) */
+  fitted: boolean;
+  /** synthetic handle id → y offset from this super-node's top, for every
+   *  descendant handle an edge crosses the boundary on */
+  portY: Record<string, number>;
+  rootRank: number | undefined;
+  stats: { crossings: number; backEdges: number };
+}
+
+/** **Why a group is opaque rather than "lay everything out flat and re-fit the
+ *  boxes afterwards".** A group means *these nodes belong together*. A flat
+ *  layout would scatter its members across columns, and because membership is
+ *  GEOMETRIC the re-fitted rect would then swallow unrelated nodes — silently
+ *  changing what the group CONTAINS. G1 makes the group's meaning a layout
+ *  constraint, which is the only way it survives the gesture (harness A14).
  *
- *  // P3 — this is where G1 lands: a group contracts to an opaque SUPER-NODE
- *  // (its members laid out by a recursive call and translated with it, its rect
- *  // re-fitted around exactly them via `boxes`), and a comment is translated
- *  // and re-wrapped around the NEW positions of whatever it used to contain.
- *  // Both need the containment predicate extracted out of `onNodeDragStart`
- *  // into ONE shared helper, and harness assertions A14 / A15. */
-function placePassiveNodes(
-  passive: readonly LayoutNodeIn[],
+ *  Each top-level group is laid out by a recursive call on its induced
+ *  sub-graph, contracted to a super-node sized to that result + the padding +
+ *  the header strip, given the union of its members' EXTERNAL edges (each on a
+ *  synthetic handle `"<real handle>@<member id>"`, which `parseHandleId` still
+ *  reads the category off and whose `portY` is the member's absolute handle y
+ *  inside the group), placed by the outer layout, and finally expanded again.
+ *
+ *  Cost, accepted: a group with edges in BOTH directions to the outside creates
+ *  a super-node-level cycle the flat graph never had. §4.3's back-edge marking
+ *  handles it, and `fxGroupCycle` in the harness is exactly that shape. */
+function layoutWithGroups(
+  active: readonly LayoutNodeIn[],
+  groups: readonly LayoutNodeIn[],
+  edges: readonly LayoutEdgeIn[],
+  opts: LayoutOptions,
+  anchor: { x: number; y: number },
+): {
+  positions: Record<string, { x: number; y: number }>;
+  boxes: Record<string, { w: number; h: number }>;
+  stats: LayoutResult['stats'];
+} {
+  const boxOf = (n: LayoutNodeIn): LayoutBox => ({ x: n.x, y: n.y, w: n.w, h: n.h });
+  const byId = new Map<string, LayoutNodeIn>();
+  for (const n of active) byId.set(n.id, n);
+  for (const n of groups) byId.set(n.id, n);
+
+  // --- the containment TREE -------------------------------------------------
+  // A node's parent is the SMALLEST group whose rect contains its centre —
+  // smallest-first makes nesting resolve to the innermost group, which is what
+  // "nesting recurses" means. Ties break on id, so the tree is deterministic.
+  const bySize = [...groups].sort((a, b) => (a.w * a.h - b.w * b.h) || cmpStr(a.id, b.id));
+  const parentOf = new Map<string, string | null>();
+  const area = (n: LayoutNodeIn) => n.w * n.h;
+  const assign = (n: LayoutNodeIn) => {
+    let best: string | null = null;
+    for (const gr of bySize) {
+      if (gr.id === n.id) continue;
+      // ⚠ A group's parent must be STRICTLY BIGGER than it. Centre-containment
+      // alone is not antisymmetric once a group has been fitted: an outer group
+      // that hugs its inner one has its OWN centre inside the inner rect, so a
+      // second Organize would swap the two and re-nest the graph inside out
+      // (A7 caught it on `fxNestedGroup`). Size settles it, with the id as the
+      // final tie-break so exactly-equal rects still resolve deterministically.
+      if (n.kind === 'group') {
+        const da = area(gr) - area(n);
+        if (da < 0 || (da === 0 && cmpStr(gr.id, n.id) >= 0)) continue;
+      }
+      if (rectContainsCentre(boxOf(gr), boxOf(n))) { best = gr.id; break; }
+    }
+    parentOf.set(n.id, best);
+  };
+  for (const n of active) assign(n);
+  for (const n of groups) assign(n);
+  // Defensive: two groups can each hold the other's centre (overlapping rects of
+  // similar size). Break any parent cycle by orphaning the group the walk
+  // revisits, in id order — a hang here would freeze the editor.
+  for (const gid of [...groups].map(n => n.id).sort(cmpStr)) {
+    const seen = new Set<string>([gid]);
+    let cur = parentOf.get(gid) ?? null;
+    while (cur) {
+      if (seen.has(cur)) { parentOf.set(gid, null); break; }
+      seen.add(cur);
+      cur = parentOf.get(cur) ?? null;
+    }
+  }
+
+  const childrenOf = new Map<string, LayoutNodeIn[]>();
+  for (const gr of groups) childrenOf.set(gr.id, []);
+  const topLevel: LayoutNodeIn[] = [];
+  const place = (n: LayoutNodeIn) => {
+    const p = parentOf.get(n.id) ?? null;
+    if (p) childrenOf.get(p)!.push(n); else topLevel.push(n);
+  };
+  for (const n of active) place(n);
+  for (const n of groups) place(n);
+  for (const list of childrenOf.values()) list.sort((a, b) => cmpStr(a.id, b.id));
+  topLevel.sort((a, b) => cmpStr(a.id, b.id));
+
+  /** the subtree of a group, as a set of descendant ids */
+  const subtree = new Map<string, Set<string>>();
+  const collect = (gid: string): Set<string> => {
+    const cached = subtree.get(gid);
+    if (cached) return cached;
+    const out = new Set<string>();
+    subtree.set(gid, out);            // cycle guard (the break above should make this unreachable)
+    for (const ch of childrenOf.get(gid) ?? []) {
+      out.add(ch.id);
+      if (ch.kind === 'group') for (const d of collect(ch.id)) out.add(d);
+    }
+    return out;
+  };
+  for (const gr of groups) collect(gr.id);
+
+  /** The representative of `nodeId` at the level whose container is `parent`
+   *  (null = the top level): walk up the containment chain until the parent
+   *  matches. `null` means the node is not in that subtree at all. */
+  const repAt = (parent: string | null, nodeId: string): string | null => {
+    let cur = nodeId;
+    for (let guard = 0; guard < 64; guard++) {
+      const p = parentOf.get(cur) ?? null;
+      if (p === parent) return cur;
+      if (p === null) return null;
+      cur = p;
+    }
+    return null;
+  };
+
+  /** Which descendant handles an edge crosses a group's boundary on. */
+  const crossing = new Map<string, { nodeId: string; handle: string }[]>();
+  for (const gr of groups) crossing.set(gr.id, []);
+  for (const e of [...edges].sort((a, b) => cmpStr(a.id, b.id))) {
+    for (const gr of groups) {
+      const st = subtree.get(gr.id)!;
+      const inS = st.has(e.source), inT = st.has(e.target);
+      if (inS === inT) continue;
+      crossing.get(gr.id)!.push(inS
+        ? { nodeId: e.source, handle: e.sourceHandle }
+        : { nodeId: e.target, handle: e.targetHandle });
+    }
+  }
+
+  const g = opts.grid > 0 ? opts.grid : 0;
+  const quantUp = (v: number) => (g ? Math.ceil(v / g) * g : v);
+  /** The padding is rounded UP to a whole grid step so that a member's absolute
+   *  position (group position + pad + inner offset) is still a grid multiple —
+   *  A9 must hold inside a group too. */
+  const padX = quantUp(opts.groupPad);
+  const padTop = quantUp(opts.groupPad + GROUP_HEADER_H);
+
+  /** The level edge list for the children of `parent`. An edge with both ends
+   *  inside the SAME child is internal to it and never reaches this level. */
+  const levelEdges = (parent: string | null): LayoutEdgeIn[] => {
+    const out: LayoutEdgeIn[] = [];
+    for (const e of edges) {
+      const s = repAt(parent, e.source);
+      const t = repAt(parent, e.target);
+      if (!s || !t || s === t) continue;
+      out.push({
+        id: e.id,
+        source: s,
+        sourceHandle: s === e.source ? e.sourceHandle : `${e.sourceHandle}@${e.source}`,
+        target: t,
+        targetHandle: t === e.target ? e.targetHandle : `${e.targetHandle}@${e.target}`,
+      });
+    }
+    return out;
+  };
+
+  /** Where a group's super-node SEEDS from in the level above it.
+   *
+   *  ⚠ NOT the group's own top-left. A super-node carries the FITTED size, and
+   *  pairing that with the user's (arbitrarily larger or smaller) rect corner
+   *  makes the seed geometry differ between the first Organize and the second —
+   *  Tidy clusters columns from exactly those x intervals, so the second run
+   *  landed in different columns and moved 43 nodes on Elementary CA 1D (A7).
+   *  Seeding from the CONTENT instead is a fixed point by construction: after a
+   *  run the members start at exactly `groupPos + pad`, so this returns the
+   *  group's own position back. It also reads better on the first run — a group
+   *  belongs where its contents are. */
+  const seedOf = (gid: string, children: readonly LayoutNodeIn[]): { x: number; y: number } => {
+    const self = byId.get(gid)!;
+    if (children.length === 0) return { x: self.x, y: self.y };
+    let mx = Infinity, my = Infinity;
+    for (const ch of children) { if (ch.x < mx) mx = ch.x; if (ch.y < my) my = ch.y; }
+    return { x: mx - padX, y: my - padTop };
+  };
+
+  const built = new Map<string, SuperNode>();
+  const buildGroup = (gid: string): SuperNode => {
+    const cached = built.get(gid);
+    if (cached) return cached;
+    const self = byId.get(gid)!;
+    const children = childrenOf.get(gid) ?? [];
+    const rel = new Map<string, { x: number; y: number }>();
+    const boxes = new Map<string, { w: number; h: number }>();
+    let crossings = 0, backEdges = 0;
+
+    if (children.length === 0) {
+      // An EMPTY group is nothing but a box: it keeps the size it had (there is
+      // nothing to fit) and the outer layout simply places it.
+      const sn: SuperNode = {
+        rel, boxes, w: self.w, h: self.h, fitted: false,
+        portY: {}, rootRank: undefined, stats: { crossings: 0, backEdges: 0 },
+      };
+      built.set(gid, sn);
+      return sn;
+    }
+
+    const levelNodes: LayoutNodeIn[] = [];
+    const subs = new Map<string, SuperNode>();
+    let rootRank: number | undefined;
+    for (const ch of children) {
+      if (ch.kind === 'group') {
+        const sr = buildGroup(ch.id);
+        subs.set(ch.id, sr);
+        crossings += sr.stats.crossings;
+        backEdges += sr.stats.backEdges;
+        if (sr.rootRank !== undefined) rootRank = Math.min(rootRank ?? sr.rootRank, sr.rootRank);
+        const seed = seedOf(ch.id, childrenOf.get(ch.id) ?? []);
+        levelNodes.push({
+          id: ch.id, kind: 'node', x: seed.x, y: seed.y, w: sr.w, h: sr.h,
+          portY: sr.portY, rootRank: sr.rootRank,
+        });
+      } else {
+        if (ch.rootRank !== undefined) rootRank = Math.min(rootRank ?? ch.rootRank, ch.rootRank);
+        levelNodes.push(ch);
+      }
+    }
+
+    const flat = layoutFlat(levelNodes, levelEdges(gid), opts, { x: 0, y: 0 });
+    crossings += flat.stats.crossings;
+    backEdges += flat.stats.backEdges;
+
+    // Normalise so the whole level (reroutes included — they are members too)
+    // starts at the origin. The shift is floored onto the grid so the node
+    // boxes stay grid-aligned.
+    let minX = Infinity, minY = Infinity;
+    for (const ln of levelNodes) {
+      const p = flat.positions[ln.id];
+      if (!p) continue;
+      if (p.x < minX) minX = p.x;
+      if (p.y < minY) minY = p.y;
+    }
+    if (!Number.isFinite(minX)) { minX = 0; minY = 0; }
+    const shiftX = g ? Math.floor(minX / g) * g : minX;
+    const shiftY = g ? Math.floor(minY / g) * g : minY;
+
+    let maxX = -Infinity, maxY = -Infinity;
+    for (const ln of levelNodes) {
+      const p = flat.positions[ln.id];
+      if (!p) continue;
+      const rx = p.x - shiftX + padX;
+      const ry = p.y - shiftY + padTop;
+      rel.set(ln.id, { x: rx, y: ry });
+      if (rx + ln.w > maxX) maxX = rx + ln.w;
+      if (ry + ln.h > maxY) maxY = ry + ln.h;
+      const sr = subs.get(ln.id);
+      if (sr) {
+        if (sr.fitted) boxes.set(ln.id, { w: sr.w, h: sr.h });
+        for (const [did, dp] of sr.rel) rel.set(did, { x: rx + dp.x, y: ry + dp.y });
+        for (const [did, db] of sr.boxes) boxes.set(did, db);
+      }
+    }
+    let w = Math.max(GROUP_MIN_W, (Number.isFinite(maxX) ? maxX : 0) + padX);
+    let h = Math.max(GROUP_MIN_H, (Number.isFinite(maxY) ? maxY : 0) + padX);
+    w = quantUp(w); h = quantUp(h);
+
+    // The super-node's ports: a member's handle, at its absolute y inside the
+    // group. Deduped — the same (member, handle) pair can cross the boundary on
+    // several wires, and it is one pin either way.
+    const portY: Record<string, number> = {};
+    for (const c of crossing.get(gid) ?? []) {
+      const key = `${c.handle}@${c.nodeId}`;
+      if (portY[key] !== undefined) continue;
+      const rp = rel.get(c.nodeId);
+      const raw = byId.get(c.nodeId);
+      if (!rp || !raw) continue;
+      const off = raw.portY[c.handle];
+      portY[key] = rp.y + (off ?? raw.h / 2);
+    }
+
+    const sn: SuperNode = { rel, boxes, w, h, fitted: true, portY, rootRank, stats: { crossings, backEdges } };
+    built.set(gid, sn);
+    return sn;
+  };
+
+  // --- the TOP level --------------------------------------------------------
+  const levelNodes: LayoutNodeIn[] = [];
+  const tops = new Map<string, SuperNode>();
+  let crossings = 0, backEdges = 0;
+  for (const n of topLevel) {
+    if (n.kind === 'group') {
+      const sr = buildGroup(n.id);
+      tops.set(n.id, sr);
+      crossings += sr.stats.crossings;
+      backEdges += sr.stats.backEdges;
+      const seed = seedOf(n.id, childrenOf.get(n.id) ?? []);
+      levelNodes.push({
+        id: n.id, kind: 'node', x: seed.x, y: seed.y, w: sr.w, h: sr.h,
+        portY: sr.portY, rootRank: sr.rootRank,
+      });
+    } else {
+      levelNodes.push(n);
+    }
+  }
+
+  const flat = layoutFlat(levelNodes, levelEdges(null), opts, anchor);
+  crossings += flat.stats.crossings;
+  backEdges += flat.stats.backEdges;
+
+  const positions: Record<string, { x: number; y: number }> = {};
+  const boxes: Record<string, { w: number; h: number }> = {};
+  for (const ln of levelNodes) {
+    const p = flat.positions[ln.id];
+    if (!p) continue;
+    positions[ln.id] = p;
+    const sr = tops.get(ln.id);
+    if (!sr) continue;
+    if (sr.fitted) boxes[ln.id] = { w: sr.w, h: sr.h };
+    for (const [did, dp] of sr.rel) positions[did] = { x: p.x + dp.x, y: p.y + dp.y };
+    for (const [did, db] of sr.boxes) boxes[did] = db;
+  }
+
+  return {
+    positions,
+    boxes,
+    stats: {
+      columns: flat.stats.columns,
+      crossings,
+      backEdges,
+      components: flat.stats.components,
+      ms: 0,
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------
+// §4.11 — COMMENTS: translate, and wrap what they annotate
+// ---------------------------------------------------------------------------
+
+/** A comment has no edges, so it is never a layout constraint — but it is an
+ *  ANNOTATION, and an annotation that ends up nowhere near what it annotates is
+ *  worse than no annotation (risk R3). So: the nodes whose centre was inside the
+ *  comment's OLD rect are found with the same containment predicate a group
+ *  uses, and the comment is re-fitted around their NEW boxes plus `commentPad`
+ *  on each side. A comment that contained nothing follows the anchor delta.
+ *
+ *  ⚠ The wrap runs to a FIXED POINT. Growing the rect around a set can bring a
+ *  nearby node's centre inside it, and then the NEXT Organize would wrap the
+ *  larger set and move the comment again — A7 would fail on the second run. The
+ *  loop here settles that within one call, so re-running on the output finds the
+ *  same set and reproduces the same rect. It is bounded
+ *  (`COMMENT_WRAP_ITERATIONS`) because a pathological arrangement must not spin
+ *  the UI thread. */
+function placeComments(
+  comments: readonly LayoutNodeIn[],
+  subjects: readonly LayoutNodeIn[],
   positions: Record<string, { x: number; y: number }>,
-  delta: { x: number; y: number },
-  grid: number,
-  ax: number,
-  ay: number,
+  boxes: Record<string, { w: number; h: number }>,
+  opts: LayoutOptions,
+  frame: { grid: number; ax: number; ay: number; dx: number; dy: number },
 ): void {
-  for (const p of passive) {
-    const x = p.x + delta.x;
-    const y = p.y + delta.y;
-    positions[p.id] = grid
-      ? { x: ax + Math.round((x - ax) / grid) * grid, y: ay + Math.round((y - ay) / grid) * grid }
-      : { x: Math.round(x), y: Math.round(y) };
+  const { grid, ax, ay } = frame;
+  const snap = (v: number, a: number) => (grid ? a + Math.round((v - a) / grid) * grid : Math.round(v));
+  const sizeAfter = (n: LayoutNodeIn) => boxes[n.id] ?? { w: n.w, h: n.h };
+  const boxAfter = (n: LayoutNodeIn): LayoutBox | null => {
+    const p = positions[n.id];
+    if (!p) return null;
+    const s = sizeAfter(n);
+    return { x: p.x, y: p.y, w: s.w, h: s.h };
+  };
+
+  for (const c of comments) {
+    const oldRect: LayoutBox = { x: c.x, y: c.y, w: c.w, h: c.h };
+    // ⚠ The translated rect must be the SNAPPED one — the same rect the
+    // translate branch would actually write. Testing the raw pre-snap rect let
+    // the grid rounding slide the comment up to grid/2 onto a node the seed had
+    // not seen, and the next Organize then wrapped it (A7 on gas_particles).
+    const placed = { x: snap(c.x + frame.dx, ax), y: snap(c.y + frame.dy, ay) };
+    const moved: LayoutBox = { x: placed.x, y: placed.y, w: c.w, h: c.h };
+    // ⚠ THE SEED IS A UNION, and that is an as-built deviation from §4.11.
+    // "what it used to contain" (the old rect over the OLD geometry) is what
+    // makes A15 true. But a comment that contained NOTHING and simply
+    // translates is NOT a fixed point: the layout can slide a node under it,
+    // and the NEXT Organize would then wrap that node and move the comment —
+    // A7 caught exactly this on snake / MNCA / Extended Wireworld. So the seed
+    // also asks what sits under the translated rect in the NEW geometry. A
+    // comment with nothing on either side still just translates.
+    const seed = new Set<string>();
+    for (const n of subjects) {
+      if (rectContainsCentre(oldRect, { x: n.x, y: n.y, w: n.w, h: n.h })) seed.add(n.id);
+      const b = boxAfter(n);
+      if (b && rectContainsCentre(moved, b)) seed.add(n.id);
+    }
+    let set = [...seed].sort(cmpStr);
+
+    if (set.length === 0) { positions[c.id] = placed; continue; }
+
+    const wrap = (ids: readonly string[]): LayoutBox => {
+      let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+      for (const id of ids) {
+        const n = subjects.find(s => s.id === id);
+        const b = n ? boxAfter(n) : null;
+        if (!b) continue;
+        if (b.x < x0) x0 = b.x;
+        if (b.y < y0) y0 = b.y;
+        if (b.x + b.w > x1) x1 = b.x + b.w;
+        if (b.y + b.h > y1) y1 = b.y + b.h;
+      }
+      if (!Number.isFinite(x0)) return { x: c.x + frame.dx, y: c.y + frame.dy, w: c.w, h: c.h };
+      const pad = opts.commentPad;
+      const x = snap(x0 - pad, ax);
+      const y = snap(y0 - pad, ay);
+      // The size is measured from the SNAPPED corner so the wrap still covers
+      // the far edge after rounding, and never drops below the comment defaults
+      // (unless the user had already made it smaller than those).
+      const minW = Math.min(COMMENT_DEFAULT_W, c.w);
+      const minH = Math.min(COMMENT_DEFAULT_H, c.h);
+      let w = Math.max(minW, x1 + pad - x);
+      let h = Math.max(minH, y1 + pad - y);
+      if (grid) { w = Math.ceil(w / grid) * grid; h = Math.ceil(h / grid) * grid; }
+      else { w = Math.round(w); h = Math.round(h); }
+      return { x, y, w, h };
+    };
+
+    let rect = wrap(set);
+    for (let it = 0; it < COMMENT_WRAP_ITERATIONS; it++) {
+      const next = subjects
+        .filter(n => { const b = boxAfter(n); return b ? rectContainsCentre(rect, b) : false; })
+        .map(n => n.id)
+        .sort(cmpStr);
+      if (next.length === set.length && next.every((id, i) => id === set[i])) break;
+      set = next;
+      if (set.length === 0) break;
+      rect = wrap(set);
+    }
+
+    positions[c.id] = { x: rect.x, y: rect.y };
+    if (rect.w !== c.w || rect.h !== c.h) boxes[c.id] = { w: rect.w, h: rect.h };
   }
 }

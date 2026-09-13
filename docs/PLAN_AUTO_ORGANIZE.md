@@ -1,5 +1,12 @@
 # Plan — "Organize" (auto-layout) on the graph context menu
 
+> **Status: DELIVERED** (P1+P2 `4e90bd7`; P3 groups + comments and P4 docs + Help on the same branch).
+> Build narrative, measurements and the verification transcript:
+> [HANDOFF_AUTO_ORGANIZE.md](HANDOFF_AUTO_ORGANIZE.md); the reference doc is
+> [`areas/modeler-ui.md`](areas/modeler-ui.md) § *Auto-layout (Organize)*. The plan below is kept as
+> written; where the build diverged from it, the **[As built — deviations](#as-built--deviations)**
+> section at the end says how and why.
+
 **Scope: editor layer only.** A new pure module `src/modeler/vpl/autoLayout.ts` + wiring in
 `GraphEditor.tsx` (+ a DEV hook, + one persisted view setting, + one Help row). **ZERO compiler
 impact** — nothing under `src/modeler/vpl/compiler/` changes, no schema field, no worker message,
@@ -799,3 +806,44 @@ negative-control.
 8. **`CLAUDE.md`** — **no new section and no new routing row.** The feature lives inside the graph
    editor, which `modeler-ui.md` already routes; adding a row would cost every future session for
    nothing (§ *Keeping this file small*).
+
+---
+
+## As built — deviations
+
+Sixteen places where the shipped feature differs from the plan above (P1+P2 `4e90bd7`, then P3+P4).
+Each is deliberate; the reasoning is in [HANDOFF_AUTO_ORGANIZE.md](HANDOFF_AUTO_ORGANIZE.md) and the
+invariant it creates is in [`areas/modeler-ui.md`](areas/modeler-ui.md) § *Auto-layout (Organize)*.
+
+### From P1 + P2
+
+| # | The plan said | What shipped |
+|---|---|---|
+| 1 | The four geometry constants get "one exported block in `CaNode.tsx` (or a new `nodeGeometry.ts`)" (§5). | **A new `nodeGeometry.ts` with FIVE constants** (`HEADER_CENTRE_Y` joined the four) plus `portTopBase()` and `portYOffsets()`. CaNode imports them; harness section B pins that it does. |
+| 2 | Tidy "skips §4.5 and §4.6 entirely" (§4.13). | Tidy's cluster index is then run through **the same topological repair sweep** as §4.5. Without it a user arrangement in which two connected nodes share a column (or a wire runs leftward) violates A2 / A3, which the library sweep asserts for all three styles. Repair only ever SPLITS a cluster along a directed path, which is exactly what A13 states. |
+| 3 | Components are stacked for every style (§4.12). | **Tidy does not split into components.** It keeps the user's own arrangement; stacking would move nodes the user deliberately placed beside each other. |
+| 4 | Tidy's column x is "its members' mean x, quantised" (§4.13). | `max(minimum spacing, mean x)`, and the chain is **seeded with the first column's own mean, not 0** — the x chain has to be translation-equivariant or the second Organize picks a different arm of the `max` and drifts whole columns by a gap (A7, caught on Kelp War and Chromatography). |
+| 5 | The anchor is "the result bbox top-left" (§4.12). | The bbox is measured over the laid-out **node boxes only** — a reroute rides its wire and its position is a lerp, so letting one define the origin makes the second run round to a different origin. The editor measures `opts.anchor` the same way. |
+| 6 | Every final position is grid-rounded (§4.12). | **A reroute is exempt.** It belongs ON its wire, not on the canvas grid; rounding moves it off the segment and the next Organize re-projects the rounded point and moves it again. Its `t` is quantised to 1/1000 and its placement to 1/100 px, both purely so the round trip recovers exactly (A7 on four shipped models). |
+| 7 | Six negative controls (§7.1). | **Seven after P2** — the topological repair sweep is an as-built addition, so it got its own control. (Nine after P3.) |
+| 8 | Root-rank ids `gridPeriodicEvent` / `agentPeriodicEvent` (§4.4). | The registry ids are **`gridPeriodic` / `agentPeriodic`**; the plan's names do not exist. Ordering only, never correctness. |
+| 9 | Tidy's padding is "derived from the existing columns" (§3.2). | `STYLE_PADDING.tidy = {gapX: 40, gapY: 30}` as **minima**, with the user's own spacing kept wherever it is already roomier. |
+| 10 | `clusterByX` is internal. | **Exported**, so harness A13 can state "every pair that shared a column before shares one after" against the SAME predicate the layout uses rather than a re-implementation of it. |
+
+### From P3 + P4
+
+| # | The plan said | What shipped |
+|---|---|---|
+| 11 | A group's members are "the nodes whose centre is strictly inside its rect… Nesting recurses" (§4.10). | For a **group inside a group** the parent must additionally be **strictly bigger by area** (id as the final tie-break). Centre-containment alone is not antisymmetric once a group has been fitted: an outer group that hugs its inner one has its own centre inside the inner rect, and the second Organize re-nested the graph inside out (A7 on the `nestedGroup` fixture). Node membership is unchanged — it is the one predicate `onNodeDragStart` uses. |
+| 12 | The super-node is placed "with the outer layout" (§4.10 step 4). | Its **seed position is its CONTENT's bbox minus the padding**, not the group's own top-left. A super-node carries the FITTED size, and pairing that with the user's arbitrarily-sized rect makes the seed geometry differ between the first Organize and the second — Tidy clusters columns from exactly those x intervals, and the second run moved 43 nodes on Elementary CA 1D. Seeding from the content is a fixed point by construction. |
+| 13 | Comments: "empty ⇒ translate by the anchor delta" (§4.11). | **The seed is a UNION** — what the comment used to contain *plus* what now sits under the translated (and snapped) rect — and the wrap then runs to a **fixed point**. Translate-only is not a fixed point: the layout slides a node under a free-floating comment and the NEXT Organize wraps it (A7 on snake / MNCA / Extended Wireworld / gas_particles). The price is that a comment can adopt what the layout parks under it; that is stated in the area doc. |
+| 14 | "4 barycentre sweeps… keep the best ordering seen" (§4.6). | The sweeps **stop as soon as two consecutive sweeps change nothing** and the whole thing is then **re-seeded with its own accepted answer until no round improves** (`MAX_SWEEPS` 12, `ORDER_ROUNDS` 4). A fixed four sweeps is not a fixed point: seeded by the user's arrangement it stopped at 21 crossings where seeding by its own output reached 17. It is also no slower (measured: halving both settings changed the 1000-node time by less than the run-to-run spread). |
+| 15 | `setNodes` writes `style` + `data.width/height` for a re-fitted box (§6). | **All four slots** — top-level `width`/`height`, `measured`, the `style` seed and `data.width/height` — because `toGraphNodes` serialises `measured.width ?? width ?? style.width` and a `style`-only write is swallowed by the stale `measured`. That is exactly what a NodeResizer drag leaves behind, and a manual resize straight after an Organize still works. |
+| 16 | A12 budget: 300 nodes < 5 ms, 1000 < 16 ms (§4.15). | **Soft targets raised to 12 ms / 40 ms**, hard fail still 4×. There is no cheap win to take (see the handoff § A12): the 1000-node fixture is a 751-column chain far longer than any rule graph, the cost is spread across the per-column straightening and separation rather than sitting in one hot spot, and halving the sweep settings measured no improvement. Measured 3–8 ms at 300 and 19–31 ms at 1000; the largest shipped scope is 91 nodes at ~10 ms. |
+
+Three smaller ones, recorded for completeness: **Organize Selection implicitly brings a selected group's
+members** (the plan left the rule open; the alternative contradicts a group drag); a **stranded reroute**
+— one whose partner is outside the laid-out set, the common case inside a group — now follows the set's
+own translation instead of staying at a raw old coordinate; and **A14's "no outsider captured" claim
+exempts reroutes** (a wire crossing a group is what reroutes are for) **and larger groups** (an ancestor
+is not an outsider).

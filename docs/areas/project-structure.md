@@ -75,6 +75,8 @@ genesis-ca/
 │   │       ├── GraphEditor.tsx
 │   │       ├── graphState.ts          # Shared mutable state (avoids circular imports between GraphEditor/CaNode)
 │   │       ├── alignmentSnap.ts        # Pure Ctrl-drag alignment-guide geometry (computeAlignmentSnap + sameGuides)
+│   │       ├── autoLayout.ts           # "Organize": the DOM-free auto-layout (computeAutoLayout + STYLE_PADDING + clusterByX + rectContainsCentre, the ONE group-containment predicate GraphEditor's group drag also uses)
+│   │       ├── nodeGeometry.ts         # The ONE definition of CaNode's handle geometry (USER_LABEL_HEIGHT / PORT_TOP_BASE_NO_LABEL / PORT_SPACING / HEADER_CENTRE_Y / COLLAPSED_HANDLE_SPREAD) + portYOffsets — consumed by BOTH CaNode's render and autoLayout's straightening
 │   │       ├── bondAttrPorts.ts        # GRA P2: Form Bond's per-BOND-ATTRIBUTE initial-value ports — the ONE builder consumed by BOTH CaNode and effectivePorts
 │   │       ├── explicitControls.ts     # Explicit Controls: the ONE resolver (eligibility / descriptors / chain walk / the element option lists / applyInterfaceEdit / groups) consumed by BOTH the interface editor and the closed instance
 │   │       ├── nodeMorph.ts            # "Morph into": the curated retype table (Math ⇄ Math Expression ⇄ Compare ⇄ Logical Expression ⇄ Logic) + how each config/port maps; the engine lives in GraphEditor.morphNode
@@ -199,6 +201,7 @@ genesis-ca/
 │   ├── test-sprite-sheet.mjs         # Sprite-sheet gridding: geometry, back-compat vs an independent legacy transcription, the selection, the decode signature
 │   ├── test-sprite-crop.mjs          # Sprite CROP + COLORIZE: the rect rules by value, the per-frame sequence clamp, the fold, the decode signature (crop yes / colorize no), the multiply + 5-bit quantisation bound, the decoder ordering pins
 │   ├── verify-handle-remeasure.mjs   # VPL editor: the port-signature remeasure is keyed on HANDLE ids (kind_category_portId), so a value ⇄ flow category flip re-measures (--self-test = negative control)
+│   ├── verify-auto-layout.mjs        # "Organize" auto-layout, § A-C: the invariants on 15 synthetic fixtures x 3 styles (no overlap, flow right, value left, straightness, determinism, idempotence, anchor, grid, cycles, components, budget, tidy columns, groups A14, comments A15, reroutes, missing `measured`) · the port-geometry + containment MIRROR by anchored source grep · the 31-model library sweep (--controls = 9 source-mutation negative controls)
 │   ├── test-rule-trace.mjs           # RULE TRACE, § A-K: origin coverage over every library model · a traced cell's writes == the real step · the recorded branch == the one the data selects · the sandbox is a reader (buffers hash-identical) · a traced agent's force == the real behaviour's · the runner (cap, escape, private RNG, shadow reads) · scope mapping · the editor graph maths · the Values rows · the P7b findings — every claim negative-controlled
 │   └── verify-3d-depth-precision.mjs # 3D depth contract: agent radius spans >= 8 depth buckets at every zoom + the WebGPU near-clip margin (--old = negative control)
 ├── src-tauri/                        # Tauri v2 native-shell scaffold (Cargo.toml, tauri.conf.json, src/, icons/) — build needs Rust

@@ -59,7 +59,7 @@ import { getEffectivePorts } from './effectivePorts';
 // "Organize" — the auto-layout on the graph context menu. Plan + risk map:
 // docs/PLAN_AUTO_ORGANIZE.md. The algorithm is DOM-free and lives entirely in
 // autoLayout.ts; everything below is the gesture, the snapshot and the write-back.
-import { computeAutoLayout, STYLE_PADDING } from './autoLayout';
+import { computeAutoLayout, STYLE_PADDING, rectContainsCentre } from './autoLayout';
 import type { LayoutEdgeIn, LayoutNodeIn } from './autoLayout';
 import { portYOffsets } from './nodeGeometry';
 import { vectorPortDims } from './compiler/vectorAttr';
@@ -733,9 +733,11 @@ function nodeSize(n: Node): { w: number; h: number } {
   return { w, h };
 }
 
-function nodeCenter(n: Node): { x: number; y: number } {
+/** A React Flow node as the plain box the DOM-free helpers speak in — the ONE
+ *  bridge between the editor's `Node` and `rectContainsCentre` / the layout. */
+function layoutRectOf(n: Node): { x: number; y: number; w: number; h: number } {
   const { w, h } = nodeSize(n);
-  return { x: n.position.x + w / 2, y: n.position.y + h / 2 };
+  return { x: n.position.x, y: n.position.y, w, h };
 }
 
 // ---------------------------------------------------------------------------
@@ -2808,13 +2810,6 @@ export function GraphEditorInner() {
       nodeDragActiveRef.current = true;
       setTraceHover(null);
       if (node.type !== 'groupNode') return;
-      const { w, h } = nodeSize(node);
-      const rect = {
-        x1: node.position.x,
-        y1: node.position.y,
-        x2: node.position.x + w,
-        y2: node.position.y + h,
-      };
       const members: Array<{ id: string; startX: number; startY: number }> = [];
       for (const n of nodesRef.current) {
         if (n.id === node.id) continue;
@@ -2824,8 +2819,13 @@ export function GraphEditorInner() {
         // well), so arbitrarily-deep nesting moves in lock-step without
         // recursion. Membership stays purely geometric — groups have no
         // parentId — matching how caNodes are already gathered.
-        const c = nodeCenter(n);
-        if (c.x > rect.x1 && c.x < rect.x2 && c.y > rect.y1 && c.y < rect.y2) {
+        //
+        // ⚠ The predicate itself lives in `autoLayout.ts` (`rectContainsCentre`)
+        // because Organize's group contraction has to decide EXACTLY the same
+        // set: it re-fits the group's rect around its members, and a rect fitted
+        // to one set while the drag carries another is the group-desync bug
+        // (risk R2 / decision G1). Pinned by verify-auto-layout section B.
+        if (rectContainsCentre(layoutRectOf(node), layoutRectOf(n))) {
           members.push({ id: n.id, startX: n.position.x, startY: n.position.y });
         }
       }
@@ -4597,8 +4597,32 @@ export function GraphEditorInner() {
   // `updateNodeInternals` (a position change moves no handle offset), and no
   // select changes at all, so `selected` / `measured` / `data` identity all
   // survive.
-  const organizeIds = useCallback((ids: Set<string> | null, style: OrganizeStyle): boolean => {
+  const organizeIds = useCallback((idsIn: Set<string> | null, style: OrganizeStyle): boolean => {
     const all = nodesRef.current;
+    // SELECTION MODE — a selected GROUP brings its members (decision G1). The
+    // alternative ("lay the group out with whatever members happen to be
+    // selected") would move the rect away from nodes it still geometrically
+    // contains, which is exactly the group-desync this feature exists not to
+    // do; and it would be inconsistent with a group DRAG, which always carries
+    // everything inside it. The expansion repeats to a fixed point so a nested
+    // group comes along with its own contents.
+    let ids = idsIn;
+    if (ids) {
+      const grown = new Set(ids);
+      for (let pass = 0; pass < 8; pass++) {
+        let added = false;
+        for (const g of all) {
+          if (g.type !== 'groupNode' || !grown.has(g.id)) continue;
+          const rect = layoutRectOf(g);
+          for (const n of all) {
+            if (n.id === g.id || grown.has(n.id)) continue;
+            if (rectContainsCentre(rect, layoutRectOf(n))) { grown.add(n.id); added = true; }
+          }
+        }
+        if (!added) break;
+      }
+      ids = grown;
+    }
     const subject = ids ? all.filter(n => ids.has(n.id)) : all;
     const boxes = subject.filter(n => layoutKindOf(n) === 'node');
     if (subject.filter(n => layoutKindOf(n) !== 'comment' && layoutKindOf(n) !== 'group').length < 2) return false;
@@ -4677,11 +4701,31 @@ export function GraphEditorInner() {
       pushCurrentSnapshot();          // BEFORE the mutation, OUTSIDE the updater
       setNodes(nds => nds.map(n => {
         const p = result.positions[n.id];
-        if (!p || (n.position.x === p.x && n.position.y === p.y)) return n;
-        // spread the node so `selected` / `data` / `measured` survive; only the
-        // position changes. (P3: `result.boxes` will also carry group / comment
-        // rects here, written through style + data.width/height.)
-        return { ...n, position: p };
+        const b = result.boxes[n.id];
+        const moved = p && (n.position.x !== p.x || n.position.y !== p.y);
+        if (!moved && !b) return n;
+        // Spread the node so `selected` / `data` / `measured` survive; only the
+        // position (and, for a re-fitted group / comment, the size) changes.
+        //
+        // ⚠ THE SIZE WRITE-BACK MIRRORS WHAT A MANUAL RESIZE WRITES, all four
+        // places. React Flow's own `applyChange` for a NodeResizer drag sets
+        // `measured` AND the top-level `width`/`height` (`setAttributes`), the
+        // resizer's `onResizeEnd` writes `data.width/height`, and `toRFNodes`
+        // seeds `style` on load. `toGraphNodes` then serialises
+        // `measured.width ?? width ?? style.width` — so writing ONLY `style`
+        // would be swallowed by the stale `measured` and the new rect would be
+        // lost on save. Setting all four keeps the node byte-equivalent to one
+        // the user had dragged to that size.
+        const next: Node = { ...n };
+        if (p) next.position = p;
+        if (b) {
+          (next as { width?: number; height?: number }).width = b.w;
+          (next as { height?: number }).height = b.h;
+          (next as { measured?: { width: number; height: number } }).measured = { width: b.w, height: b.h };
+          next.style = { ...n.style, width: b.w, height: b.h };
+          next.data = { ...(n.data as Record<string, unknown>), width: b.w, height: b.h };
+        }
+        return next;
       }));
       scheduleSync();
     };

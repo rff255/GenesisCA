@@ -224,6 +224,13 @@ Every control whose target names a DEPARTING node is removed, for **both** nodeI
 - **`writeScopeNow`** writes the open canvas to the model synchronously (the `scheduleSync` routing, minus the 100 ms debounce) so the several dispatches a move makes all see a consistent model. For a move-OUT the DEF on screen is authoritative (its edits may not have synced), while the PARENT comes from the model.
 - **DEV hook `window.__moveSelectionToScope(nodeIds, dropTargetNodeId)`** runs the SAME `performScopeMove` the drop calls (the `__openSelectionMenu` precedent) — a real pointer drag on the grip DOES work through CDP, but a synthetic one cannot start a React Flow-adjacent gesture reliably, and the hook is what makes the semantics assertable in one eval.
 
+#### ⚠ A DEF'S POSITIONS ARE SHARED BY EVERY INSTANCE
+Node positions live on the shared `MacroDef.nodes`, so **`Organize` run inside a macro def scope re-lays
+that def once for every instance** — every other instance shows the new arrangement the next time it is
+entered. That is correct (a def has one body), it is documented in the Help chapter, and there is no code
+guard for it; at root an instance is a single closed node, so nothing visible moves there. See
+[`modeler-ui.md`](modeler-ui.md) § *Auto-layout (Organize)*.
+
 #### ⚠ UNDO IS SCOPE-LOCAL (documented, not fixed)
 `graphHistory` holds ONE stack for the graph on screen and `clearHistory()` runs on every scope change, so **Ctrl+Z cannot reverse a cross-scope move** — it restores the canvas half only. Same shape as the documented "Make Independent Copy" undo asymmetry; fixing it needs a model-level undo, which this feature does not introduce.
 

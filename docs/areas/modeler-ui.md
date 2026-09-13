@@ -25,6 +25,7 @@
 - LIVE mode — the graph pane beside the running simulation (Phase 2, 2026-09-07)
 - LIVE mode — the graph pane’s INPUT OWNERSHIP (Phase 4, 2026-09-07)
 - RULE TRACE — what the editor owns (2026-09-12) → [`rule-trace.md`](rule-trace.md)
+- Auto-layout (Organize) — the context-menu re-layout (2026-09-13)
 
 ---
 
@@ -86,7 +87,7 @@
 - Port labels render outside nodes (absolute positioned left/right of handles); controlled by `showPortLabelsGlobal` toggle. **They sit in CANVAS space, so a wire runs directly behind them** — user-reported as *"very hard to read the name of a port that has links connected"*. **They are NOT painted under the edges, and that was worth measuring before "fixing" it**: `.react-flow__viewport` carries a transform (so it IS the stacking context), its four children are all `z-index: auto` and therefore paint in TREE ORDER (`react-flow__edges` at index 0, `react-flow__nodes` at index 2), and a caNode carries `z-index: 0` + a transform, so its labels already paint in front of every edge — the ONE thing pinned BELOW the edges is a group node, at the documented `z-index: -1 !important`. The real defect was CONTRAST: 0.55rem uppercase glyphs with no backing measured **2.73:1 (Nocturne) / 1.82:1 (Blender)** against a value edge `#4cc9f0`, below even the 3:1 large-text floor. Fix ([CaNode.module.css](src/modeler/vpl/CaNode.module.css)) = a **halo drawn in `--color-bg-canvas`** (8 one-pixel offsets for the stroke + two 3px blurred copies to fill a glyph's counters) plus the colour rising `--color-text-muted` → `--color-text-tertiary`. **The halo colour is the load-bearing choice**: the canvas token measures **10.36 / 8.42 (Nocturne)** and **8.77 / 7.13 (Blender)** against the value and flow edge colours, so it masks the wire in BOTH themes for free, and over the bare canvas it is invisible by construction (same colour). **Deliberately NO padding and NO background pill** — a pill would shift the label off its measured position and would show as a wrong-coloured rectangle wherever it overlapped a neighbouring node or a group tint; the halo degrades there to an ordinary soft dark outline instead. Measured mean local contrast between the ink and its immediate non-ink surroundings, **over a wire → with the halo**: Nocturne 2.55 → **3.49** (value edge) and 2.62 → **3.50** (flow), Blender 2.55 → **3.31** and 2.63 → **3.32** — i.e. **a link behind a label now costs no legibility at all** (the bare-canvas baselines are 3.50 / 3.33). The label's rect is byte-identical before and after, in both themes. The **reroute** node's optional label is a SEPARATE element with its own drop shadow and is deliberately out of scope (it is not governed by the port-labels toggle).
 - **Flow ports = right-pointing triangles (Unreal-blueprint style)**: `.handleFlow` ([CaNode.module.css](src/modeler/vpl/CaNode.module.css)) uses `clip-path: polygon(0% 0%, 100% 50%, 0% 100%)` + `border-radius:0` + a dark `drop-shadow` outline (a real `border` would be clipped into the triangle). Both input AND output flow handles point right (flow runs left→right). `clip-path` clips `box-shadow`, so the magenta compatibility glow is re-expressed as a `drop-shadow` filter via the compound selector `.handleFlow.handleCompatible` (covers connection-drag + panel-drag highlight). Value ports stay round. Reroute flow relays inherit the triangle (they reuse `caStyles.handleFlow`).
 - **Main flow ports pinned to the header centre**: the primary flow input (`mainFlowIn` = the single flow-category input) and primary flow output (`mainFlowOut` = the `next` port, else the first flow output — covers Step/InitEvent/OutputMapping roots + Sequence's FIRST) are rendered by `renderMainFlowHandle` ([CaNode.tsx](src/modeler/vpl/CaNode.tsx)) INSIDE the `position:relative` header (`style top:50%` → header centre, robust to the optional userLabel/header height). The body port maps iterate `bodyInputPorts`/`bodyOutputPorts` (the full lists minus the two lifted ports), so the data ports + branch flow ports (THEN/ELSE/BODY/CASE_N…) reindex from body row 0 and `maxPorts` (height) is computed on the body arrays. Result: one exec-in pin top-left + one exec-out pin top-right at header level (a horizontal through-line), everything else below — the UE blueprint layout. Value-only nodes (no flow ports) are unchanged. Collapsed nodes still collapse all handles to `top:50%`.
-- **Body-port spacing is uniform across ALL node types** (`PORT_TOP_BASE = 30 + (userLabel ? USER_LABEL_HEIGHT : 0)`, `portSpacing = 22` in [CaNode.tsx](src/modeler/vpl/CaNode.tsx)). `isCompact` (step/conditional/sequence) now ONLY drives the `compactNode` min-width class — it no longer tightens port spacing/base. (Before: compact nodes used base 24 / spacing 16, which — once the main flow ports moved to the header — left Conditional's THEN/ELSE and Sequence's THEN/Then-N sitting higher and closer together than the identical branch ports on Loop/ForEach/Switch. Unifying the grid makes every node's Nth body port land on the same row.) **`USER_LABEL_HEIGHT = 21`**: body-port handles are absolutely positioned from the NODE's top, so a rename's `.userLabel` strip (height ≈21px, measured) shifts the header+body down — without adding that to the base, the data/branch ports ride UP onto the header and overlap the main flow pins (the reported "renamed node ports conjoined" bug). The main flow pins need no adjustment — they're inside the header (`top:50%`) and move with it.
+- **Body-port spacing is uniform across ALL node types** (`PORT_TOP_BASE = 30 + (userLabel ? USER_LABEL_HEIGHT : 0)`, `portSpacing = 22`). ⚠ **The five constants live in [nodeGeometry.ts](src/modeler/vpl/nodeGeometry.ts), not in CaNode** (`USER_LABEL_HEIGHT` 21 · `PORT_TOP_BASE_NO_LABEL` 30 · `PORT_SPACING` 22 · `HEADER_CENTRE_Y` 15 · `COLLAPSED_HANDLE_SPREAD` 11) — CaNode *renders* with them and `portYOffsets` *straightens* with them, two consumers of one definition. Do not re-inline a literal here; `verify-auto-layout.mjs` section B pins both the values and the fact that CaNode imports them. `isCompact` (step/conditional/sequence) now ONLY drives the `compactNode` min-width class — it no longer tightens port spacing/base. (Before: compact nodes used base 24 / spacing 16, which — once the main flow ports moved to the header — left Conditional's THEN/ELSE and Sequence's THEN/Then-N sitting higher and closer together than the identical branch ports on Loop/ForEach/Switch. Unifying the grid makes every node's Nth body port land on the same row.) **`USER_LABEL_HEIGHT = 21`**: body-port handles are absolutely positioned from the NODE's top, so a rename's `.userLabel` strip (height ≈21px, measured) shifts the header+body down — without adding that to the base, the data/branch ports ride UP onto the header and overlap the main flow pins (the reported "renamed node ports conjoined" bug). The main flow pins need no adjustment — they're inside the header (`top:50%`) and move with it.
 - **Palette flow-port previews are green triangles too**: `.previewDotFlow` ([PalettePanelContent.module.css](src/modeler/panels/PalettePanelContent.module.css)) overrides the round `.previewDot` with the same `clip-path` triangle + `#4caf50` fill as the canvas `.handleFlow`, so the Palette's VISUAL mini-previews (NodePreview) match what lands on the graph. (It previously used the warm-yellow theme token `--color-port-flow` as a circle.) Value-port previews keep the grey Blender-socket circle. The preview is a row-based schematic, so it does NOT lift the main flow ports into the header (canvas-only layout).
 - Inline port widgets: stored in node config as `_port_${portId}` keys; compiler reads via `getInlineValue()` helper
 - Node collapse: `isCollapsed` flag in node data. Collapsed nodes **fan their CONNECTED handles** out vertically around the node centre at a tight 11px spacing (`spreadTop()` in [CaNode.tsx](src/modeler/vpl/CaNode.tsx)) so the user can still tell which wire lands on which port without expanding; UNconnected handles stay stacked at `top: 50%` (they're only drag targets). The connected set is read from the connected-handles pub/sub (which now carries output handles too). Because the spread shifts handle positions WITHOUT a node-size change, CaNode calls `useUpdateNodeInternals(id)` whenever it's collapsed and the connected set (or collapse state) changes — otherwise React Flow wouldn't re-measure handle bounds and edges would render to stale positions. `isConnectingGlobal` triggers hover-to-uncollapse. The hover-expand is **disambiguation only** (`onMouseEnter`): it force-expands the collapsed node only when the COMPATIBLE side has >1 category-matching port (inputs when the drag origin is an output, outputs when it's an input). A single compatible port → no expand (releasing on the collapsed node lands on it directly), so approaching e.g. a one-input action node with a wire no longer pops it open.
@@ -119,7 +120,7 @@
 - Switch node dynamic ports: case output ports generated from `caseCount` + `case_N_value` config keys, similar to macro dynamic ports.
 - Context menu: clamped to viewport bounds via `useLayoutEffect` + ref measurement after render. Initial render with `visibility: hidden`.
 - Modeler PanelShell: resizable via drag handle on right edge (200-600px range). Pattern matches simulator right panel.
-- Group shrink-to-fit: `resizeGroupsToFit(nds, allowShrink)` runs on graph load with `allowShrink=true`. Prevents stale bloated groups.
+- **Group sizing has NO load-time pass.** `resizeGroupsToFit(nds, allowShrink)` — a shrink-to-fit on graph load that this bullet used to describe — **no longer exists anywhere in the source**; nothing re-fits a group's rect on load, and a stale bloated group stays bloated until the user resizes it. The two things that DO change a group's size are a **NodeResizer drag** (which writes `measured` + the top-level `width`/`height` via React Flow's `applyChange`, and `data.width/height` via `onResizeEnd`) and **Organize** (which re-fits the rect around the members it laid out inside — see *Auto-layout (Organize)* below, and which deliberately mirrors all four of those slots so a re-fitted group is byte-equivalent to one the user dragged).
 - Input drag fix: `stopDrag` callback checks `e.button === 0` (LMB only) to allow RMB pan through nodes. `stopAll` stops all buttons (for double-click). Body div uses `onDoubleClick={stopAll}` to prevent collapse; inline widgets use both `onMouseDown={stopDrag}` and `onDoubleClick={stopAll}`.
 - Compiler: in `compileFlowChain`, EVERY `varName()` call MUST be preceded by `compileValueNode(source.nodeId)` to ensure the value variable is declared. This applies to ALL flow node handlers (conditional, loop, switch, regular). Missing this causes undefined variables at runtime.
 - Model element cleanup: `ModelContext.tsx` reducer uses `patchAllNodes()` / `clearDeletedId()` helpers to update node configs when attributes/neighborhoods/mappings/indicators are deleted. Tag option deletion remaps indices in getConstant, switch, and setAttribute nodes. Always scan both `graphNodes` and `macroDefs[*].nodes`.
@@ -604,3 +605,115 @@ The hover tooltip follows the two standing rules here verbatim: **portalled to `
 TRANSFORM) and **carrying no `role`** (a surface that opens on HOVER must never own the keyboard). It is
 also `pointer-events: none`, and it stands down for every node drag — the stand-down sits **before**
 `onNodeDragStart`'s group-only early return.
+
+---
+
+## Auto-layout (Organize) — the context-menu re-layout (branch `debug-mode`, 2026-09-13)
+
+**Organize rewrites every position in a scope in one gesture.** Plan + risk map:
+[docs/PLAN_AUTO_ORGANIZE.md](docs/PLAN_AUTO_ORGANIZE.md) (+ `.html`); build narrative and measurements:
+[docs/HANDOFF_AUTO_ORGANIZE.md](docs/HANDOFF_AUTO_ORGANIZE.md). The algorithm is DOM-free and lives
+entirely in [autoLayout.ts](src/modeler/vpl/autoLayout.ts); `GraphEditor` owns only the gesture, the
+snapshot and the write-back. **Node positions are not compiled**, so `check-compile-identity` proves
+nothing here — [verify-auto-layout.mjs](scripts/verify-auto-layout.mjs) is the entire regression net.
+
+### Entry points, and the doctrine call
+
+| menu | entry | subject | anchor |
+|---|---|---|---|
+| **pane** (blank-canvas RMB / Spacebar / RMB in a group BODY) | `Organize ›` | the whole visible scope | the scope's node bbox top-left |
+| **selection** (RMB with ≥2 selected) | `Organize Selection ›` | the selected nodes | the selection's node bbox top-left |
+| bare **`O`** | — | the selection when ≥2 are selected, else the whole scope | as above |
+
+Both are `.contextSubmenuTrigger` hover submenus with **no `onClick` on the trigger**, exactly like
+`Align ›` / `Distribute ›` / `Morph into ›`; the three leaves (Tidy / Compact / Expanded) do the work and
+each states in its `title` what it does and that ONE `Ctrl+Z` restores everything. The pane entry is
+**HIDDEN below two layout-eligible nodes** (doctrine: structurally impossible ⇒ hide, never grey). `O`
+stands down for the field guard, for `overlayOwnsKeyboard()` (the context menu carries `role="menu"`) and,
+in Live, when the graph does not own the focus. The last style is persisted as `organizeStyle` in
+`graphState.ts`'s `genesisca_graph_view_settings` block.
+
+**Three styles, and what is deliberately NOT one.** *Tidy* keeps the user's own columns (clustered from
+the current x, never reordered) and only aligns, straightens, de-overlaps and snaps; *Compact* (60 x 30)
+and *Expanded* (120 x 60) re-lay the graph from scratch. `ParameterStyle` is not offered because
+left-of-consumer is the only correct placement in a graph drawn left-to-right — the other setting would
+put a value node to the RIGHT of what consumes it. Knot insertion (`bCreateKnotNodes`) is not offered
+because it MUTATES the graph (edge ids, the `.gcaproj` diff, `collapseReroutes`), not just positions.
+
+### What will bite you
+
+- **Groups — decision G1, and ONE containment predicate.** Group membership is purely geometric (a node
+  whose CENTRE is strictly inside the rect; groups carry no `parentId` and `toRFNodes` scrubs a stray
+  one) and it is computed in **two** places: `onNodeDragStart`, which freezes the set a group drag will
+  carry, and the layout's super-node contraction. Both call **`rectContainsCentre(rect, box)`** exported
+  from `autoLayout.ts`, through `GraphEditor`'s `layoutRectOf(node)` bridge. ⚠ **Never re-inline that
+  test.** A rect fitted to one set while the drag carries another is the group-desync bug, and it is
+  silent. A group is laid out as an opaque SUPER-NODE — its members laid out by a recursive call, the box
+  sized to that result + `groupPad` + the header strip (`GROUP_HEADER_H` = 32 px, measured against
+  `GroupNodeComponent.module.css`; nothing may sit under the strip because the strip IS the drag handle),
+  its members' external edges carried on synthetic `"<handle>@<member id>"` handles (`parseHandleId` still
+  reads the category off them) — and then re-fitted around exactly its members. Nesting recurses; **a
+  group's parent must be strictly BIGGER than it**, because a fitted outer group hugs its inner one
+  closely enough that centre-containment alone stops being antisymmetric. A group with edges in both
+  directions to the outside creates a super-node-level cycle the flat graph never had; the back-edge
+  marking is what pays for that.
+- **A selected group brings its members.** In selection mode `organizeIds` grows the id set to a fixed
+  point over every selected group's contents before laying out — the alternative (lay the group out with
+  whatever members happen to be selected) would move the rect away from nodes it still contains, and would
+  contradict a group drag, which always carries everything inside.
+- **Comments translate, and wrap what they annotate.** The nodes whose centre was in the comment's OLD
+  rect are re-wrapped with `commentPad` on each side; a comment that contained nothing follows the anchor
+  delta. ⚠ The wrap runs to a **fixed point**, and its seed is a UNION — "what it used to contain" *plus*
+  "what now sits under the translated rect". Translate-only is not a fixed point: the layout can slide a
+  node under a free-floating comment, and the next Organize would then wrap it and move the comment.
+  A comment is never a layout constraint and is not a group member for layout purposes.
+- **Reroutes ride their wire, and are exempt from the grid and the anchor.** A reroute is transparent to
+  the layout (its edges resolve to the first non-reroute source upstream, mirroring `collapseReroutes`)
+  and is placed LAST, on the FINAL segment, at the parameter `t` it occupied on the old one. It is **not**
+  rounded to the grid and it does **not** define the anchor bbox — rounding it moves it off its own wire,
+  and letting it define the origin breaks Organize-twice. A reroute may legitimately land inside a group
+  it was not in: a wire crossing a group is exactly what reroutes are for.
+- **The anchor, and no `fitView`.** The result's **node** bbox top-left is translated onto the original
+  one, and `fitView` is deliberately never called, so `Ctrl+Z` lands on the same screen the Organize did.
+  ⚠ The anchor is measured over `caNode` boxes ONLY on both sides — the editor's `boxNow` filter and the
+  module's final re-anchor pass. A group's top-left sits a whole pad above its first member, so anchoring
+  on the group would drift every grouped model down-right on every Organize.
+- **The grid-vs-`gapY` invariant.** Rounding moves a box by at most `grid/2` = 10 px and `gapY >= 30`, so
+  **rounding can never create an overlap** — that is why Compact's `gapY` is 30 and not smaller. Band y is
+  quantised BEFORE assignment so a whole chain rounds identically, and the group padding is rounded UP to
+  a whole grid step so a member inside a group is still on the grid.
+- **The `portY` mirror (risk R5).** Handle offsets come from `portYOffsets` in `nodeGeometry.ts`, which
+  goes through **`getEffectivePorts`** — never `def.ports` — plus the macro / macroInput / macroOutput
+  branches `getEffectivePorts` does not cover. A `hiddenPorts` or dynamic-port regression silently
+  misaligns straightening otherwise. `nodeGeometry.ts` is the ONE definition of the five CaNode handle
+  constants and CaNode itself consumes them.
+- **The measurement gate (risk R4).** `measured` is populated only after React Flow lays out, so right
+  after a scope switch every caNode can still be at the 200x100 fallback. `organizeIds` defers a frame and
+  retries (bounded to 3) while >20 % of caNodes are unmeasured, then proceeds on the documented fallbacks
+  rather than refusing.
+- **ONE snapshot, ONE `setNodes`, ONE `scheduleSync`** — `pushCurrentSnapshot()` OUTSIDE and BEFORE the
+  updater (inside it would capture the post-state). No `fitView`, no `updateNodeInternals` (a position
+  changes no handle offset), no select changes. The map SPREADS the node, so `selected` / `data` /
+  `measured` identity survive. For a re-fitted group or comment it also writes the **full persistence
+  quadruple** — top-level `width`/`height`, `measured`, the `style` seed and `data.width/height` —
+  because `toGraphNodes` serialises `measured.width ?? width ?? style.width` and a `style`-only write
+  would be swallowed by the stale `measured`. (A later manual NodeResizer drag overrides it cleanly:
+  verified 440x780 -> 520x880 straight after an Organize.)
+- **Organize Selection does not push unselected neighbours.** The layout arranges the selected nodes among
+  themselves and can land on something that was not selected — the same behaviour Align and Distribute
+  already have. Deliberate, documented in the Help chapter ("move the result if it lands on something
+  else"), not a bug to fix locally.
+- **Inside a macro DEF scope, Organize re-lays the def once for every instance** — a def has one body and
+  its `nodes` array is shared. That is correct, not a hazard; see [`macros.md`](macros.md).
+- **Every position is ABSOLUTE (R17).** The layout assumes it, which holds because groups deliberately
+  have no React Flow `parentId`. A future move to real RF parenting would silently break every coordinate
+  in this module.
+
+### Determinism is a hard requirement
+
+Organize twice must be a no-op (harness A6 / A7), and two mechanisms exist only for that: the barycentre
+sweeps re-seed with their own accepted answer until nothing improves (`ORDER_ROUNDS`) — a single pass can
+reach a better ordering from the layout's own output than from the user's arrangement, which moved 43
+nodes on the second run of Elementary CA 1D — and the comment wrap iterates to a fixed point. Every sort
+carries an explicit final tie-break on the node id; there is no `Math.random` and no `Date.now` anywhere
+that reaches a coordinate.
