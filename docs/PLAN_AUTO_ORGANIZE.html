@@ -1,0 +1,571 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Organize — auto-layout for the rule graph</title>
+<style>
+  :root{
+    --bg:#0c0d10; --panel:#14161b; --panel2:#1a1d24; --line:#2a2f3a;
+    --ink:#e6e9ef; --dim:#8f9bb0; --accent:#e8a13a; --val:#4cc9f0; --flow:#66bb6a;
+    --bad:#e05252; --ok:#4caf50;
+    /* real node category colours, from src/modeler/vpl/nodes/*.ts */
+    --cEvent:#ffffff; --cFlow:#1b5e20; --cData:#b71c1c; --cOut:#4a148c; --cLogic:#b8860b; --cAgg:#e65100;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font:14px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;}
+  .wrap{max-width:1120px;margin:0 auto;padding:40px 28px 90px}
+  h1{font-size:1.7rem;margin:0 0 6px;letter-spacing:-.01em}
+  h2{font-size:1.05rem;margin:46px 0 14px;padding-bottom:7px;border-bottom:1px solid var(--line);
+     color:var(--accent);letter-spacing:.02em;text-transform:uppercase;font-weight:600}
+  h3{font-size:.92rem;margin:22px 0 8px;color:var(--ink);font-weight:600}
+  .sub{color:var(--dim);margin:0 0 8px}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:18px 20px;margin:16px 0}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+  @media (max-width:900px){.grid2{grid-template-columns:1fr}}
+  .tag{display:inline-block;font-size:.68rem;letter-spacing:.06em;text-transform:uppercase;
+       padding:2px 8px;border-radius:999px;border:1px solid var(--line);color:var(--dim);margin-bottom:10px}
+  .tag.before{border-color:#4a3a3a;color:#c98a8a}
+  .tag.after{border-color:#3a4a3a;color:#8ac98a}
+  .tag.alt{border-color:#3a3f4a;color:#9aa8c0}
+  code{background:#0a0b0e;border:1px solid var(--line);border-radius:4px;padding:1px 5px;font-size:.86em;color:#cfe3ee}
+  ul{margin:8px 0 0;padding-left:20px} li{margin:5px 0}
+  table{width:100%;border-collapse:collapse;margin-top:10px;font-size:.87rem}
+  th,td{text-align:left;padding:7px 10px;border-bottom:1px solid var(--line);vertical-align:top}
+  th{color:var(--dim);font-weight:600;font-size:.74rem;text-transform:uppercase;letter-spacing:.05em}
+  .note{border-left:3px solid var(--accent);background:#1a160d;padding:10px 14px;border-radius:0 6px 6px 0;margin:14px 0}
+  .note b{color:var(--accent)}
+  .warn{border-left:3px solid var(--bad);background:#1c1111;padding:10px 14px;border-radius:0 6px 6px 0;margin:14px 0}
+  .warn b{color:var(--bad)}
+  svg{display:block;max-width:100%}
+  .legend{display:flex;gap:18px;flex-wrap:wrap;color:var(--dim);font-size:.8rem;margin-top:10px}
+  .sw{display:inline-block;width:12px;height:12px;border-radius:3px;vertical-align:-2px;margin-right:6px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>Organize — auto-layout on the graph context menu</h1>
+<p class="sub">Editor layer only: one pure module (<code>src/modeler/vpl/autoLayout.ts</code>) plus menu
+wiring. No compiler, no schema, no worker message — node positions are never compiled, so every emitted
+surface must come out byte-identical. Written plan: <b>PLAN_AUTO_ORGANIZE.md</b>.</p>
+
+<div class="legend">
+  <span><span class="sw" style="background:var(--cEvent)"></span>event root</span>
+  <span><span class="sw" style="background:var(--cFlow)"></span>flow control</span>
+  <span><span class="sw" style="background:var(--cData)"></span>data / read</span>
+  <span><span class="sw" style="background:var(--cLogic)"></span>logic / math</span>
+  <span><span class="sw" style="background:var(--cOut)"></span>output / write</span>
+  <span><span class="sw" style="background:var(--flow)"></span>flow wire</span>
+  <span><span class="sw" style="background:var(--val)"></span>value wire</span>
+</div>
+
+<!-- ================================================================= -->
+<h2>1 · The menu — in the editor's own style</h2>
+
+<div class="card">
+<p class="sub">Two entry points, both built with the existing <code>.contextSubmenuTrigger</code> hover
+pattern already used by <b>Align ›</b>, <b>Distribute ›</b> and <b>Morph into ›</b>. The trigger row
+itself has no click action in any of the three, and Organize keeps that rule — the leaves do the work.</p>
+
+<svg viewBox="0 0 1060 400" role="img" aria-label="Pane context menu and selection context menu, each with an Organize submenu">
+  <defs>
+    <marker id="arA" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto">
+      <path d="M0,0 L7,3 L0,6 z" fill="#e8a13a"/>
+    </marker>
+  </defs>
+
+  <!-- ---------- PANE MENU ---------- -->
+  <text x="8" y="18" fill="#8f9bb0" font-size="11.5" letter-spacing="1">RIGHT-CLICK ON EMPTY CANVAS · PANE MENU</text>
+  <rect x="8" y="28" width="230" height="238" rx="10" fill="#14161b" stroke="#2a2f3a"/>
+  <!-- items -->
+  <text x="26" y="52" fill="#c4ccd8" font-size="12.5">Paste</text>
+  <text x="26" y="76" fill="#c4ccd8" font-size="12.5">Add Comment</text>
+  <text x="26" y="100" fill="#c4ccd8" font-size="12.5">Add Group</text>
+  <text x="26" y="124" fill="#c4ccd8" font-size="12.5">Import Macro…</text>
+  <!-- the new row -->
+  <rect x="12" y="132" width="222" height="24" rx="4" fill="#232833"/>
+  <text x="26" y="148" fill="#e6e9ef" font-size="12.5" font-weight="600">Organize</text>
+  <text x="218" y="148" fill="#6080a0" font-size="11" text-anchor="end">›</text>
+  <line x1="12" y1="166" x2="234" y2="166" stroke="#2a2f3a"/>
+  <rect x="20" y="176" width="206" height="22" rx="4" fill="#0a0b0e" stroke="#2a2f3a"/>
+  <text x="30" y="191" fill="#5e6a7d" font-size="11.5">Search nodes… (Enter adds)</text>
+  <text x="26" y="216" fill="#5e6a7d" font-size="10.5" letter-spacing=".8">EVENT</text>
+  <text x="26" y="234" fill="#7d8798" font-size="12">Generation Step</text>
+  <text x="26" y="254" fill="#7d8798" font-size="12">Grid Init Event</text>
+
+  <!-- submenu -->
+  <path d="M238 144 L262 144" stroke="#e8a13a" stroke-width="1.5" marker-end="url(#arA)"/>
+  <rect x="268" y="112" width="252" height="118" rx="10" fill="#14161b" stroke="#e8a13a"/>
+  <rect x="272" y="118" width="244" height="24" rx="4" fill="#232833"/>
+  <text x="286" y="134" fill="#e6e9ef" font-size="12.5">Tidy</text>
+  <text x="286" y="160" fill="#c4ccd8" font-size="12.5">Compact</text>
+  <text x="286" y="186" fill="#c4ccd8" font-size="12.5">Expanded</text>
+  <text x="286" y="214" fill="#5e6a7d" font-size="10.5">last style is remembered · shortcut <tspan fill="#8f9bb0">O</tspan></text>
+  <text x="512" y="134" fill="#5e6a7d" font-size="10.5" text-anchor="end">keeps your columns</text>
+  <text x="512" y="160" fill="#5e6a7d" font-size="10.5" text-anchor="end">60 × 30</text>
+  <text x="512" y="186" fill="#5e6a7d" font-size="10.5" text-anchor="end">120 × 60</text>
+
+  <!-- ---------- SELECTION MENU ---------- -->
+  <text x="588" y="18" fill="#8f9bb0" font-size="11.5" letter-spacing="1">RIGHT-CLICK WITH ≥ 2 SELECTED · SELECTION MENU</text>
+  <rect x="588" y="28" width="230" height="330" rx="10" fill="#14161b" stroke="#2a2f3a"/>
+  <text x="606" y="50" fill="#e8a13a" font-size="10.5" letter-spacing="1">SELECTION (7)</text>
+  <line x1="592" y1="58" x2="814" y2="58" stroke="#2a2f3a"/>
+  <text x="606" y="80" fill="#c4ccd8" font-size="12.5">Duplicate</text>
+  <text x="606" y="102" fill="#c4ccd8" font-size="12.5">Copy</text>
+  <text x="606" y="124" fill="#c4ccd8" font-size="12.5">Cut</text>
+  <text x="606" y="146" fill="#c4ccd8" font-size="12.5">Paste</text>
+  <line x1="592" y1="158" x2="814" y2="158" stroke="#2a2f3a"/>
+  <text x="606" y="180" fill="#c4ccd8" font-size="12.5">Create Macro</text>
+  <text x="606" y="202" fill="#c4ccd8" font-size="12.5">Create Group</text>
+  <line x1="592" y1="214" x2="814" y2="214" stroke="#2a2f3a"/>
+  <!-- new row, ABOVE Align -->
+  <rect x="592" y="222" width="222" height="24" rx="4" fill="#232833"/>
+  <text x="606" y="238" fill="#e6e9ef" font-size="12.5" font-weight="600">Organize Selection</text>
+  <text x="798" y="238" fill="#6080a0" font-size="11" text-anchor="end">›</text>
+  <text x="606" y="266" fill="#c4ccd8" font-size="12.5">Align</text>
+  <text x="798" y="266" fill="#6080a0" font-size="11" text-anchor="end">›</text>
+  <text x="606" y="290" fill="#c4ccd8" font-size="12.5">Distribute</text>
+  <text x="798" y="290" fill="#6080a0" font-size="11" text-anchor="end">›</text>
+  <line x1="592" y1="302" x2="814" y2="302" stroke="#2a2f3a"/>
+  <text x="606" y="324" fill="#e05050" font-size="12.5">Delete Selection</text>
+
+  <path d="M818 234 L842 234" stroke="#e8a13a" stroke-width="1.5" marker-end="url(#arA)"/>
+  <rect x="848" y="206" width="200" height="90" rx="10" fill="#14161b" stroke="#e8a13a"/>
+  <text x="866" y="228" fill="#c4ccd8" font-size="12.5">Tidy</text>
+  <text x="866" y="252" fill="#c4ccd8" font-size="12.5">Compact</text>
+  <text x="866" y="276" fill="#c4ccd8" font-size="12.5">Expanded</text>
+
+  <text x="588" y="382" fill="#5e6a7d" font-size="11">anchored on the SELECTION's bounding box — the rest of the graph never moves</text>
+  <text x="8" y="292" fill="#5e6a7d" font-size="11">anchored on the SCOPE's bounding box — no fitView, the canvas does not jump</text>
+</svg>
+</div>
+
+<div class="note"><b>Why no "Parameters left / inline" style.</b> GenesisCA draws flow left → right
+(both flow handles are right-pointing triangles) and every value node feeds an input on its consumer's
+<em>left</em> edge. Blueprint Assist's <code>ParameterStyle=LeftSide</code> is therefore the only
+correct behaviour here, not a choice — offering the alternative would put a backwards wire on every
+parameter.</div>
+
+<!-- ================================================================= -->
+<h2>2 · Before / after — a small messy rule graph</h2>
+
+<p class="sub">Eight nodes: one <b>Generation Step</b> root, a flow chain
+(<span style="color:#8ac98a">Conditional → Set Attribute → Set Cell Looks</span>) and four value nodes
+feeding it. Same graph, same wires, three arrangements.</p>
+
+<div class="card">
+<span class="tag before">Before · hand-placed, 4 wire crossings, 2 overlaps</span>
+<svg viewBox="0 0 1020 320" role="img" aria-label="Before: eight nodes scattered with crossing wires and two overlapping boxes">
+  <!-- wires first (drawn under) -->
+  <g fill="none" stroke-width="2">
+    <path d="M176 64 C 260 64, 300 210, 372 210" stroke="#66bb6a"/>
+    <path d="M470 218 C 540 218, 560 96, 636 96" stroke="#66bb6a"/>
+    <path d="M734 104 C 790 104, 800 250, 856 250" stroke="#66bb6a"/>
+    <path d="M300 268 C 340 268, 344 226, 372 226" stroke="#4cc9f0"/>
+    <path d="M300 130 C 336 130, 340 242, 372 242" stroke="#4cc9f0"/>
+    <path d="M560 40 C 600 40, 604 112, 636 112" stroke="#4cc9f0"/>
+    <path d="M188 190 C 400 190, 470 128, 636 128" stroke="#4cc9f0"/>
+    <path d="M560 56 C 640 56, 700 266, 856 266" stroke="#4cc9f0"/>
+  </g>
+  <!-- nodes -->
+  <g font-size="11.5">
+    <rect x="60" y="42" width="116" height="44" rx="6" fill="#1a1d24" stroke="#555"/>
+    <rect x="60" y="42" width="116" height="16" rx="6" fill="#ffffff"/><text x="68" y="54" fill="#111" font-size="9.5" letter-spacing=".6">GENERATION STEP</text>
+
+    <rect x="184" y="108" width="116" height="44" rx="6" fill="#1a1d24" stroke="#555"/>
+    <rect x="184" y="108" width="116" height="16" rx="6" fill="#b71c1c"/><text x="192" y="120" fill="#fff" font-size="9.5" letter-spacing=".6">GET CELL ATTR</text>
+
+    <rect x="72" y="168" width="116" height="44" rx="6" fill="#1a1d24" stroke="#555"/>
+    <rect x="72" y="168" width="116" height="16" rx="6" fill="#b71c1c"/><text x="80" y="180" fill="#fff" font-size="9.5" letter-spacing=".6">COUNT NEIGHBOURS</text>
+
+    <rect x="184" y="246" width="116" height="44" rx="6" fill="#1a1d24" stroke="#555"/>
+    <rect x="184" y="246" width="116" height="16" rx="6" fill="#b8860b"/><text x="192" y="258" fill="#fff" font-size="9.5" letter-spacing=".6">COMPARE</text>
+
+    <!-- overlapping pair -->
+    <rect x="372" y="188" width="98" height="44" rx="6" fill="#1a1d24" stroke="#e05252"/>
+    <rect x="372" y="188" width="98" height="16" rx="6" fill="#1b5e20"/><text x="380" y="200" fill="#fff" font-size="9.5" letter-spacing=".6">CONDITIONAL</text>
+    <rect x="404" y="212" width="98" height="44" rx="6" fill="#1a1d24" stroke="#e05252"/>
+    <rect x="404" y="212" width="98" height="16" rx="6" fill="#b8860b"/><text x="412" y="224" fill="#fff" font-size="9.5" letter-spacing=".6">LOGICAL EXPR</text>
+
+    <rect x="444" y="20" width="116" height="44" rx="6" fill="#1a1d24" stroke="#555"/>
+    <rect x="444" y="20" width="116" height="16" rx="6" fill="#b71c1c"/><text x="452" y="32" fill="#fff" font-size="9.5" letter-spacing=".6">GET CONSTANT</text>
+
+    <rect x="636" y="76" width="98" height="44" rx="6" fill="#1a1d24" stroke="#555"/>
+    <rect x="636" y="76" width="98" height="16" rx="6" fill="#4a148c"/><text x="644" y="88" fill="#fff" font-size="9.5" letter-spacing=".6">SET ATTRIBUTE</text>
+
+    <rect x="856" y="230" width="110" height="44" rx="6" fill="#1a1d24" stroke="#555"/>
+    <rect x="856" y="230" width="110" height="16" rx="6" fill="#4a148c"/><text x="864" y="242" fill="#fff" font-size="9.5" letter-spacing=".6">SET CELL LOOKS</text>
+  </g>
+  <g fill="#e05252" font-size="11">
+    <text x="508" y="286">overlap</text>
+    <circle cx="452" cy="221" r="4" fill="none" stroke="#e05252" stroke-width="1.5"/>
+  </g>
+</svg>
+</div>
+
+<div class="grid2">
+  <div class="card">
+  <span class="tag after">After · Compact (60 × 30)</span>
+  <svg viewBox="0 0 520 300" role="img" aria-label="After, compact style: five columns, straight flow spine, value nodes to the left of their consumers">
+    <g fill="none" stroke-width="2">
+      <!-- flow spine, all on one row -->
+      <path d="M96 60 L 172 60" stroke="#66bb6a"/>
+      <path d="M268 60 L 340 60" stroke="#66bb6a"/>
+      <path d="M436 60 L 470 60 L 470 60" stroke="#66bb6a"/>
+      <!-- value wires -->
+      <path d="M96 132 C 130 132, 140 84, 172 84" stroke="#4cc9f0"/>
+      <path d="M96 196 C 130 196, 140 96, 172 96" stroke="#4cc9f0"/>
+      <path d="M268 132 C 300 132, 310 84, 340 84" stroke="#4cc9f0"/>
+      <path d="M96 256 C 200 256, 260 100, 340 100" stroke="#4cc9f0"/>
+    </g>
+    <g font-size="10">
+      <rect x="16" y="44" width="80" height="32" rx="5" fill="#1a1d24" stroke="#555"/>
+      <rect x="16" y="44" width="80" height="13" rx="5" fill="#ffffff"/><text x="21" y="54" fill="#111" font-size="7.5">GEN STEP</text>
+      <rect x="16" y="116" width="80" height="32" rx="5" fill="#1a1d24" stroke="#555"/>
+      <rect x="16" y="116" width="80" height="13" rx="5" fill="#b71c1c"/><text x="21" y="126" fill="#fff" font-size="7.5">GET CELL ATTR</text>
+      <rect x="16" y="180" width="80" height="32" rx="5" fill="#1a1d24" stroke="#555"/>
+      <rect x="16" y="180" width="80" height="13" rx="5" fill="#b71c1c"/><text x="21" y="190" fill="#fff" font-size="7.5">COUNT NBRS</text>
+      <rect x="16" y="240" width="80" height="32" rx="5" fill="#1a1d24" stroke="#555"/>
+      <rect x="16" y="240" width="80" height="13" rx="5" fill="#b71c1c"/><text x="21" y="250" fill="#fff" font-size="7.5">GET CONSTANT</text>
+
+      <rect x="172" y="44" width="96" height="32" rx="5" fill="#1a1d24" stroke="#555"/>
+      <rect x="172" y="44" width="96" height="13" rx="5" fill="#1b5e20"/><text x="177" y="54" fill="#fff" font-size="7.5">CONDITIONAL</text>
+      <rect x="172" y="116" width="96" height="32" rx="5" fill="#1a1d24" stroke="#555"/>
+      <rect x="172" y="116" width="96" height="13" rx="5" fill="#b8860b"/><text x="177" y="126" fill="#fff" font-size="7.5">COMPARE</text>
+
+      <rect x="340" y="44" width="96" height="32" rx="5" fill="#1a1d24" stroke="#555"/>
+      <rect x="340" y="44" width="96" height="13" rx="5" fill="#4a148c"/><text x="345" y="54" fill="#fff" font-size="7.5">SET ATTRIBUTE</text>
+      <rect x="340" y="116" width="96" height="32" rx="5" fill="#1a1d24" stroke="#555"/>
+      <rect x="340" y="116" width="96" height="13" rx="5" fill="#b8860b"/><text x="345" y="126" fill="#fff" font-size="7.5">LOGICAL EXPR</text>
+
+      <rect x="470" y="44" width="44" height="32" rx="5" fill="#1a1d24" stroke="#555"/>
+      <rect x="470" y="44" width="44" height="13" rx="5" fill="#4a148c"/><text x="474" y="54" fill="#fff" font-size="6.5">LOOKS</text>
+    </g>
+    <!-- straightness guide -->
+    <line x1="10" y1="60" x2="514" y2="60" stroke="#e8a13a" stroke-width="1" stroke-dasharray="3 4" opacity=".5"/>
+    <text x="10" y="290" fill="#5e6a7d" font-size="9.5">0 crossings · 0 overlaps · exec pins on ONE row (dashed)</text>
+  </svg>
+  </div>
+
+  <div class="card">
+  <span class="tag alt">After · Expanded (120 × 60)</span>
+  <svg viewBox="0 0 520 300" role="img" aria-label="After, expanded style: the same layout with roomier padding">
+    <g fill="none" stroke-width="2">
+      <path d="M86 52 L 178 52" stroke="#66bb6a"/>
+      <path d="M282 52 L 374 52" stroke="#66bb6a"/>
+      <path d="M478 52 L 500 52" stroke="#66bb6a"/>
+      <path d="M86 144 C 130 144, 145 76, 178 76" stroke="#4cc9f0"/>
+      <path d="M86 216 C 130 216, 145 88, 178 88" stroke="#4cc9f0"/>
+      <path d="M282 144 C 330 144, 345 76, 374 76" stroke="#4cc9f0"/>
+      <path d="M86 278 C 210 278, 290 92, 374 92" stroke="#4cc9f0"/>
+    </g>
+    <g font-size="10">
+      <rect x="14" y="38" width="72" height="28" rx="5" fill="#1a1d24" stroke="#555"/>
+      <rect x="14" y="38" width="72" height="12" rx="5" fill="#ffffff"/><text x="18" y="47" fill="#111" font-size="7">GEN STEP</text>
+      <rect x="14" y="130" width="72" height="28" rx="5" fill="#1a1d24" stroke="#555"/>
+      <rect x="14" y="130" width="72" height="12" rx="5" fill="#b71c1c"/><text x="18" y="139" fill="#fff" font-size="7">GET CELL ATTR</text>
+      <rect x="14" y="202" width="72" height="28" rx="5" fill="#1a1d24" stroke="#555"/>
+      <rect x="14" y="202" width="72" height="12" rx="5" fill="#b71c1c"/><text x="18" y="211" fill="#fff" font-size="7">COUNT NBRS</text>
+      <rect x="14" y="264" width="72" height="28" rx="5" fill="#1a1d24" stroke="#555"/>
+      <rect x="14" y="264" width="72" height="12" rx="5" fill="#b71c1c"/><text x="18" y="273" fill="#fff" font-size="7">GET CONSTANT</text>
+
+      <rect x="178" y="38" width="104" height="28" rx="5" fill="#1a1d24" stroke="#555"/>
+      <rect x="178" y="38" width="104" height="12" rx="5" fill="#1b5e20"/><text x="182" y="47" fill="#fff" font-size="7">CONDITIONAL</text>
+      <rect x="178" y="130" width="104" height="28" rx="5" fill="#1a1d24" stroke="#555"/>
+      <rect x="178" y="130" width="104" height="12" rx="5" fill="#b8860b"/><text x="182" y="139" fill="#fff" font-size="7">COMPARE</text>
+
+      <rect x="374" y="38" width="104" height="28" rx="5" fill="#1a1d24" stroke="#555"/>
+      <rect x="374" y="38" width="104" height="12" rx="5" fill="#4a148c"/><text x="378" y="47" fill="#fff" font-size="7">SET ATTRIBUTE</text>
+      <rect x="374" y="130" width="104" height="28" rx="5" fill="#1a1d24" stroke="#555"/>
+      <rect x="374" y="130" width="104" height="12" rx="5" fill="#b8860b"/><text x="378" y="139" fill="#fff" font-size="7">LOGICAL EXPR</text>
+
+      <rect x="500" y="38" width="16" height="28" rx="4" fill="#1a1d24" stroke="#555"/>
+    </g>
+    <line x1="8" y1="52" x2="516" y2="52" stroke="#e8a13a" stroke-width="1" stroke-dasharray="3 4" opacity=".5"/>
+    <text x="8" y="290" fill="#5e6a7d" font-size="9.5">same ordering, same columns — only the padding differs</text>
+  </svg>
+  </div>
+</div>
+
+<div class="card">
+<span class="tag alt">Third style · Tidy — the non-destructive one</span>
+<p class="sub" style="margin-top:6px">Tidy does <b>not</b> re-layer. It clusters the columns you already
+made from their current x, keeps your row order, then aligns each column, straightens the flow chain onto
+its predecessor's handle row, separates the overlaps and snaps to the 20 px grid. Reach for it on a graph
+you have already arranged.</p>
+<svg viewBox="0 0 1020 130" role="img" aria-label="Tidy: the same messy input with columns aligned and overlaps removed, but the original column membership preserved">
+  <g fill="none" stroke-width="2">
+    <path d="M150 40 C 200 40, 210 40, 260 40" stroke="#66bb6a"/>
+    <path d="M420 40 C 470 40, 490 40, 540 40" stroke="#66bb6a"/>
+    <path d="M690 40 C 760 40, 800 40, 860 40" stroke="#66bb6a"/>
+    <path d="M150 96 C 200 96, 220 52, 260 52" stroke="#4cc9f0"/>
+    <path d="M420 96 C 470 96, 500 52, 540 52" stroke="#4cc9f0"/>
+  </g>
+  <g font-size="10">
+    <rect x="60" y="26" width="90" height="30" rx="5" fill="#1a1d24" stroke="#555"/><rect x="60" y="26" width="90" height="12" rx="5" fill="#ffffff"/>
+    <rect x="60" y="82" width="90" height="30" rx="5" fill="#1a1d24" stroke="#555"/><rect x="60" y="82" width="90" height="12" rx="5" fill="#b71c1c"/>
+    <rect x="260" y="26" width="160" height="30" rx="5" fill="#1a1d24" stroke="#555"/><rect x="260" y="26" width="160" height="12" rx="5" fill="#1b5e20"/>
+    <rect x="260" y="82" width="160" height="30" rx="5" fill="#1a1d24" stroke="#555"/><rect x="260" y="82" width="160" height="12" rx="5" fill="#b8860b"/>
+    <rect x="540" y="26" width="150" height="30" rx="5" fill="#1a1d24" stroke="#555"/><rect x="540" y="26" width="150" height="12" rx="5" fill="#4a148c"/>
+    <rect x="860" y="26" width="110" height="30" rx="5" fill="#1a1d24" stroke="#555"/><rect x="860" y="26" width="110" height="12" rx="5" fill="#4a148c"/>
+  </g>
+  <line x1="60" y1="18" x2="60" y2="120" stroke="#e8a13a" stroke-dasharray="2 4" opacity=".45"/>
+  <line x1="260" y1="18" x2="260" y2="120" stroke="#e8a13a" stroke-dasharray="2 4" opacity=".45"/>
+  <line x1="540" y1="18" x2="540" y2="120" stroke="#e8a13a" stroke-dasharray="2 4" opacity=".45"/>
+  <line x1="860" y1="18" x2="860" y2="120" stroke="#e8a13a" stroke-dasharray="2 4" opacity=".45"/>
+  <text x="60" y="128" fill="#5e6a7d" font-size="9.5">your columns, kept — aligned to their mean x and quantised to the grid</text>
+</svg>
+</div>
+
+<!-- ================================================================= -->
+<h2>3 · How the columns are assigned</h2>
+
+<div class="card">
+<p class="sub">Two passes. Flow first, left → right from the roots; then value nodes are <em>pulled left</em>
+of the node that consumes them. <b>A value edge never pushes a flow node right</b> — that is what keeps the
+exec spine at the column it earned.</p>
+
+<svg viewBox="0 0 1020 340" role="img" aria-label="Column assignment: pass one layers the flow spine, pass two pulls value nodes left of their consumers">
+  <defs>
+    <marker id="arG" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto">
+      <path d="M0,0 L7,3 L0,6 z" fill="#66bb6a"/>
+    </marker>
+    <marker id="arV" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto">
+      <path d="M0,0 L7,3 L0,6 z" fill="#4cc9f0"/>
+    </marker>
+  </defs>
+
+  <!-- column rails -->
+  <g stroke="#2a2f3a" stroke-dasharray="3 5">
+    <line x1="120" y1="26" x2="120" y2="300"/>
+    <line x1="300" y1="26" x2="300" y2="300"/>
+    <line x1="480" y1="26" x2="480" y2="300"/>
+    <line x1="660" y1="26" x2="660" y2="300"/>
+    <line x1="840" y1="26" x2="840" y2="300"/>
+  </g>
+  <g fill="#5e6a7d" font-size="10.5" letter-spacing=".8">
+    <text x="106" y="20">col −2</text><text x="286" y="20">col −1</text><text x="472" y="20">col 0</text>
+    <text x="652" y="20">col 1</text><text x="832" y="20">col 2</text>
+  </g>
+
+  <!-- PASS 1 band -->
+  <rect x="452" y="44" width="540" height="54" rx="8" fill="#12200f" stroke="#2b4a26"/>
+  <text x="1000" y="38" fill="#8ac98a" font-size="10.5" text-anchor="end" letter-spacing=".8">PASS 1 · FLOW, FORWARD FROM THE ROOTS</text>
+  <g font-size="10.5">
+    <rect x="480" y="56" width="98" height="30" rx="5" fill="#1a1d24" stroke="#555"/><rect x="480" y="56" width="98" height="12" rx="5" fill="#ffffff"/><text x="486" y="82" fill="#c4ccd8" font-size="9.5">root</text>
+    <rect x="660" y="56" width="98" height="30" rx="5" fill="#1a1d24" stroke="#555"/><rect x="660" y="56" width="98" height="12" rx="5" fill="#1b5e20"/><text x="666" y="82" fill="#c4ccd8" font-size="9.5">conditional</text>
+    <rect x="840" y="56" width="110" height="30" rx="5" fill="#1a1d24" stroke="#555"/><rect x="840" y="56" width="110" height="12" rx="5" fill="#4a148c"/><text x="846" y="82" fill="#c4ccd8" font-size="9.5">set attribute</text>
+  </g>
+  <path d="M578 71 L 652 71" stroke="#66bb6a" stroke-width="2" marker-end="url(#arG)" fill="none"/>
+  <path d="M758 71 L 832 71" stroke="#66bb6a" stroke-width="2" marker-end="url(#arG)" fill="none"/>
+  <text x="452" y="112" fill="#5e6a7d" font-size="10.5">col(n) = max over flow-preds of col(pred) + 1</text>
+
+  <!-- PASS 2 band -->
+  <rect x="92" y="150" width="600" height="130" rx="8" fill="#0f1a20" stroke="#25404a"/>
+  <text x="1000" y="144" fill="#7fc2d8" font-size="10.5" text-anchor="end" letter-spacing=".8">PASS 2 · VALUE, BACKWARD FROM THE CONSUMERS</text>
+  <g font-size="10.5">
+    <rect x="120" y="164" width="98" height="30" rx="5" fill="#1a1d24" stroke="#555"/><rect x="120" y="164" width="98" height="12" rx="5" fill="#b71c1c"/><text x="126" y="190" fill="#c4ccd8" font-size="9.5">get constant</text>
+    <rect x="120" y="226" width="98" height="30" rx="5" fill="#1a1d24" stroke="#555"/><rect x="120" y="226" width="98" height="12" rx="5" fill="#b71c1c"/><text x="126" y="252" fill="#c4ccd8" font-size="9.5">count nbrs</text>
+    <rect x="300" y="196" width="98" height="30" rx="5" fill="#1a1d24" stroke="#555"/><rect x="300" y="196" width="98" height="12" rx="5" fill="#b8860b"/><text x="306" y="222" fill="#c4ccd8" font-size="9.5">compare</text>
+    <rect x="480" y="196" width="98" height="30" rx="5" fill="#1a1d24" stroke="#555"/><rect x="480" y="196" width="98" height="12" rx="5" fill="#b8860b"/><text x="486" y="222" fill="#c4ccd8" font-size="9.5">logical expr</text>
+  </g>
+  <path d="M218 179 C 250 179, 262 205, 294 205" stroke="#4cc9f0" stroke-width="2" fill="none" marker-end="url(#arV)"/>
+  <path d="M218 241 C 250 241, 262 215, 294 215" stroke="#4cc9f0" stroke-width="2" fill="none" marker-end="url(#arV)"/>
+  <path d="M398 211 L 474 211" stroke="#4cc9f0" stroke-width="2" fill="none" marker-end="url(#arV)"/>
+  <path d="M578 205 C 620 205, 630 90, 654 78" stroke="#4cc9f0" stroke-width="2" fill="none" marker-end="url(#arV)"/>
+  <text x="92" y="300" fill="#5e6a7d" font-size="10.5">col(v) = min over consumers of col(consumer) − 1, recursing leftward · a SHARED value node goes left of its LEFTMOST consumer</text>
+
+  <text x="700" y="180" fill="#8f9bb0" font-size="11">the conditional's</text>
+  <text x="700" y="196" fill="#8f9bb0" font-size="11">condition input</text>
+  <text x="700" y="212" fill="#8f9bb0" font-size="11">pulls the whole</text>
+  <text x="700" y="228" fill="#8f9bb0" font-size="11">value chain to</text>
+  <text x="700" y="244" fill="#8f9bb0" font-size="11">cols 0, −1, −2</text>
+  <text x="700" y="268" fill="#5e6a7d" font-size="10.5">columns are then</text>
+  <text x="700" y="283" fill="#5e6a7d" font-size="10.5">normalised to start at 0</text>
+</svg>
+</div>
+
+<div class="grid2">
+<div class="card">
+<h3>Ordering inside a column</h3>
+<ul>
+  <li>Seed = the node's <b>previous y</b> (your own intent, kept where it is free), ties by id.</li>
+  <li><b>4 barycentre sweeps</b> (down, up, down, up) with <b>flow edges weighted ×4</b> — a flow chain
+      should come out straight, a value wire may bend.</li>
+  <li>Crossings counted after each sweep; the <b>best ordering seen wins</b>, the seed breaks ties.</li>
+  <li>Fixed sweep count, stable sorts, no randomness ⇒ <b>deterministic and idempotent</b>.</li>
+</ul>
+</div>
+<div class="card">
+<h3>Straightening — the quality step</h3>
+<ul>
+  <li>A node's <b>desired y</b> puts its <code>mainFlowIn</code> <em>handle</em> on the same absolute row
+      as its predecessor's taken flow-out handle.</li>
+  <li>Handle offsets come from CaNode's own constants over
+      <code>getEffectivePorts</code>: header centre <code>15 + (renamed ? 21 : 0)</code>; body port
+      <code>i</code> at <code>30 + (renamed ? 21 : 0) + i·22</code>.</li>
+  <li>Each column is then resolved by the <b>priority method</b> — move toward the desired y, then one
+      monotone push-down / push-up separation that restores the gap <b>without reordering</b>.</li>
+</ul>
+</div>
+</div>
+
+<!-- ================================================================= -->
+<h2>4 · Containers — groups are a constraint, comments follow their content</h2>
+
+<div class="card">
+<p class="sub">Groups carry <b>no <code>parentId</code></b> — membership is purely geometric (a node whose
+<em>centre</em> sits inside the group rect) and is computed only at drag-start. A programmatic move of a
+group therefore leaves its contents behind. Decision <b>G1</b> removes that whole class of bug.</p>
+
+<svg viewBox="0 0 1020 270" role="img" aria-label="G1: a group contracts to an opaque super-node, its members are laid out inside it, and the rect is refitted around exactly them">
+  <defs>
+    <marker id="arA2" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto">
+      <path d="M0,0 L7,3 L0,6 z" fill="#e8a13a"/>
+    </marker>
+  </defs>
+
+  <text x="10" y="18" fill="#8f9bb0" font-size="11" letter-spacing=".8">1 · CONTRACT</text>
+  <rect x="10" y="30" width="200" height="150" rx="8" fill="#141a22" stroke="#3a4a5a"/>
+  <rect x="10" y="30" width="200" height="18" rx="8" fill="#1d2631"/><text x="20" y="43" fill="#8f9bb0" font-size="9">Neighbour count</text>
+  <g font-size="9">
+    <rect x="26" y="62" width="70" height="24" rx="4" fill="#1a1d24" stroke="#555"/>
+    <rect x="120" y="94" width="70" height="24" rx="4" fill="#1a1d24" stroke="#555"/>
+    <rect x="40" y="134" width="70" height="24" rx="4" fill="#1a1d24" stroke="#555"/>
+  </g>
+  <text x="10" y="200" fill="#5e6a7d" font-size="10">members = centres inside the rect</text>
+  <text x="10" y="216" fill="#5e6a7d" font-size="10">(the SAME predicate onNodeDragStart uses,</text>
+  <text x="10" y="232" fill="#5e6a7d" font-size="10">extracted into one shared helper)</text>
+
+  <path d="M222 104 L 258 104" stroke="#e8a13a" stroke-width="1.5" marker-end="url(#arA2)"/>
+
+  <text x="272" y="18" fill="#8f9bb0" font-size="11" letter-spacing=".8">2 · LAY OUT INSIDE, THEN TREAT AS ONE BOX</text>
+  <rect x="272" y="30" width="210" height="150" rx="8" fill="#141a22" stroke="#e8a13a"/>
+  <rect x="272" y="30" width="210" height="18" rx="8" fill="#1d2631"/><text x="282" y="43" fill="#8f9bb0" font-size="9">Neighbour count</text>
+  <g font-size="9">
+    <rect x="288" y="62" width="70" height="24" rx="4" fill="#1a1d24" stroke="#555"/>
+    <rect x="288" y="100" width="70" height="24" rx="4" fill="#1a1d24" stroke="#555"/>
+    <rect x="384" y="80" width="70" height="24" rx="4" fill="#1a1d24" stroke="#555"/>
+  </g>
+  <line x1="358" y1="74" x2="384" y2="88" stroke="#4cc9f0" stroke-width="1.6"/>
+  <line x1="358" y1="112" x2="384" y2="96" stroke="#4cc9f0" stroke-width="1.6"/>
+  <text x="272" y="200" fill="#5e6a7d" font-size="10">rect refitted = inner bbox + 24 px + header</text>
+  <text x="272" y="216" fill="#5e6a7d" font-size="10">external edges rewired to the super-node</text>
+
+  <path d="M494 104 L 530 104" stroke="#e8a13a" stroke-width="1.5" marker-end="url(#arA2)"/>
+
+  <text x="544" y="18" fill="#8f9bb0" font-size="11" letter-spacing=".8">3 · THE OUTER LAYOUT SEES ONE NODE</text>
+  <g font-size="9">
+    <rect x="544" y="66" width="76" height="28" rx="5" fill="#1a1d24" stroke="#555"/><rect x="544" y="66" width="76" height="11" rx="5" fill="#ffffff"/>
+    <rect x="660" y="46" width="130" height="76" rx="7" fill="#141a22" stroke="#e8a13a"/><text x="670" y="60" fill="#8f9bb0" font-size="9">Neighbour count</text>
+    <rect x="830" y="66" width="90" height="28" rx="5" fill="#1a1d24" stroke="#555"/><rect x="830" y="66" width="90" height="11" rx="5" fill="#4a148c"/>
+  </g>
+  <line x1="620" y1="80" x2="660" y2="80" stroke="#66bb6a" stroke-width="2"/>
+  <line x1="790" y1="80" x2="830" y2="80" stroke="#66bb6a" stroke-width="2"/>
+  <text x="544" y="150" fill="#5e6a7d" font-size="10">a group means "these belong together" —</text>
+  <text x="544" y="166" fill="#5e6a7d" font-size="10">so it has to be a layout CONSTRAINT, not a</text>
+  <text x="544" y="182" fill="#5e6a7d" font-size="10">rectangle refitted afterwards around whatever</text>
+  <text x="544" y="198" fill="#5e6a7d" font-size="10">happened to land inside it.</text>
+
+  <text x="10" y="258" fill="#8f9bb0" font-size="11"><tspan fill="#e6e9ef" font-weight="600">Comments</tspan> have no edges, so they are not a constraint: each one is re-wrapped around the NEW positions of the nodes it contained (+16 px), or, if it contained nothing, translated with the anchor.</text>
+</svg>
+</div>
+
+<div class="warn"><b>Reroutes are preserved, never created.</b> They are transparent to the layout (their
+edges resolve through to the real source, exactly as the compiler's <code>collapseReroutes</code> does),
+then placed back on the straight line between their resolved endpoints at the parameter <em>t</em> they
+had before. Blueprint Assist's <code>bCreateKnotNodes</code> — auto-inserting knots on long or backward
+wires — is <b>deferred</b>: it mutates the graph, not just positions.</div>
+
+<!-- ================================================================= -->
+<h2>5 · The interaction, end to end</h2>
+
+<div class="card">
+<svg viewBox="0 0 1020 210" role="img" aria-label="Interaction sequence: right-click, hover Organize, pick a style, one setNodes, one undo restores everything">
+  <defs>
+    <marker id="arS" markerWidth="10" markerHeight="10" refX="8" refY="3.2" orient="auto">
+      <path d="M0,0 L8,3.2 L0,6.4 z" fill="#8f9bb0"/>
+    </marker>
+    <marker id="arU" markerWidth="10" markerHeight="10" refX="8" refY="3.2" orient="auto">
+      <path d="M0,0 L8,3.2 L0,6.4 z" fill="#e8a13a"/>
+    </marker>
+  </defs>
+
+  <g font-size="11.5">
+    <rect x="10" y="52" width="150" height="54" rx="8" fill="#1a1d24" stroke="#2a2f3a"/>
+    <text x="24" y="76" fill="#e6e9ef">right-click canvas</text>
+    <text x="24" y="94" fill="#5e6a7d" font-size="10.5">(or press O)</text>
+
+    <rect x="198" y="52" width="150" height="54" rx="8" fill="#1a1d24" stroke="#2a2f3a"/>
+    <text x="212" y="76" fill="#e6e9ef">hover <tspan font-weight="600">Organize ›</tspan></text>
+    <text x="212" y="94" fill="#5e6a7d" font-size="10.5">trigger does nothing itself</text>
+
+    <rect x="386" y="52" width="150" height="54" rx="8" fill="#1a1d24" stroke="#e8a13a"/>
+    <text x="400" y="76" fill="#e6e9ef">click a style</text>
+    <text x="400" y="94" fill="#5e6a7d" font-size="10.5">Tidy / Compact / Expanded</text>
+
+    <rect x="574" y="40" width="184" height="78" rx="8" fill="#14161b" stroke="#2a2f3a"/>
+    <text x="588" y="62" fill="#8ac98a" font-size="10.5">pushCurrentSnapshot()</text>
+    <text x="588" y="80" fill="#8ac98a" font-size="10.5">setNodes(… ONE pass …)</text>
+    <text x="588" y="98" fill="#8ac98a" font-size="10.5">scheduleSync()</text>
+    <text x="588" y="114" fill="#5e6a7d" font-size="9.5">no fitView · no updateNodeInternals</text>
+
+    <rect x="796" y="52" width="214" height="54" rx="8" fill="#1a1d24" stroke="#2a2f3a"/>
+    <text x="810" y="76" fill="#e6e9ef">graph is organized</text>
+    <text x="810" y="94" fill="#5e6a7d" font-size="10.5">anchored on the old bbox top-left</text>
+  </g>
+
+  <path d="M162 79 L 192 79" stroke="#8f9bb0" stroke-width="1.6" marker-end="url(#arS)"/>
+  <path d="M350 79 L 380 79" stroke="#8f9bb0" stroke-width="1.6" marker-end="url(#arS)"/>
+  <path d="M538 79 L 568 79" stroke="#8f9bb0" stroke-width="1.6" marker-end="url(#arS)"/>
+  <path d="M762 79 L 790 79" stroke="#8f9bb0" stroke-width="1.6" marker-end="url(#arS)"/>
+
+  <!-- undo arc -->
+  <path d="M900 112 C 900 176, 400 190, 92 150 L 86 112" stroke="#e8a13a" stroke-width="1.8" fill="none" stroke-dasharray="5 4" marker-end="url(#arU)"/>
+  <rect x="404" y="160" width="220" height="26" rx="6" fill="#1a160d" stroke="#e8a13a"/>
+  <text x="418" y="178" fill="#e8a13a" font-size="11.5">Ctrl + Z — ONE step, everything back</text>
+</svg>
+<p class="sub" style="margin-top:10px">No confirmation dialog. The project's idiom for a reversible bulk
+edit is undo (Dissolve Reroutes, Create Macro, Morph into, Align, Distribute all commit immediately), and
+a prompt on every Organize would make a safe action feel unsafe. The genuinely cautious path is the
+<b>Tidy</b> style, which preserves the arrangement you already made.</p>
+</div>
+
+<!-- ================================================================= -->
+<h2>6 · The five risks that shape the design</h2>
+
+<div class="card">
+<table>
+<tr><th>#</th><th>Risk</th><th>What it would look like</th><th>Mitigation baked into the design</th></tr>
+<tr><td>R2</td><td><b>Group membership desync</b></td><td>Organize moves a group's frame and leaves its nodes behind; the refitted rect swallows unrelated nodes</td><td>Decision <b>G1</b> — opaque super-node; the containment predicate extracted into ONE helper shared with <code>onNodeDragStart</code>; harness asserts <code>pre ⊆ post</code> and no outsider captured</td></tr>
+<tr><td>R4</td><td><b>Unmeasured sizes</b></td><td>Right after a scope switch every node is 200×100 and the layout overlaps for real</td><td>A measurement gate — &gt; 20 % unmeasured ⇒ defer one rAF, bounded to 3 frames (the mount-race precedent), then proceed on the documented <code>nodeSize</code> fallbacks; the whole harness re-runs with sizes absent</td></tr>
+<tr><td>R1</td><td><b>Destroying a manual layout</b></td><td>An hour of arranging gone in one click</td><td>ONE undo step, said so in the tooltip; <b>Tidy</b> as the preserving style; the trigger row has no click action</td></tr>
+<tr><td>R5</td><td><b>Port-offset drift</b></td><td>Switch / formula / multi-attr nodes straighten onto the wrong row; CaNode's header changes and the layout silently stops matching</td><td><code>getEffectivePorts</code> is mandatory; the four geometry constants get ONE exported definition CaNode itself consumes; a harness section pins the equality on a real Switch and a real formula node</td></tr>
+<tr><td>R3</td><td><b>Comments orphaned</b></td><td>An annotation ends up nowhere near what it annotates</td><td>Translate-and-wrap around the contained nodes' new bbox; harness asserts every pre-member is still inside</td></tr>
+</table>
+</div>
+
+<!-- ================================================================= -->
+<h2>7 · Phasing</h2>
+
+<div class="card">
+<table>
+<tr><th>Phase</th><th>Deliverable</th><th>Files</th></tr>
+<tr><td><b>P1</b></td><td>Pure module + harness. Nodes and reroutes only, all three styles, components, back edges, anchor, grid. Six negative controls. Nothing reachable from the UI yet.</td><td>3</td></tr>
+<tr><td><b>P2</b></td><td>Menu wiring, one snapshot / one <code>setNodes</code> / one sync, the measurement gate, the persisted style, the <code>O</code> shortcut, the DEV hook. Groups and comments translate with the anchor only.</td><td>3</td></tr>
+<tr><td><b>P3</b></td><td>Groups (G1 contraction) + comments (translate &amp; wrap) + the box write-back.</td><td>3</td></tr>
+<tr><td><b>P4</b></td><td>Docs: <code>modeler-ui.md</code>, <code>project-structure.md</code>, <code>testing-harnesses.md</code> (68 → 69), HelpView chapter + shortcut row, the shortcuts overlay, a HANDOFF.</td><td>6</td></tr>
+</table>
+<p class="sub" style="margin-top:14px"><b>Deferred:</b> a single-node "organize from here"; knot/reroute
+insertion; <code>bCenterBranches</code>; cross-component horizontal alignment; porting the existing
+Align / Distribute off their hardcoded 200 × 100 node size.</p>
+</div>
+
+<div class="note"><b>Expected gate result:</b> <code>check-compile-identity --compare</code> reports
+<b>31 models, all surfaces unchanged</b>. Node positions never reach a compiler, so anything else is a bug
+in the wiring, not a change in the feature.</div>
+
+</div>
+</body>
+</html>
