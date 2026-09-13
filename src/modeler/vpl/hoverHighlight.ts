@@ -1,5 +1,5 @@
 // HOVER HIGHLIGHT — the pure half of the graph-canvas hover gesture.
-// Plan: docs/PLAN_HOVER_HIGHLIGHT.md (P1 = its §7 P1 row).
+// Plan: docs/PLAN_HOVER_HIGHLIGHT.md (P1 = its §7 P1 row, P2 = I1 + I2).
 //
 // WHAT THIS IS
 //   Hovering a node on the graph canvas lights the node itself and — depending on
@@ -7,6 +7,15 @@
 //   their real producers (left), or the wires OUT of it and their real consumers
 //   (right). Reroute dots are transparent relays: every SEGMENT of a chain and
 //   every dot on it lights, and the peer is the first non-reroute at the far end.
+//
+//   P2 adds the two PRECISE subjects the thirds are the coarse default for:
+//     · a PORT (I1) — over one handle, only THAT handle's wire(s), their chains
+//       and their real endpoint(s) light. The thirds answer "what feeds this
+//       node?"; a handle answers "which of these five inputs is that wire?".
+//     · a WIRE (I2) — over one wire, the whole reroute chain it belongs to lights
+//       in BOTH directions, ending at the real producer upstream and every real
+//       consumer downstream. The question a long wire always raises is "where
+//       does this go?".
 //
 // WHY IT IS A SEPARATE, DOM-FREE MODULE
 //   Exactly the `autoLayout.ts` / `traceGraphMap.ts` discipline: the decidable
@@ -31,7 +40,16 @@
 /** How long the cursor must rest on a node before its NEIGHBOURHOOD lights.
  *  The node's own ring is immediate; crossing a dense graph on the way
  *  somewhere else must not strobe every wire the cursor passes. Once lit,
- *  switching thirds is instant (the dwell is per-gesture, not per-zone). */
+ *  switching thirds is instant (the dwell is per-gesture, not per-zone).
+ *
+ *  ⚠ ONE CONSTANT FOR EVERY SUBJECT (as-built decision, P2). A WIRE hover waits
+ *  the same dwell — for the whole set, not just its neighbourhood: a wire has no
+ *  "self" half that could light early and still be the answer, and a cursor
+ *  crossing a bundle of wires on the way somewhere else would otherwise strobe
+ *  every one of them. A PORT hover inherits the node gesture's dwell and does
+ *  NOT re-arm it (moving from the node's body onto one of its handles refines an
+ *  answer that is already on screen; making the user wait again would read as a
+ *  flicker). */
 export const HOVER_DWELL_MS = 90;
 
 /** The zone edges, with HYSTERESIS so a cursor resting on a boundary cannot
@@ -66,14 +84,20 @@ export const HOVER_FALLBACK_COLOR = '#b0b8c0';
 
 export type HoverZone = 'self' | 'in' | 'out' | 'both';
 export type HoverNodeMark = 'self' | 'peer' | 'relay';
-export type HoverEdgeMark = 'in' | 'out';
+/** `in` / `out` are RELATIVE to a hovered node (or one of its handles). `wire`
+ *  is the WIRE-hover token (I2): the subject is the wire itself, so there is no
+ *  node for "in" and "out" to be relative to, and one token for the whole chain
+ *  is what keeps the set reading as a single answer. The stylesheet's edge rule
+ *  matches on the ATTRIBUTE's presence (`[data-hover]`), so `wire` needs no rule
+ *  of its own — see the token list in `GraphEditor.module.css`. */
+export type HoverEdgeMark = 'in' | 'out' | 'wire';
 export type HoverNodeKind = 'node' | 'reroute' | 'other';
 export type HoverWireCategory = 'flow' | 'value';
 
-/** The hover gesture's subject. The union is deliberately open at the seams P2
- *  needs — a `port` target narrows the set to ONE handle's wires (I1) and an
- *  `edge` target lights a wire plus both its real endpoints (I2) — so adding
- *  them does not reshape anything here. P1 answers only `node`. */
+/** The hover gesture's subject.
+ *  · `node` — the thirds (P1).
+ *  · `port` — ONE handle of a node narrows the set to that handle's wires (I1).
+ *  · `edge` — one wire lights its whole reroute chain, both ways (I2). */
 export type HoverTarget =
   | { kind: 'node'; id: string; zone: HoverZone }
   | { kind: 'port'; nodeId: string; handleId: string }
@@ -117,12 +141,19 @@ export interface HoverIndex {
   /** node id → the wires whose SOURCE is that node. */
   outByNode: Map<string, HoverWire[]>;
   wireById: Map<string, HoverWire>;
+  /** `hoverHandleKey(nodeId, handleId)` → the wires attached to THAT ONE handle
+   *  (I1). An input handle takes at most one wire unless the port `isArray`; an
+   *  output handle fans out freely — so it is a list on both sides. */
+  byHandle: Map<string, HoverWire[]>;
 }
 
 export interface HoverMarks {
   nodes: Map<string, HoverNodeMark>;
   edges: Map<string, HoverEdgeMark>;
-  /** The hovered element — the editor looks its colour up once from this. */
+  /** The hovered element: the node id for a `node` / `port` target, the EDGE id
+   *  for an `edge` one. Informational — the editor resolves each marked
+   *  element's colour individually (decision D1), so nothing reads this to
+   *  paint; the DEV hook and the harness read it to know what was asked. */
   originId: string;
 }
 
@@ -161,6 +192,27 @@ export function categoryBaseColor(category: HoverWireCategory): string {
   return category === 'flow' ? EDGE_FLOW_COLOR : EDGE_VALUE_COLOR;
 }
 
+/** The `byHandle` key. ONE definition, used by the builder and by every lookup,
+ *  so the two can never disagree on the separator. */
+export function hoverHandleKey(nodeId: string, handleId: string): string {
+  return `${nodeId}|${handleId}`;
+}
+
+/**
+ * Which SIDE of a node a handle is on, from the handle id alone.
+ *
+ * Handle ids are `handleId()`'s encoding — `<kind>_<category>_<portId>`, i.e.
+ * `input_value_p0` / `output_flow_next` ([types.ts](types.ts)); the harness pins
+ * that format against `types.ts` itself so this prefix test cannot silently rot.
+ * `null` for anything unparseable, which the caller turns into "light the node
+ * only" rather than guessing a direction.
+ */
+export function handleDirection(handleId: string): 'in' | 'out' | null {
+  if (handleId.startsWith('input_')) return 'in';
+  if (handleId.startsWith('output_')) return 'out';
+  return null;
+}
+
 /**
  * O(N + E). Rebuilt only when the GRAPH changes — never per mouse move. The
  * editor caches it on the edge array identity + the node count, exactly like
@@ -182,18 +234,26 @@ export function buildHoverIndex(
   const inByNode = new Map<string, HoverWire[]>();
   const outByNode = new Map<string, HoverWire[]>();
   const wireById = new Map<string, HoverWire>();
+  const byHandle = new Map<string, HoverWire[]>();
+  const push = (m: Map<string, HoverWire[]>, k: string, w: HoverWire) => {
+    const list = m.get(k);
+    if (list) list.push(w); else m.set(k, [w]);
+  };
   for (const e of edges) {
     const w: HoverWire = {
       id: e.id, source: e.source, target: e.target, category: edgeCategoryOf(e),
     };
     wireById.set(w.id, w);
-    const ins = inByNode.get(w.target);
-    if (ins) ins.push(w); else inByNode.set(w.target, [w]);
-    const outs = outByNode.get(w.source);
-    if (outs) outs.push(w); else outByNode.set(w.source, [w]);
+    push(inByNode, w.target, w);
+    push(outByNode, w.source, w);
+    // The per-handle index (I1). Both sides go in ONE map: a handle id carries
+    // its own `input_` / `output_` prefix, so an input key can never collide
+    // with an output key on the same node.
+    if (e.targetHandle) push(byHandle, hoverHandleKey(e.target, e.targetHandle), w);
+    if (e.sourceHandle) push(byHandle, hoverHandleKey(e.source, e.sourceHandle), w);
   }
 
-  return { reroutes, kindOf, inByNode, outByNode, wireById };
+  return { reroutes, kindOf, inByNode, outByNode, wireById, byHandle };
 }
 
 // ---------------------------------------------------------------------------
@@ -201,77 +261,157 @@ export function buildHoverIndex(
 // ---------------------------------------------------------------------------
 
 /**
- * Which ids light for one hover. Returns `null` for anything with nothing to
- * light (a group, a comment, an id that is not in this scope) so the editor's
- * "clear everything" path and "nothing to do" path are the same code.
+ * Walk UPSTREAM from a set of SEED WIRES, marking every segment with `tok`,
+ * every reroute dot on the way `relay`, and the first non-reroute at the far end
+ * of each branch `peer`.
  *
- * The reroute walk, in both directions, is ITERATIVE and cycle-guarded: a
- * reroute has exactly one inbound wire by `isValidConnection`, but a
- * hand-edited `.gcaproj` can contain a dot pair that points at each other, and
- * a recursive walk would blow the stack on it (`buildEditorTraceIndex` guards
- * the same way, for the same reason).
+ * ⚠ ITERATIVE AND CYCLE-GUARDED. A reroute has exactly one inbound wire by
+ * `isValidConnection`, but a hand-edited `.gcaproj` can contain a dot pair that
+ * points at each other, and a recursive walk would blow the stack on it
+ * (`buildEditorTraceIndex` guards the same way, for the same reason). `seen`
+ * holds the dots already EXPANDED — the caller pre-seeds it with the subject's
+ * own id where the subject is itself a node, so a chain that loops back to the
+ * hovered dot terminates without overwriting its `self` mark.
+ *
+ * Seeding on WIRES rather than on nodes is what lets the three subjects share
+ * one walk: a node seeds every incident wire, a handle seeds only its own, and a
+ * hovered wire seeds just itself.
+ */
+function walkUp(
+  index: HoverIndex, seeds: readonly HoverWire[],
+  nodes: Map<string, HoverNodeMark>, edges: Map<string, HoverEdgeMark>,
+  tok: HoverEdgeMark, seen: Set<string>,
+): void {
+  const stack = [...seeds];
+  while (stack.length > 0) {
+    const w = stack.pop()!;
+    if (!edges.has(w.id)) edges.set(w.id, tok);
+    const src = w.source;
+    if (index.reroutes.has(src)) {
+      if (!nodes.has(src)) nodes.set(src, 'relay');
+      if (!seen.has(src)) {
+        seen.add(src);
+        for (const u of index.inByNode.get(src) ?? []) stack.push(u);
+      }
+    } else if (!nodes.has(src)) {
+      nodes.set(src, 'peer');
+    }
+  }
+}
+
+/** The mirror of `walkUp`. A dot FANS OUT, so every outbound wire of a relay is
+ *  part of the set — which is what makes one hovered producer light all three
+ *  branches of an `A → r → {B, C, D}` fan. */
+function walkDown(
+  index: HoverIndex, seeds: readonly HoverWire[],
+  nodes: Map<string, HoverNodeMark>, edges: Map<string, HoverEdgeMark>,
+  tok: HoverEdgeMark, seen: Set<string>,
+): void {
+  const stack = [...seeds];
+  while (stack.length > 0) {
+    const w = stack.pop()!;
+    // `in` wins a tie over `out` only because the up-walk runs first; on a node
+    // the two closures cannot actually overlap (that would need a cycle, which
+    // `isValidConnection` rejects).
+    if (!edges.has(w.id)) edges.set(w.id, tok);
+    const tgt = w.target;
+    if (index.reroutes.has(tgt)) {
+      if (!nodes.has(tgt)) nodes.set(tgt, 'relay');
+      if (!seen.has(tgt)) {
+        seen.add(tgt);
+        for (const u of index.outByNode.get(tgt) ?? []) stack.push(u);
+      }
+    } else if (!nodes.has(tgt)) {
+      nodes.set(tgt, 'peer');
+    }
+  }
+}
+
+/**
+ * Which ids light for one hover. Returns `null` for anything with nothing to
+ * light (a group, a comment, an id that is not in this scope, a wire that is not
+ * in it) so the editor's "clear everything" path and its "nothing to do" path
+ * are the same code.
+ *
+ * THE THREE SUBJECTS:
+ *   · `node` — the thirds. `in` walks up from every incident in-wire, `out` down
+ *     from every out-wire, `both` does both (a dot's fixed zone), `self` neither.
+ *   · `port` — the same walk, seeded with ONE HANDLE's wires and the direction
+ *     read off the handle id. An unwired handle lights the node only — honest,
+ *     and it is how the user learns the port is unwired.
+ *   · `edge` — the hovered wire seeds BOTH walks, so the whole reroute chain it
+ *     belongs to lights: upstream to the real producer, downstream to every real
+ *     consumer. A SIBLING branch of a fan-out it is not on stays dark
+ *     (`A → r → {B, C}`, hovering `r → B`, lights `A → r → B` and not C) —
+ *     "where does THIS wire go?" is the question a wire hover answers.
  */
 export function computeHoverMarks(
   index: HoverIndex,
   target: HoverTarget,
-  // Reserved for P2/P3 (`transitive` + `cap` for the Alt cone). Accepted now so
-  // the signature does not move later.
+  // Reserved for P3 (`transitive` + `cap` for the Alt cone). Accepted now so the
+  // signature does not move later.
   _opts?: { transitive?: boolean; cap?: number },
 ): HoverMarks | null {
-  if (target.kind !== 'node') return null;   // P2 seams — not answered in P1
-  const kind = index.kindOf.get(target.id);
-  if (!kind || kind === 'other') return null;
-
   const nodes = new Map<string, HoverNodeMark>();
   const edges = new Map<string, HoverEdgeMark>();
-  nodes.set(target.id, 'self');
 
+  // --- I2: a WIRE ----------------------------------------------------------
+  if (target.kind === 'edge') {
+    const w = index.wireById.get(target.id);
+    if (!w) return null;
+    // No `self` node: the subject is the wire. Its two real ends are `peer`s
+    // like any other neighbour, and each `seen` starts EMPTY — the chain's dots
+    // are all discovered by the walk, none of them is the subject.
+    //
+    // ⚠ ONE `seen` SET PER DIRECTION, NEVER SHARED. `seen` means "this dot's
+    // wires on THIS side have been expanded"; a dot reached going up has not had
+    // its DOWNSTREAM wires looked at. Sharing one set silently truncated the
+    // downstream half of a cyclic chain (caught by H7's cyclic dot pair).
+    walkUp(index, [w], nodes, edges, 'wire', new Set<string>());
+    walkDown(index, [w], nodes, edges, 'wire', new Set<string>());
+    return { nodes, edges, originId: target.id };
+  }
+
+  const subjectId = target.kind === 'port' ? target.nodeId : target.id;
+  const kind = index.kindOf.get(subjectId);
+  if (!kind || kind === 'other') return null;
+  nodes.set(subjectId, 'self');
+
+  // --- I1: a PORT ----------------------------------------------------------
+  if (target.kind === 'port') {
+    // ⚠ A HANDLE ON A DOT IS THE DOT. A reroute is 16 px and its two handles
+    // COVER it, so making them directional would make P1's verified "hovering a
+    // dot lights both sides" unreachable with a real mouse. A dot has no thirds
+    // and no sides — by the same rule, whichever of its parts is under the
+    // cursor.
+    if (kind === 'reroute') {
+      // One `seen` per direction — see the note in the `edge` branch above.
+      walkUp(index, index.inByNode.get(subjectId) ?? [], nodes, edges, 'in', new Set([subjectId]));
+      walkDown(index, index.outByNode.get(subjectId) ?? [], nodes, edges, 'out', new Set([subjectId]));
+      return { nodes, edges, originId: subjectId };
+    }
+    const dir = handleDirection(target.handleId);
+    const seeds = index.byHandle.get(hoverHandleKey(subjectId, target.handleId)) ?? [];
+    // An unparseable handle id, or an unwired port: the node only.
+    if (dir === 'in') walkUp(index, seeds, nodes, edges, 'in', new Set([subjectId]));
+    else if (dir === 'out') walkDown(index, seeds, nodes, edges, 'out', new Set([subjectId]));
+    return { nodes, edges, originId: subjectId };
+  }
+
+  // --- P1: a NODE and its thirds -------------------------------------------
   // A 16 px dot has no thirds: hovering it lights BOTH sides (plan §3.3). The
   // zone the editor computed from the ratio is ignored rather than trusted, so
   // the rule holds no matter which call site asks.
   const zone: HoverZone = kind === 'reroute' ? 'both' : target.zone;
 
   if (zone === 'in' || zone === 'both') {
-    const stack = [target.id];
-    const seen = new Set(stack);
-    while (stack.length > 0) {
-      const cur = stack.pop()!;
-      for (const w of index.inByNode.get(cur) ?? []) {
-        if (!edges.has(w.id)) edges.set(w.id, 'in');
-        const src = w.source;
-        if (index.reroutes.has(src)) {
-          if (!nodes.has(src)) nodes.set(src, 'relay');
-          if (!seen.has(src)) { seen.add(src); stack.push(src); }
-        } else if (!nodes.has(src)) {
-          nodes.set(src, 'peer');
-        }
-      }
-    }
+    walkUp(index, index.inByNode.get(subjectId) ?? [], nodes, edges, 'in', new Set([subjectId]));
   }
-
   if (zone === 'out' || zone === 'both') {
-    const stack = [target.id];
-    const seen = new Set(stack);
-    while (stack.length > 0) {
-      const cur = stack.pop()!;
-      // A dot FANS OUT: every outbound wire of a relay is part of the set.
-      for (const w of index.outByNode.get(cur) ?? []) {
-        // `in` wins a tie only because the in-walk ran first; the two closures
-        // cannot actually overlap (that would need a cycle, which
-        // `isValidConnection` rejects).
-        if (!edges.has(w.id)) edges.set(w.id, 'out');
-        const tgt = w.target;
-        if (index.reroutes.has(tgt)) {
-          if (!nodes.has(tgt)) nodes.set(tgt, 'relay');
-          if (!seen.has(tgt)) { seen.add(tgt); stack.push(tgt); }
-        } else if (!nodes.has(tgt)) {
-          nodes.set(tgt, 'peer');
-        }
-      }
-    }
+    walkDown(index, index.outByNode.get(subjectId) ?? [], nodes, edges, 'out', new Set([subjectId]));
   }
 
-  return { nodes, edges, originId: target.id };
+  return { nodes, edges, originId: subjectId };
 }
 
 // ---------------------------------------------------------------------------

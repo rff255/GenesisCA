@@ -16,23 +16,26 @@
 //   FAIL. The shipped module is bundled with esbuild and imported, so what is
 //   tested is what ships.
 //
-//   Section A — H1..H6 / H9 / H11 on synthetic fixtures (the three zones, the
-//               reroute chain, the reroute fan-out, hovering a dot, the
-//               hysteresis ladder, the colour lift's pinned outputs, and a
-//               CYCLIC hand-made dot pair that must not hang).
+//   Section A — H1..H9 / H11 on synthetic fixtures (the three zones, the
+//               reroute chain, the reroute fan-out, hovering a dot, the WIRE
+//               hover (H7) and the PORT hover (H8), the hysteresis ladder, the
+//               colour lift's pinned outputs, and a CYCLIC hand-made dot pair
+//               that must not hang).
 //   Section B — the SOURCE MIRRORS this feature depends on: the two wire
-//               colours are `toRFEdges`' own inline literals; the CSS block is
-//               declared AFTER the trace block (that ordering is the
-//               hover-over-trace precedence); the marks are an ATTRIBUTE plus
-//               two custom properties, never a class; the editor imports the
-//               constants instead of re-inlining them.
+//               colours are `toRFEdges`' own inline literals; the handle-id
+//               PREFIXES the port walk reads are `handleId()`'s own encoding;
+//               the CSS block is declared AFTER the trace block (that ordering
+//               is the hover-over-trace precedence); the marks are an ATTRIBUTE
+//               plus two custom properties, never a class; the port channel is
+//               published by every handle and subscribed ONCE; the editor
+//               imports the constants instead of re-inlining them.
 //   Section C — the LIBRARY SWEEP (H12): every shipped .gcaproj, every scope
 //               (root cells / agents / overseer + every macro def), every node,
-//               all three zones, checked against an INDEPENDENT reference walk
-//               (edge-scan rounds, not the module's adjacency-map stack).
+//               all three zones, PLUS every wired handle and every wire,
+//               checked against INDEPENDENT reference walks (edge-scan rounds,
+//               not the module's adjacency-map stack).
 //
-//   H7 / H8 (wire hover I2, port-precise I1) and H10 (the Alt cone) are P2/P3
-//   and deliberately absent.
+//   H10 (the Alt cone) is P3 and deliberately absent.
 //
 // Run from the repo root:
 //   node scripts/verify-hover-highlight.mjs
@@ -64,6 +67,7 @@ const section = (t) => { if (!QUIET) console.log(`\n=== ${t} ===`); };
 const ENTRY = `
 export { buildHoverIndex, computeHoverMarks, zoneForRatio, hoverGlowColor,
          hoverSoftColor, edgeCategoryOf, categoryBaseColor, hoverNodeKind,
+         hoverHandleKey, handleDirection,
          HOVER_DWELL_MS, HOVER_GLOW_L, HOVER_WIRE_GLOW_L,
          HOVER_ENTER_LEFT, HOVER_LEAVE_LEFT, HOVER_ENTER_RIGHT, HOVER_LEAVE_RIGHT,
          EDGE_FLOW_COLOR, EDGE_VALUE_COLOR, HOVER_FALLBACK_COLOR
@@ -87,7 +91,8 @@ async function loadBundle() {
 const { mod: H, dir: BUNDLE_DIR } = await loadBundle();
 const {
   buildHoverIndex, computeHoverMarks, zoneForRatio, hoverGlowColor, hoverSoftColor,
-  hoverNodeKind, HOVER_DWELL_MS, HOVER_GLOW_L, HOVER_WIRE_GLOW_L,
+  hoverNodeKind, hoverHandleKey, handleDirection,
+  HOVER_DWELL_MS, HOVER_GLOW_L, HOVER_WIRE_GLOW_L,
   HOVER_ENTER_LEFT, HOVER_LEAVE_LEFT, HOVER_ENTER_RIGHT, HOVER_LEAVE_RIGHT,
   EDGE_FLOW_COLOR, EDGE_VALUE_COLOR,
 } = H;
@@ -109,6 +114,8 @@ const valE = (id, s, t, p = 0) => ({ id, source: s, target: t, sourceHandle: 'ou
 const idsOf = (marks, mark) => [...marks.nodes].filter(([, m]) => m === mark).map(([id]) => id);
 const edgeIdsOf = (marks, mark) => [...marks.edges].filter(([, m]) => m === mark).map(([id]) => id);
 const marksFor = (ix, id, zone) => computeHoverMarks(ix, { kind: 'node', id, zone });
+const marksForEdge = (ix, id) => computeHoverMarks(ix, { kind: 'edge', id });
+const marksForPort = (ix, nodeId, handleId) => computeHoverMarks(ix, { kind: 'port', nodeId, handleId });
 
 // ---------------------------------------------------------------------------
 // SECTION A — the invariants on synthetic fixtures
@@ -232,6 +239,160 @@ section('A — zones, reroute walks, hysteresis, the colour lift');
   eq(d.nodes.get('r1'), 'self', 'H6b: ...and it is still `self`');
 }
 
+// --- H7: hovering a WIRE (I2) -----------------------------------------------
+// The subject is the wire: there is NO `self` node, the whole reroute chain it
+// belongs to lights in BOTH directions, both real ends are peers, and every
+// segment carries the one `wire` token (`in` / `out` are relative to a hovered
+// NODE and mean nothing here).
+{
+  // (a) the plain chain + value feed — no dots at all.
+  const nodes = [node('A'), node('B'), node('C'), node('V'), comment('K')];
+  const edges = [flowE('ab', 'A', 'B'), flowE('bc', 'B', 'C'), valE('vb', 'V', 'B')];
+  const ix = buildHoverIndex(nodes, edges);
+
+  const m = marksForEdge(ix, 'ab');
+  sameSet([...m.edges.keys()], ['ab'], 'H7: a dot-free wire lights only itself');
+  eq(m.edges.get('ab'), 'wire', 'H7: ...with the `wire` token');
+  sameSet(idsOf(m, 'peer'), ['A', 'B'], 'H7: BOTH real endpoints are peers');
+  eq(idsOf(m, 'self').length, 0, 'H7: a wire hover marks NO node `self` (the wire is the subject)');
+  eq(idsOf(m, 'relay').length, 0, 'H7: no relay without a dot');
+  eq(m.originId, 'ab', 'H7: originId names the hovered EDGE');
+  // Each wire is its own answer — hovering the value feed reaches V and B only.
+  sameSet(idsOf(marksForEdge(ix, 'vb'), 'peer'), ['V', 'B'],
+    'H7: the value feed lights its own two ends, not the flow spine\'s');
+  sameSet([...marksForEdge(ix, 'vb').edges.keys()], ['vb'], 'H7: ...and only its own segment');
+  eq(marksForEdge(ix, 'nope'), null, 'H7: a wire id outside the scope produces no marks');
+
+  // (b) a reroute CHAIN — A -> r1 -> r2 -> B. Hovering the MIDDLE segment must
+  //     reach both real ends THROUGH both dots, which is the whole point of I2.
+  const cn = [node('A'), dot('r1'), dot('r2'), node('B')];
+  const ce = [valE('e1', 'A', 'r1'), valE('e2', 'r1', 'r2'), valE('e3', 'r2', 'B')];
+  const cix = buildHoverIndex(cn, ce);
+  for (const hovered of ['e1', 'e2', 'e3']) {
+    const c = marksForEdge(cix, hovered);
+    sameSet([...c.edges.keys()], ['e1', 'e2', 'e3'],
+      `H7: hovering ${hovered} lights the WHOLE chain (both directions)`);
+    sameSet(idsOf(c, 'peer'), ['A', 'B'], `H7: ...ending at both real endpoints (${hovered})`);
+    sameSet(idsOf(c, 'relay'), ['r1', 'r2'], `H7: ...with both dots as relays (${hovered})`);
+    ok([...c.edges.values()].every(t => t === 'wire'), `H7: every segment is \`wire\` (${hovered})`);
+  }
+
+  // (c) a reroute FAN-OUT — A -> r -> {B, C}. The direction matters: the shared
+  //     trunk reaches every consumer; ONE branch reaches only its own consumer
+  //     (a sibling branch is a different wire's answer).
+  const fn = [node('A'), dot('r'), node('B'), node('C')];
+  const fe = [valE('f1', 'A', 'r'), valE('f2', 'r', 'B'), valE('f3', 'r', 'C')];
+  const fix = buildHoverIndex(fn, fe);
+  const trunk = marksForEdge(fix, 'f1');
+  sameSet([...trunk.edges.keys()], ['f1', 'f2', 'f3'], 'H7: the TRUNK of a fan lights every branch');
+  sameSet(idsOf(trunk, 'peer'), ['A', 'B', 'C'], 'H7: ...and every real consumer');
+  const branch = marksForEdge(fix, 'f2');
+  sameSet([...branch.edges.keys()], ['f1', 'f2'], 'H7: ONE branch lights only its own path back to the trunk');
+  sameSet(idsOf(branch, 'peer'), ['A', 'B'], 'H7: ...and only its own producer + consumer (not the sibling)');
+  sameSet(idsOf(branch, 'relay'), ['r'], 'H7: ...through the dot');
+
+  // (d) a cyclic hand-made dot pair must terminate here too.
+  const yn = [dot('r1'), dot('r2'), node('B')];
+  const ye = [valE('y1', 'r1', 'r2'), valE('y2', 'r2', 'r1'), valE('y3', 'r2', 'B')];
+  const yix = buildHoverIndex(yn, ye);
+  const cyc = marksForEdge(yix, 'y1');
+  ok(cyc !== null, 'H7: a wire inside a cyclic dot pair terminates instead of hanging');
+  sameSet(idsOf(cyc, 'relay'), ['r1', 'r2'], 'H7: ...both dots are relays');
+  sameSet(idsOf(cyc, 'peer'), ['B'], 'H7: ...and the one real node downstream is the peer');
+}
+
+// --- H8: hovering a PORT (I1) -----------------------------------------------
+// Over ONE handle, only THAT handle's wires (through their chains) and their
+// real endpoint(s) light — a strict narrowing of the third, with the node still
+// `self`. The direction comes off the handle id's prefix, never from geometry.
+{
+  //  V0 -> B.p0,  V1 -> B.p1  (two value inputs), B -> {C, D} on two outputs.
+  const nodes = [node('V0'), node('V1'), node('A'), node('B'), node('C'), node('D')];
+  const edges = [
+    flowE('ab', 'A', 'B'),
+    valE('v0', 'V0', 'B', 0),
+    valE('v1', 'V1', 'B', 1),
+    { id: 'bc', source: 'B', target: 'C', sourceHandle: 'output_value_out0', targetHandle: 'input_value_p0' },
+    { id: 'bd', source: 'B', target: 'D', sourceHandle: 'output_value_out1', targetHandle: 'input_value_p0' },
+  ];
+  const ix = buildHoverIndex(nodes, edges);
+
+  eq(handleDirection('input_value_p0'), 'in', 'H8: an `input_` handle is the IN side');
+  eq(handleDirection('output_flow_next'), 'out', 'H8: an `output_` handle is the OUT side');
+  eq(handleDirection('weird'), null, 'H8: an unparseable handle id has no direction');
+  eq(hoverHandleKey('n1', 'input_value_p0'), 'n1|input_value_p0', 'H8: the byHandle key is nodeId|handleId');
+
+  // ONE input handle: its own wire and its own producer, nothing else.
+  const p0 = marksForPort(ix, 'B', 'input_value_p0');
+  sameSet([...p0.edges.keys()], ['v0'], 'H8: an input handle lights exactly ITS wire');
+  eq(p0.edges.get('v0'), 'in', 'H8: ...with the `in` token');
+  sameSet(idsOf(p0, 'self'), ['B'], 'H8: the port\'s own node is still `self`');
+  sameSet(idsOf(p0, 'peer'), ['V0'], 'H8: ...and only that port\'s producer is a peer');
+  eq(p0.originId, 'B', 'H8: originId names the NODE, not the handle');
+
+  const p1 = marksForPort(ix, 'B', 'input_value_p1');
+  sameSet(idsOf(p1, 'peer'), ['V1'], 'H8: the OTHER input handle reaches the other producer');
+  sameSet([...p1.edges.keys()], ['v1'], 'H8: ...and only its own wire');
+
+  // The flow pin is a handle like any other.
+  const pf = marksForPort(ix, 'B', 'input_flow_do');
+  sameSet([...pf.edges.keys()], ['ab'], 'H8: the main FLOW input pin lights the exec wire');
+  sameSet(idsOf(pf, 'peer'), ['A'], 'H8: ...and its producer');
+
+  // ONE output handle out of two.
+  const o0 = marksForPort(ix, 'B', 'output_value_out0');
+  sameSet([...o0.edges.keys()], ['bc'], 'H8: an output handle lights exactly ITS wire');
+  eq(o0.edges.get('bc'), 'out', 'H8: ...with the `out` token');
+  sameSet(idsOf(o0, 'peer'), ['C'], 'H8: ...and only that port\'s consumer');
+
+  // AN UNWIRED PORT IS SELF ONLY — honest, and it is how the user learns.
+  const un = marksForPort(ix, 'B', 'input_value_p7');
+  sameSet([...un.nodes.keys()], ['B'], 'H8: an UNWIRED handle lights the node only');
+  eq(un.edges.size, 0, 'H8: ...and no wire');
+  const bad = marksForPort(ix, 'B', 'not_a_handle');
+  sameSet([...bad.nodes.keys()], ['B'], 'H8: an unparseable handle id lights the node only');
+  eq(bad.edges.size, 0, 'H8: ...and never guesses a direction');
+
+  // THE NARROWING CLAIM, stated as algebra: every port set is a SUBSET of its
+  // third, and the union over a side's handles IS that third.
+  const left = marksFor(ix, 'B', 'in');
+  const right = marksFor(ix, 'B', 'out');
+  const unionIn = new Set([...p0.edges.keys(), ...p1.edges.keys(), ...pf.edges.keys()]);
+  sameSet(unionIn, [...left.edges.keys()], 'H8: the union over B\'s INPUT handles == its left third');
+  const o1 = marksForPort(ix, 'B', 'output_value_out1');
+  const unionOut = new Set([...o0.edges.keys(), ...o1.edges.keys()]);
+  sameSet(unionOut, [...right.edges.keys()], 'H8: the union over B\'s OUTPUT handles == its right third');
+  ok([...p0.edges.keys()].every(id => left.edges.has(id)), 'H8: a port set is a SUBSET of its third');
+  ok(p0.edges.size < left.edges.size, 'H8: ...and a strictly SMALLER one when the port count > 1');
+
+  // Groups / comments are skipped by type here too.
+  const gix = buildHoverIndex([group('G'), comment('K'), node('B')], []);
+  eq(marksForPort(gix, 'G', 'input_value_p0'), null, 'H8: a GROUP handle produces no marks');
+  eq(marksForPort(gix, 'nope', 'input_value_p0'), null, 'H8: an id outside the scope produces no marks');
+
+  // A handle THROUGH a reroute chain still ends at the real producer.
+  const cn = [node('A'), dot('r1'), dot('r2'), node('B')];
+  const ce = [valE('e1', 'A', 'r1'), valE('e2', 'r1', 'r2'), valE('e3', 'r2', 'B', 3)];
+  const cix = buildHoverIndex(cn, ce);
+  const via = marksForPort(cix, 'B', 'input_value_p3');
+  sameSet([...via.edges.keys()], ['e1', 'e2', 'e3'], 'H8: a port fed through a chain lights every segment');
+  sameSet(idsOf(via, 'peer'), ['A'], 'H8: ...and the REAL producer at the far end');
+  sameSet(idsOf(via, 'relay'), ['r1', 'r2'], 'H8: ...with both dots as relays');
+
+  // ⚠ A HANDLE ON A DOT IS THE DOT. The two handles COVER the 16 px dot, so
+  // making them directional would make P1's verified "a dot lights both sides"
+  // unreachable with a real mouse.
+  for (const hid of ['input_value_in', 'output_value_out']) {
+    const d = marksForPort(cix, 'r1', hid);
+    sameSet([...d.edges.keys()], ['e1', 'e2', 'e3'], `H8: a handle on a DOT lights both sides (${hid})`);
+    eq(d.nodes.get('r1'), 'self', `H8: ...and the dot is still \`self\` (${hid})`);
+    sameSet(idsOf(d, 'peer'), ['A', 'B'], `H8: ...reaching both real ends (${hid})`);
+    const asNode = marksFor(cix, 'r1', 'both');
+    sameSet([...d.edges.keys()], [...asNode.edges.keys()],
+      `H8: a dot's handle set is IDENTICAL to the dot's own (${hid}) — P1 behaviour preserved`);
+  }
+}
+
 // --- H9: the hysteresis ladder ----------------------------------------------
 {
   eq(HOVER_ENTER_LEFT, 0.30, 'H9: the LEFT enter threshold is 0.30');
@@ -341,7 +502,9 @@ const hoverSrc = readFileSync(SRC('modeler/vpl/hoverHighlight.ts'), 'utf8');
 // hovered; the plan wants the hover to win while the cursor is on it.
 {
   const iTrace = editorCss.indexOf('RULE TRACE (P4)');
-  const iHover = editorCss.indexOf('HOVER HIGHLIGHT (P1)');
+  // Anchored on the prefix, not the phase list: the block's heading gains a
+  // phase every time the feature grows ("(P1)" → "(P1 + P2)").
+  const iHover = editorCss.indexOf('HOVER HIGHLIGHT (P1');
   ok(iTrace >= 0, 'B2: the RULE TRACE css block is still there');
   ok(iHover >= 0, 'B2: the HOVER HIGHLIGHT css block exists');
   ok(iHover > iTrace, 'B2: the HOVER block is declared AFTER the TRACE block (the precedence)');
@@ -377,10 +540,85 @@ const hoverSrc = readFileSync(SRC('modeler/vpl/hoverHighlight.ts'), 'utf8');
     'B3: the hover NEVER touches classList (React Flow rebuilds className)');
 }
 
+// B5 — THE HANDLE-ID ENCODING the port walk reads. `handleDirection` decides
+// which side a handle is on from its PREFIX alone; that is only legitimate
+// because `handleId()` builds every handle id as `<kind>_<category>_<portId>`.
+// A rename there would silently make every port hover directionless.
+{
+  const typesSrc = readFileSync(SRC('modeler/vpl/types.ts'), 'utf8');
+  ok(/return `\$\{port\.kind\}_\$\{port\.category\}_\$\{port\.id\}`;/.test(typesSrc),
+    'B5: `handleId()` still encodes <kind>_<category>_<portId>');
+  ok(/\^\(input\|output\)_\(value\|flow\)_/.test(typesSrc),
+    'B5: ...and `parseHandleId` still agrees on the two kind literals');
+  // The real ids the editor renders, run through the module.
+  eq(handleDirection('input_flow_do'), 'in', 'B5: a real main-flow INPUT id resolves IN');
+  eq(handleDirection('output_flow_next'), 'out', 'B5: a real main-flow OUTPUT id resolves OUT');
+  eq(handleDirection('input_value_in'), 'in', 'B5: a real REROUTE input id resolves IN');
+  eq(handleDirection('output_value_out'), 'out', 'B5: ...and its output id resolves OUT');
+}
+
+// B6 — THE PORT CHANNEL (I1) is wired end to end: published by EVERY handle the
+// editor renders, subscribed ONCE, and never put in React state.
+{
+  const stateSrc = readFileSync(SRC('modeler/vpl/graphState.ts'), 'utf8');
+  const caSrc = readFileSync(SRC('modeler/vpl/CaNode.tsx'), 'utf8');
+  const rerouteSrc = readFileSync(SRC('modeler/vpl/RerouteNodeComponent.tsx'), 'utf8');
+
+  ok(/export function setHoveredPort/.test(stateSrc), 'B6: graphState owns the setHoveredPort channel');
+  ok(/export function subscribeHoveredPort/.test(stateSrc), 'B6: ...with the connectingFrom subscribe pattern');
+  ok(/hoveredPortListeners\.forEach/.test(stateSrc), 'B6: ...and the setter notifies its listeners');
+  ok(/data-nodeid/.test(stateSrc) && /data-handleid/.test(stateSrc),
+    'B6: the publishers read the ids off React Flow\'s own handle dataset');
+
+  // EVERY handle publishes. CaNode renders four (collapsed strip, the header's
+  // main flow pin, the two body port maps); the reroute dot renders two.
+  const caHandles = (caSrc.match(/<Handle\b/g) ?? []).length;
+  const caEnter = (caSrc.match(/onMouseEnter=\{onHandleHoverEnter\}/g) ?? []).length;
+  const caLeave = (caSrc.match(/onMouseLeave=\{onHandleHoverLeave\}/g) ?? []).length;
+  eq(caEnter, caHandles, `B6: every one of CaNode's ${caHandles} <Handle> sites publishes on enter`);
+  eq(caLeave, caHandles, 'B6: ...and clears on leave');
+  const rHandles = (rerouteSrc.match(/<Handle\b/g) ?? []).length;
+  eq((rerouteSrc.match(/onMouseEnter=\{onHandleHoverEnter\}/g) ?? []).length, rHandles,
+    `B6: both of the reroute dot's ${rHandles} handles publish too`);
+
+  // ⚠ CaNode PUBLISHES AND NEVER SUBSCRIBES — a memoised node must not
+  // re-render because the cursor crossed a handle.
+  ok(!/subscribeHoveredPort/.test(caSrc), 'B6: CaNode never SUBSCRIBES to the port channel');
+  ok(!/subscribeHoveredPort/.test(rerouteSrc), 'B6: ...and neither does the reroute dot');
+  ok(!/hoveredPort/.test(caSrc.replace(/onHandleHover(Enter|Leave)/g, '')),
+    'B6: CaNode does not read the channel at all (it only hands over the two publishers)');
+  const subs = (editorSrc.match(/subscribeHoveredPort/g) ?? []).length;
+  eq(subs, 2, 'B6: exactly ONE subscriber — the editor (the import + the one effect)');
+  ok(/setHoveredPort\(null\)/.test(editorSrc),
+    'B6: the editor drops the module-global channel on unmount / scope change');
+}
+
+// B7 — the WIRE seams (I2) are composed with the trace's, exactly as the node
+// seams are, and the link-splice press stands the hover down.
+{
+  ok(/onEdgeMouseEnter=\{onEdgeMouseEnterCombined\}/.test(editorSrc),
+    'B7: onEdgeMouseEnter is ONE composed callback (trace tooltip + hover)');
+  ok(/onEdgeMouseLeave=\{onEdgeMouseLeaveCombined\}/.test(editorSrc),
+    'B7: ...and so is onEdgeMouseLeave');
+  ok(/onEdgeMouseMove=\{onHoverEdgeMove\}/.test(editorSrc),
+    'B7: the wire re-arm uses React Flow\'s onEdgeMouseMove seam');
+  ok(/onTraceEdgeEnter\(event, edge\)/.test(editorSrc),
+    'B7: the trace tooltip is still called from the composed edge enter');
+  // The press-and-hold link splice must clear the mark: the press selects the
+  // wire (red outranks the hover) or opens a menu over it, and `mouseleave` may
+  // never fire. The clear sits inside the gesture's own `onDown`.
+  const iDown = editorSrc.indexOf("const edgeEl = target.closest('.react-flow__edge')");
+  ok(iDown > 0, 'B7: the link-splice pointerdown handler is still findable');
+  ok(iDown > 0 && /clearHoverRef\.current\(\)/.test(editorSrc.slice(iDown, iDown + 900)),
+    'B7: ...and it stands the hover down on the press');
+}
+
 // B4 — the editor consumes the module rather than re-deriving it, and the pure
 // module stays DOM-free (the harness bundles it standalone).
 {
   ok(/from '\.\/hoverHighlight'/.test(editorSrc), 'B4: GraphEditor imports the pure module');
+  ok(/kind: 'port', nodeId:/.test(editorSrc), 'B4: the editor asks for a PORT target (I1)');
+  ok(/kind: 'edge', id:/.test(editorSrc), 'B4: ...and for an EDGE target (I2)');
   for (const sym of ['buildHoverIndex', 'computeHoverMarks', 'zoneForRatio', 'hoverGlowColor',
     'hoverSoftColor', 'HOVER_DWELL_MS']) {
     ok(editorSrc.includes(sym), `B4: the editor uses ${sym} instead of re-implementing it`);
@@ -438,7 +676,42 @@ function refClosure(nodes, edges, id, dir) {
   return { markedEdges, peers, relays };
 }
 
-let scopeCount = 0, nodeChecks = 0, dotScopes = 0;
+/**
+ * THE SEEDED ORACLE — the same rounds-of-a-full-edge-scan traversal, but started
+ * from a SET OF WIRES instead of a node. It is what makes a port probe (I1) and
+ * a wire probe (I2) checkable against something that is not the module: neither
+ * of those subjects is a node, so `refClosure` cannot express them.
+ */
+function refFromWires(nodes, edges, seedIds, dir) {
+  const dots = new Set(nodes.filter(isDot).map(n => n.id));
+  const markedEdges = new Set(seedIds);
+  const peers = new Set();
+  const relays = new Set();
+  let frontier = new Set();
+  for (const e of edges) if (seedIds.has(e.id)) frontier.add(dir === 'in' ? e.source : e.target);
+  const expanded = new Set();
+  while (frontier.size > 0) {
+    const next = new Set();
+    for (const id of frontier) {
+      if (!dots.has(id)) { peers.add(id); continue; }
+      relays.add(id);
+      if (expanded.has(id)) continue;
+      expanded.add(id);
+      for (const e of edges) {
+        if ((dir === 'in' ? e.target : e.source) !== id) continue;
+        markedEdges.add(e.id);
+        next.add(dir === 'in' ? e.source : e.target);
+      }
+    }
+    frontier = next;
+  }
+  return { markedEdges, peers, relays };
+}
+
+const sameIds = (a, b) => a.size === b.size && [...a].every(v => b.has(v));
+const unionOf = (...sets) => { const o = new Set(); for (const s of sets) for (const v of s) o.add(v); return o; };
+
+let scopeCount = 0, nodeChecks = 0, dotScopes = 0, portChecks = 0, edgeChecks = 0;
 let worstMs = 0, worstScope = '';
 for (const f of modelFiles) {
   const model = JSON.parse(readFileSync(join(MODELS_DIR, f), 'utf8'));
@@ -591,17 +864,141 @@ for (const f of modelFiles) {
           passed++;
         }
       }
+
+      // --- H8 ON THE LIBRARY: every WIRED HANDLE of this node --------------
+      // The narrowing claim, on real graphs: each port's set agrees with the
+      // SEEDED oracle, is a SUBSET of its third, and the UNION over a side's
+      // handles IS that third (so the thirds really are the coarse default and
+      // nothing falls between two handles).
+      if (!dotHere) {
+        const byHandleHere = { in: new Map(), out: new Map() };
+        for (const e of gedges) {
+          if (e.target === n.id && e.targetHandle) {
+            const s = byHandleHere.in.get(e.targetHandle) ?? new Set();
+            s.add(e.id); byHandleHere.in.set(e.targetHandle, s);
+          }
+          if (e.source === n.id && e.sourceHandle) {
+            const s = byHandleHere.out.get(e.sourceHandle) ?? new Set();
+            s.add(e.id); byHandleHere.out.set(e.sourceHandle, s);
+          }
+        }
+        for (const [side, ref] of [['in', refIn], ['out', refOut]]) {
+          const handles = byHandleHere[side];
+          const incident = gedges
+            .filter(e => (side === 'in' ? e.target : e.source) === n.id).map(e => e.id);
+          const handled = unionOf(...handles.values());
+          // Every incident wire belongs to SOME handle: an edge with no handle
+          // id would sit inside the third but inside no port set.
+          if (handled.size !== incident.length) {
+            failures.push(`H8 ${label}/${n.id}/${side}: ${incident.length - handled.size} incident wire(s) carry no handle id`);
+          } else passed++;
+
+          const union = new Set();
+          let sideOk = true;
+          for (const [hid, seeds] of handles) {
+            portChecks++;
+            const pm = computeHoverMarks(ix, { kind: 'port', nodeId: n.id, handleId: hid });
+            if (!pm) { failures.push(`H8 ${label}/${n.id}/${hid}: no marks for a wired handle`); sideOk = false; continue; }
+            if (handleDirection(hid) !== side) {
+              failures.push(`H8 ${label}/${n.id}/${hid}: the id prefix says ${handleDirection(hid)}, the wiring says ${side}`);
+              sideOk = false; continue;
+            }
+            if (pm.nodes.get(n.id) !== 'self' || idsOf(pm, 'self').length !== 1) {
+              failures.push(`H8 ${label}/${n.id}/${hid}: the port's own node is not the single 'self'`);
+              sideOk = false; continue;
+            }
+            let stray = 0;
+            for (const id of pm.nodes.keys()) if (!scopeIds.has(id)) stray++;
+            for (const id of pm.edges.keys()) if (!edgeIdsInScope.has(id)) stray++;
+            if (stray) {
+              failures.push(`H8 ${label}/${n.id}/${hid}: ${stray} id(s) outside the scope`);
+              sideOk = false; continue;
+            }
+            const oracle = refFromWires(gnodes, gedges, seeds, side);
+            const wantP = new Set(oracle.peers); wantP.delete(n.id);
+            const wantR = new Set(oracle.relays); wantR.delete(n.id);
+            const gotE = new Set(pm.edges.keys());
+            if (!sameIds(gotE, oracle.markedEdges)
+              || !sameIds(new Set(idsOf(pm, 'peer')), wantP)
+              || !sameIds(new Set(idsOf(pm, 'relay')), wantR)) {
+              failures.push(`H8 ${label}/${n.id}/${hid}: port set != seeded oracle (${gotE.size} vs ${oracle.markedEdges.size} wires)`);
+              sideOk = false; continue;
+            }
+            if ([...gotE].some(id => !ref.markedEdges.has(id))) {
+              failures.push(`H8 ${label}/${n.id}/${hid}: the port set is NOT a subset of its third`);
+              sideOk = false; continue;
+            }
+            if ([...pm.edges.values()].some(t => t !== side)) {
+              failures.push(`H8 ${label}/${n.id}/${hid}: a port wire carries the wrong token`);
+              sideOk = false; continue;
+            }
+            passed++;
+            for (const id of gotE) union.add(id);
+          }
+          if (sideOk && handled.size === incident.length) {
+            if (!sameIds(union, ref.markedEdges)) {
+              failures.push(`H8 ${label}/${n.id}/${side}: the union over the handles (${union.size}) != the third (${ref.markedEdges.size})`);
+            } else passed++;
+          }
+        }
+        // An UNWIRED handle lights the node only — on every real node.
+        const un = computeHoverMarks(ix, { kind: 'port', nodeId: n.id, handleId: 'input_value___harness_unwired__' });
+        if (!un || un.edges.size !== 0 || un.nodes.size !== 1 || un.nodes.get(n.id) !== 'self') {
+          failures.push(`H8 ${label}/${n.id}: an UNWIRED handle did not light the node only`);
+        } else passed++;
+      }
+    }
+
+    // --- H7 ON THE LIBRARY: every WIRE ------------------------------------
+    for (const e of gedges) {
+      edgeChecks++;
+      const m = computeHoverMarks(ix, { kind: 'edge', id: e.id });
+      if (!m) { failures.push(`H7 ${label}/${e.id}: no marks for a real wire`); continue; }
+      passed++;
+      if (m.edges.get(e.id) !== 'wire' || [...m.edges.values()].some(t => t !== 'wire')) {
+        failures.push(`H7 ${label}/${e.id}: a chain segment carries a token other than 'wire'`);
+        continue;
+      }
+      passed++;
+      if (idsOf(m, 'self').length !== 0) {
+        failures.push(`H7 ${label}/${e.id}: a wire hover marked a node 'self'`);
+        continue;
+      }
+      passed++;
+      let stray = 0;
+      for (const id of m.nodes.keys()) if (!scopeIds.has(id)) stray++;
+      for (const id of m.edges.keys()) if (!edgeIdsInScope.has(id)) stray++;
+      if (stray) { failures.push(`H7 ${label}/${e.id}: ${stray} id(s) outside the scope`); continue; }
+      passed++;
+      // BOTH ends of the hovered wire are in the set (the dot at a chain's
+      // elbow as a relay, a real node as a peer) — never a floating wire.
+      if (!m.nodes.has(e.source) || !m.nodes.has(e.target)) {
+        failures.push(`H7 ${label}/${e.id}: an endpoint of the HOVERED wire is unmarked`);
+        continue;
+      }
+      passed++;
+      const up = refFromWires(gnodes, gedges, new Set([e.id]), 'in');
+      const down = refFromWires(gnodes, gedges, new Set([e.id]), 'out');
+      if (!sameIds(new Set(m.edges.keys()), unionOf(up.markedEdges, down.markedEdges))
+        || !sameIds(new Set(idsOf(m, 'peer')), unionOf(up.peers, down.peers))
+        || !sameIds(new Set(idsOf(m, 'relay')), unionOf(up.relays, down.relays))) {
+        failures.push(`H7 ${label}/${e.id}: chain != the two seeded oracle walks`);
+        continue;
+      }
+      passed++;
     }
     const ms = Date.now() - t0;
     if (ms > worstMs) { worstMs = ms; worstScope = `${label} (${gnodes.length} nodes)`; }
   }
 }
 if (!QUIET) {
-  console.log(`  [C] ${modelFiles.length} models, ${scopeCount} scopes (${dotScopes} with reroutes), ${nodeChecks} node×zone probes; slowest scope ${worstMs} ms on ${worstScope}`);
+  console.log(`  [C] ${modelFiles.length} models, ${scopeCount} scopes (${dotScopes} with reroutes), ${nodeChecks} node×zone + ${portChecks} handle + ${edgeChecks} wire probes; slowest scope ${worstMs} ms on ${worstScope}`);
 }
 ok(scopeCount >= 30, `C: the sweep really visited the library (${scopeCount} scopes)`);
 ok(dotScopes >= 1, `C: at least one swept scope has REROUTES (${dotScopes})`);
 ok(nodeChecks >= 2000, `C: the sweep is broad (${nodeChecks} node×zone probes)`);
+ok(portChecks >= 1000, `C: every wired HANDLE in the library was probed (${portChecks})`);
+ok(edgeChecks >= 1000, `C: every WIRE in the library was probed (${edgeChecks})`);
 
 // ---------------------------------------------------------------------------
 // RESULT
@@ -618,23 +1015,33 @@ rmSync(BUNDLE_DIR, { recursive: true, force: true });
 if (process.argv.includes('--controls')) {
   const TARGET = SRC('modeler/vpl/hoverHighlight.ts');
   const original = readFileSync(TARGET, 'utf8');
+  /** ⚠ LINE ENDINGS. `core.autocrlf` checks these sources out as CRLF on
+   *  Windows while this harness is written with `\n`, so a multi-line anchor
+   *  compared literally would be reported "GONE" on one platform and matched on
+   *  the other — a control that silently stops discriminating. Every anchor is
+   *  therefore translated to the working tree's own EOL before matching. */
+  const EOL = original.includes('\r\n') ? '\r\n' : '\n';
+  const applyAnchor = (src, from, to) => {
+    const needle = from.split('\n').join(EOL);
+    if (!src.includes(needle)) return null;
+    return src.split(needle).join(to.split('\n').join(EOL));
+  };
   const CONTROLS = [
     {
       n: 1, targets: 'H4 / H5 / H12 (the reroute WALK)',
       what: 'stop walking THROUGH a dot (mark it, but never follow its own wires)',
       edits: [
-        ['          if (!seen.has(src)) { seen.add(src); stack.push(src); }', '          void seen;'],
-        ['          if (!seen.has(tgt)) { seen.add(tgt); stack.push(tgt); }', '          void seen;'],
+        ['        for (const u of index.inByNode.get(src) ?? []) stack.push(u);', '        void 0;'],
+        ['        for (const u of index.outByNode.get(tgt) ?? []) stack.push(u);', '        void 0;'],
       ],
     },
     {
       n: 2, targets: 'H1 / H2 / H12 (which side a third means)',
       what: 'swap in and out — the left third walks DOWNSTREAM',
-      edits: [
-        ['      for (const w of index.inByNode.get(cur) ?? []) {', '      for (const w of index.outByNode.get(cur) ?? []) {'],
-        ['      for (const w of index.outByNode.get(cur) ?? []) {\n        // `in` wins',
-          '      for (const w of index.inByNode.get(cur) ?? []) {\n        // `in` wins'],
-      ],
+      edits: [[
+        "  if (zone === 'in' || zone === 'both') {\n    walkUp(index, index.inByNode.get(subjectId) ?? [], nodes, edges, 'in', new Set([subjectId]));\n  }\n  if (zone === 'out' || zone === 'both') {\n    walkDown(index, index.outByNode.get(subjectId) ?? [], nodes, edges, 'out', new Set([subjectId]));\n  }",
+        "  if (zone === 'in' || zone === 'both') {\n    walkDown(index, index.outByNode.get(subjectId) ?? [], nodes, edges, 'in', new Set([subjectId]));\n  }\n  if (zone === 'out' || zone === 'both') {\n    walkUp(index, index.inByNode.get(subjectId) ?? [], nodes, edges, 'out', new Set([subjectId]));\n  }",
+      ]],
     },
     {
       n: 3, targets: 'H9 (the hysteresis)',
@@ -656,8 +1063,8 @@ if (process.argv.includes('--controls')) {
       n: 5, targets: 'H4 / H5 / H6 / H12 (the relay mark)',
       what: 'skip the `relay` mark on a dot (the chain still lights, the dots do not)',
       edits: [
-        ["          if (!nodes.has(src)) nodes.set(src, 'relay');", '          void src;'],
-        ["          if (!nodes.has(tgt)) nodes.set(tgt, 'relay');", '          void tgt;'],
+        ["      if (!nodes.has(src)) nodes.set(src, 'relay');", '      void src;'],
+        ["      if (!nodes.has(tgt)) nodes.set(tgt, 'relay');", '      void tgt;'],
       ],
     },
     {
@@ -669,11 +1076,46 @@ if (process.argv.includes('--controls')) {
       ]],
     },
     {
+      n: 8, targets: 'H8 / C-handle sweep (the port walk reads the HANDLE)',
+      what: 'let a port hover walk the whole SIDE instead of that one handle\'s wires',
+      edits: [[
+        '    const seeds = index.byHandle.get(hoverHandleKey(subjectId, target.handleId)) ?? [];',
+        '    const seeds = (dir === \'in\' ? index.inByNode.get(subjectId) : index.outByNode.get(subjectId)) ?? [];',
+      ]],
+    },
+    {
+      n: 9, targets: 'H7 / C-wire sweep (a wire lights BOTH ways)',
+      what: 'drop the downstream half of a wire hover (only the producer end lights)',
+      edits: [[
+        "    walkDown(index, [w], nodes, edges, 'wire', new Set<string>());",
+        '    void walkDown;',
+      ]],
+    },
+    {
+      n: 10, targets: 'H8 (a handle on a DOT is the dot)',
+      what: 'let a reroute\'s handle obey its own direction instead of lighting both sides',
+      edits: [[
+        "      walkUp(index, index.inByNode.get(subjectId) ?? [], nodes, edges, 'in', new Set([subjectId]));\n      walkDown(index, index.outByNode.get(subjectId) ?? [], nodes, edges, 'out', new Set([subjectId]));\n      return { nodes, edges, originId: subjectId };",
+        "      if (handleDirection(target.handleId) === 'in') walkUp(index, index.inByNode.get(subjectId) ?? [], nodes, edges, 'in', new Set([subjectId]));\n      else walkDown(index, index.outByNode.get(subjectId) ?? [], nodes, edges, 'out', new Set([subjectId]));\n      return { nodes, edges, originId: subjectId };",
+      ]],
+    },
+    {
+      // The bug this suite actually caught while P2 was being written: one
+      // `seen` set shared by the two walks truncates the downstream half of a
+      // chain, but ONLY when a dot is reachable both ways — i.e. on a cycle.
+      n: 11, targets: 'H7 (one `seen` set PER DIRECTION)',
+      what: 'share one `seen` set between the up- and down-walks of a wire hover',
+      edits: [[
+        "    walkUp(index, [w], nodes, edges, 'wire', new Set<string>());\n    walkDown(index, [w], nodes, edges, 'wire', new Set<string>());",
+        "    const shared = new Set<string>();\n    walkUp(index, [w], nodes, edges, 'wire', shared);\n    walkDown(index, [w], nodes, edges, 'wire', shared);",
+      ]],
+    },
+    {
       n: 7, targets: 'H1 / H12 (groups and comments are skipped BY TYPE)',
       what: 'let a group / comment be a hover subject',
       edits: [[
-        "  if (!kind || kind === 'other') return null;\n\n  const nodes = new Map<string, HoverNodeMark>();",
-        "  if (!kind) return null;\n\n  const nodes = new Map<string, HoverNodeMark>();",
+        "  if (!kind || kind === 'other') return null;",
+        '  if (!kind) return null;',
       ]],
     },
   ];
@@ -685,8 +1127,9 @@ if (process.argv.includes('--controls')) {
       let mutated = original;
       let applied = true;
       for (const [from, to] of c.edits) {
-        if (!mutated.includes(from)) { applied = false; break; }
-        mutated = mutated.split(from).join(to);
+        const next = applyAnchor(mutated, from, to);
+        if (next === null) { applied = false; break; }
+        mutated = next;
       }
       if (!applied) {
         console.log(`FAIL  control ${c.n}: the mutation anchor is GONE — ${c.what}`);

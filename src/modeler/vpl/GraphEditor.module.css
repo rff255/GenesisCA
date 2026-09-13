@@ -479,7 +479,8 @@
 }
 
 /* =========================================================================
-   HOVER HIGHLIGHT (P1) — the node under the cursor, its wires, its neighbours.
+   HOVER HIGHLIGHT (P1 + P2) — the node under the cursor, its wires, its
+   neighbours; and since P2, one PORT of it (I1) or one WIRE (I2).
    =========================================================================
    ⚠ PLACED AFTER THE RULE TRACE BLOCK ON PURPOSE. The wire rules below and the
    trace's are the same specificity, so source order decides: a wire that is
@@ -490,11 +491,22 @@
    Same `data-*` ATTRIBUTE contract as the trace (React Flow owns `className`
    and would wipe an imperative class). Tokens:
 
-     self    (nodes) the hovered node, or the hovered reroute dot
+     self    (nodes) the hovered node, or the hovered reroute dot. A hovered
+                     PORT marks its OWN node `self` too — the port narrows the
+                     wires, it does not change which node is the subject.
      peer    (nodes) a real producer / consumer at the far end of a lit wire
      relay   (nodes) a reroute dot on a lit chain
-     in      (edges) a wire INTO the hovered node (left third)
-     out     (edges) a wire OUT of it (right third)
+     in      (edges) a wire INTO the hovered node (left third), or into the
+                     hovered INPUT handle (I1)
+     out     (edges) a wire OUT of it (right third / an output handle)
+     wire    (edges) a segment of the chain the hovered WIRE belongs to (I2).
+                     `in` / `out` are relative to a hovered NODE; a hovered wire
+                     has no node for them to be relative to, so its whole chain
+                     carries one token. ⚠ It needs NO RULE OF ITS OWN: the edge
+                     rule below matches the ATTRIBUTE's presence
+                     (`[data-hover]`), not a token, so every edge token is
+                     styled identically by construction — which is also what
+                     keeps `--hover-c` (decision D1) the only thing that varies.
 
    ⚠ THE COLOUR IS NOT IN THIS FILE. User decision D1: every element glows in
    its OWN colour — the hovered node in its lightened `def.color`, each peer in

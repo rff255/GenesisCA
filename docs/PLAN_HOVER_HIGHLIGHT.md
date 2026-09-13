@@ -1,8 +1,14 @@
 # Plan — Hover highlight on the graph canvas (node · its wires · its neighbours)
 
-> **Status: PROPOSED — investigation + feasibility, 2026-09-13.** Nothing is implemented. A throwaway
-> DOM prototype was run against the live dev server (§2.10) to test the two claims the whole design
-> rests on; both held. Illustrated: [PLAN_HOVER_HIGHLIGHT.html](PLAN_HOVER_HIGHLIGHT.html).
+> **Status: DELIVERED, 2026-09-13, branch `hover-highlight`.** **P1** (the thirds, the reroute walk, the
+> colour lift, the hysteresis, the editor wiring, the CSS, the harness) shipped as commit `f3ecf0e`;
+> **P2** (I1 port-precise + I2 wire hover, H7/H8, the docs sweep, the Help bullet) is on the same branch.
+> **P3** (I3 the Alt transitive cone, I7 the Explorer cross-highlight, a view-settings toggle) is NOT
+> built — decisions D5 / D6 stand as recorded in §9.
+>
+> Read §*As built — deviations* at the end before trusting any code sketch in this plan; the reference
+> documentation is [`areas/modeler-ui.md`](areas/modeler-ui.md) § *Hover highlight*.
+> Illustrated: [PLAN_HOVER_HIGHLIGHT.html](PLAN_HOVER_HIGHLIGHT.html).
 
 **Scope: editor layer only.** One new pure module (`src/modeler/vpl/hoverHighlight.ts`), a CSS block in
 `GraphEditor.module.css`, wiring in `GraphEditor.tsx` (+ a one-line channel in `graphState.ts` for the
@@ -412,3 +418,35 @@ models, all surfaces unchanged) · `verify-auto-layout.mjs` and `verify-handle-r
 | D4 | Port-precise (I1) and wire hover (I2) in v1? | yes, as P2 on the same branch |
 | D5 | Alt-hover transitive cone (I3): v2, or drop? | v2, after living with the basic gesture |
 | D6 | A view-settings on/off? | not in v1 |
+
+---
+
+## As built — deviations
+
+Every place the shipped feature differs from the plan above, and why. P1 = commit `f3ecf0e`, P2 = the
+follow-up commit on the same branch. Reference documentation:
+[`areas/modeler-ui.md`](areas/modeler-ui.md) § *Hover highlight*.
+
+| # | Plan said | Shipped | Why |
+|---|---|---|---|
+| 1 | §3.2 / D1: everything lit by one hover uses **the hovered node's hue** | **Every element glows in its OWN colour** — the node in its lightened `def.color`, each peer in its own, a wire and a reroute dot in their wire's category colour | **User decision D1 overrode the recommendation** (the plan's A1 alternative, chosen). It moves the colour out of the stylesheet entirely: it is now an inline `--hover-c` per element rather than one value per gesture |
+| 2 | §2.3 / §4.1: `hoverGlowColor` = "the same 55/45 mix done on the RGB bytes" | an **HSL LIGHTNESS LIFT** keeping hue + saturation (`HOVER_GLOW_L = .62` nodes, `HOVER_WIRE_GLOW_L = .72` wires); a fill already at/above the target is returned unchanged | a mix towards white DESATURATES, which reads as "greyed" on the dark fills; H11 pins both curves and asserts the lifted green is still green-dominant. The white event roots stay white for free |
+| 3 | §4.3: the translucent halo is the one place `color-mix` is convenient | a **second TS-computed property `--hover-c-soft`** (`hoverSoftColor`) | removes the feature's only `color-mix` dependency (risk R10) AND makes the derived value readable in the DOM, so the real-UI pass verifies the halo it is looking at instead of inferring it |
+| 4 | §3.1: the neighbourhood appears after the dwell; nothing about a WIRE's dwell | a **wire hover waits the same one `HOVER_DWELL_MS` for its WHOLE set** (P2) | a wire has no "self" half that could light early and still be the answer, and a cursor crossing a bundle of wires would otherwise strobe every one of them. Kept as ONE constant, per D3 |
+| 5 | §3.5 I1: "the editor treats it as a zone override" (no more detail) | the override applies **only while its `nodeId` equals the live gesture's origin**, is tracked even across a `clearHover`, and **never re-arms the dwell**; leaving the handle resumes the third because `st.zone` is tracked from the ratio all along | the handle is INSIDE the node wrapper, so the real event order is node-enter → port-enter → port-leave → node-move… → node-leave. Making the port a subject of its own would double-arm the dwell and lose the third |
+| 6 | §3.3 / §3.5 I1: nothing about a handle ON a dot | **a handle on a reroute dot is treated as the dot** — both sides, whichever of its parts the cursor is on | the dot is 16 px and its two handles COVER it, so a directional reading would make P1's verified "hovering a dot lights both sides" unreachable with a real mouse. Control 10 pins it |
+| 7 | §3.5 I2: "hovering a wire lights the wire and BOTH endpoints… Hue = the producer's" | the **whole reroute chain** the wire belongs to, upstream to the real producer and downstream to every real consumer — but a **sibling branch of a fan-out the wire is not on stays dark**; hue per element (deviation 1) | "where does THIS wire go?" is the question; the sibling branch is a different wire's answer. H7 asserts trunk-vs-branch separately on the fan-out fixture |
+| 8 | §4.1: `HoverMarks.edges` tokens `'in' \| 'out' \| 'wire'` with no styling note | the `wire` token is shipped **and needs no CSS rule of its own** — the edge rule matches the ATTRIBUTE's presence | every edge token then styles identically by construction and only `--hover-c` varies, which is what deviation 1 requires. Recorded in the CSS block's token list |
+| 9 | §4.2: `applyHoverMarks` removes the marks from the previous set and sets them on the new | it re-applies **unconditionally to every current member**, not just to the diff's additions | React Flow can REMOUNT an element (dropping the attribute) without the set changing — the trace highlighter's own discipline; `setAttribute` on an unchanged value is free |
+| 10 | §4.2: `hoverMarkedRef` / "rename `traceElFor` to `markElFor`" | done, and the **unmount cleanup walks the one shared cache** dropping `data-trace`, `data-hover` and both custom properties in a single pass; each feature keeps its own marked-set | one cleanup, no way for either feature to clear the other's attribute |
+| 11 | §4.4: CaNode's `<Handle onMouseEnter/onMouseLeave>` publishes | the two publishers are **module-level functions in `graphState.ts`**, not closures in CaNode, and read `data-nodeid` / `data-handleid` off React Flow's own handle div. The leave is **conditional** (it clears only while the channel still names that handle) | one shared pair of references for the whole graph: CaNode gains no state, no subscription and no new callback identity per render, so its `memo` keeps skipping. `graphState` stays React-import-free via a structural `HandleHoverEvent` (the `ScopeDragPointer` precedent). The conditional leave makes the delivery order of an adjacent leave/enter pair irrelevant |
+| 12 | §2.7: the stand-down table lists the gestures | shipped as ONE `hoverAllowed()` predicate (connect / node drag / box select / context menu) + a scope-effect, unmount and `[nodes.length, edges]` re-validation, **which checks the EDGE array when the subject is an edge**; a **pointerdown on a wire** additionally clears inside the link-splice gesture's own `onDown` | the press either selects the wire or opens a menu over it and `mouseleave` may never come (risk R7, on a subject the plan had not yet introduced) |
+| 13 | §2.1: `onNodeMouseMove` / `onEdgeMouseMove` are "exist, unused" seams | **both are now used**: the node one drives the thirds, and the edge one exists to RE-ARM after the pointerdown clear above | without it a wire pressed and released under the cursor stays dark until the user leaves and comes back |
+| 14 | §2.7 / R7: nothing about a mousemove with no preceding enter | **a `mousemove` on a node the gesture never got an `enter` for re-arms it** | React Flow fires exactly that when a stand-down lifts with the cursor still on the node — a node drag that ended there. Found in the real-UI pass, not in the plan |
+| 15 | §5.1 H12: "every shipped model, every scope, every node, all three zones" | section C additionally probes **every wired HANDLE** (port set ⊆ its third, and the union over a side's handles == that third) and **every WIRE**, against a second, wire-seeded oracle | the two P2 subjects are not nodes, so the node-frontier oracle cannot express them |
+| 16 | §5.1: "≥ 5 source mutations" | **11** negative controls, 11/11 discriminating | P2 added 4 (the port walk must read the handle; a wire must light both ways; a dot's handle is the dot; one `seen` set per direction). The anchors are also EOL-tolerant now — `core.autocrlf` checks the sources out as CRLF while the harness is written with `\n`, which had silently turned every multi-line anchor into "anchor GONE" |
+| 17 | — (not anticipated) | **one `seen` set PER DIRECTION** in the chain walk | sharing one set between the up- and down-walk truncated the downstream half of a chain whenever a dot was reachable both ways — i.e. only on a hand-edited cyclic dot pair. Caught by H7's cyclic fixture while P2 was being written; control 11 exists so it cannot come back |
+| 18 | §5.2: "real `hover` moves… `__hoverMarks()` read back" | the same, plus the finding that **a hidden preview pane throttles `setTimeout` to ≥ 1 s**, so the 90 ms dwell fires late and a read taken 200 ms after the hover finds nothing | it looks exactly like a broken feature and is not. Documented in the area doc's verification recipe |
+| 19 | §3.5 I1: "the hovered HANDLE itself may get a small ring" (implied by "port-precise") | **no ring on the handle itself** | the port's wire lighting IS the feedback and it is drawn right at the handle; a third element class in the writer (handles are React Flow-rendered divs with rebuilt `className`s, so it would need the attribute mechanism too) buys nothing the wire does not already say |
+| 20 | §7 P2 row: "+ the Help line, the `modeler-ui.md` section, project-structure + harness index" | all done, plus `rule-trace.md` (the shared `markElFor` + the hover-over-trace precedence), the `data-trace`-is-an-attribute bullet's "the hover follows it" sentence, the harness count 69 → 70 in `testing-harnesses.md` AND `CLAUDE.md`, and this section | the Documentation-consistency rule; `README.md` was checked and is deliberately unchanged (an editor convenience moves none of its one-to-three-sentence Features summaries) |
+| 21 | §4.1: `computeHoverMarks(index, target, opts?)` with `transitive` / `cap` | signature shipped as planned; `opts` is still **unread** | it is the P3 Alt-cone seam and was accepted early so the signature would not move later. H10 stays absent with it |

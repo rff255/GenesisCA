@@ -203,6 +203,7 @@ function graphKindLabel(kind: ActiveGraphKind): string {
   return kind === 'cells' ? 'Cells' : kind === 'agents' ? 'Agents' : 'Overseer';
 }
 
+import { hoveredPort, subscribeHoveredPort, setHoveredPort } from './graphState';
 import { setIsConnecting, setConnectingFrom, isConnectingGlobal, setShowPortLabels, showPortLabelsGlobal, showGridGlobal, setShowGrid as setShowGridGlobal, snapEnabledGlobal, setSnapEnabled as setSnapEnabledGlobal, setConnectedHandlesFromEdges, setConnectionHazards, getSavedGraphViewport, setSavedGraphViewport, savedCurrentScope, setSavedCurrentScope, subscribeCurrentModelElementDrag, setCompatibleHandlesForDrag, clearCompatibleHandlesForDrag, setCurrentModelElementDrag, compatibleHandlesForDrag, currentModelElementDrag, setQuickAddApi, setActiveGraphKind, hasPendingMacroImport, takePendingMacroImport, displayNodeLabel, displayNodeDescription, setControlPick, getControlPick, setOpenMacroScope, getOpenMacroScope, setScopeMoveApi, setScopeDrag, getScopeDrag, organizeStyleGlobal, setOrganizeStyle, type OrganizeStyle, type ScopeDragPointer, type ActiveGraphKind } from './graphState';
 import { modelerUiState } from '../modelerUiState';
 import type { QuickAddPayload } from './graphState';
@@ -1242,13 +1243,25 @@ export function GraphEditorInner() {
   /** The live gesture. `zone` is the last zone the ratio resolved to (fed back
    *  into `zoneForRatio` for the hysteresis); `lit` says the DWELL has elapsed,
    *  so a later third-switch applies at once. NO React state — a mouse moves
-   *  60–120×/s. */
+   *  60–120×/s.
+   *
+   *  `kind` says what `originId` names: a NODE (the thirds, P1) or an EDGE (the
+   *  wire hover, I2). `port` / `portNode` mirror the `hoveredPort` channel — the
+   *  handle under the cursor, which OVERRIDES the third while it is set (I1).
+   *  They are kept even across a `clearHover`, because the channel (not this
+   *  ref) owns that state: a stand-down that lifted while the cursor never left
+   *  the handle then resumes port-precise instead of falling back to a third the
+   *  user is not pointing at. `portNode` is what makes a stale value inert — the
+   *  override applies only while it equals `originId`. */
   const hoverStateRef = useRef<{
     originId: string | null;
+    kind: 'node' | 'edge';
     zone: HoverZone | null;
+    port: string | null;
+    portNode: string | null;
     lit: boolean;
     dwell: ReturnType<typeof setTimeout> | null;
-  }>({ originId: null, zone: null, lit: false, dwell: null });
+  }>({ originId: null, kind: 'node', zone: null, port: null, portNode: null, lit: false, dwell: null });
 
   /** Every macro INSTANCE in this model → the DEF it instantiates. The trace's
    *  `macroPath` is in INSTANCE ids, the editor's scope stack is in DEF ids —
@@ -1559,7 +1572,13 @@ export function GraphEditorInner() {
     traceMarkedRef.current = { nodes: new Set(), edges: new Set() };
     hoverMarkedRef.current = { nodes: new Set(), edges: new Set() };
     if (hoverStateRef.current.dwell !== null) clearTimeout(hoverStateRef.current.dwell);
-    hoverStateRef.current = { originId: null, zone: null, lit: false, dwell: null };
+    hoverStateRef.current = {
+      originId: null, kind: 'node', zone: null, port: null, portNode: null, lit: false, dwell: null,
+    };
+    // The hovered-PORT channel is a MODULE GLOBAL and outlives this editor, so a
+    // Modeler → Simulator → Modeler round-trip would otherwise come back holding
+    // a handle of a node that no longer exists.
+    setHoveredPort(null);
     traceViewRef.current = null;
   }, []);
 
@@ -1744,11 +1763,12 @@ export function GraphEditorInner() {
     }
   }, [hoverColorFor, hoverIndexNow, markElFor]);
 
-  /** Clear everything and disarm the dwell. Every stand-down routes here. */
+  /** Clear everything and disarm the dwell. Every stand-down routes here.
+   *  `port` / `portNode` are deliberately NOT reset — see `hoverStateRef`. */
   const clearHover = useCallback(() => {
     const st = hoverStateRef.current;
     if (st.dwell !== null) { clearTimeout(st.dwell); st.dwell = null; }
-    st.originId = null; st.zone = null; st.lit = false;
+    st.originId = null; st.kind = 'node'; st.zone = null; st.lit = false;
     if (hoverMarkedRef.current.nodes.size > 0 || hoverMarkedRef.current.edges.size > 0) {
       applyHoverMarks(null);
     }
@@ -1760,11 +1780,36 @@ export function GraphEditorInner() {
 
   /** Recompute + write for the CURRENT gesture. `neighbourhood` is false until
    *  the dwell elapses, which is what makes the node's own ring immediate and
-   *  the wires patient. */
+   *  the wires patient.
+   *
+   *  THE PRECEDENCE, in one place: an EDGE subject has no "self" half at all (a
+   *  wire IS its own neighbourhood), so before the dwell it shows nothing; a
+   *  hovered HANDLE on the current node OUTRANKS the third (I1 refines the
+   *  coarse default), and the third resumes the moment the handle is left
+   *  because `st.zone` has been tracked all along. */
   const paintHover = useCallback((neighbourhood: boolean) => {
     const st = hoverStateRef.current;
     if (!st.originId) return;
     const index = hoverIndexNow();
+
+    if (st.kind === 'edge') {
+      if (!neighbourhood) {
+        if (hoverMarkedRef.current.nodes.size > 0 || hoverMarkedRef.current.edges.size > 0) {
+          applyHoverMarks(null);
+        }
+        return;
+      }
+      applyHoverMarks(computeHoverMarks(index, { kind: 'edge', id: st.originId }));
+      return;
+    }
+
+    if (neighbourhood && st.port && st.portNode === st.originId) {
+      applyHoverMarks(computeHoverMarks(index, {
+        kind: 'port', nodeId: st.originId, handleId: st.port,
+      }));
+      return;
+    }
+
     const zone: HoverZone = neighbourhood ? (st.zone ?? 'self') : 'self';
     applyHoverMarks(computeHoverMarks(index, { kind: 'node', id: st.originId, zone }));
   }, [applyHoverMarks, hoverIndexNow]);
@@ -1786,6 +1831,7 @@ export function GraphEditorInner() {
     const st = hoverStateRef.current;
     if (st.dwell !== null) clearTimeout(st.dwell);
     st.originId = node.id;
+    st.kind = 'node';
     // A 16 px dot has no thirds (`computeHoverMarks` enforces `both` for it).
     st.zone = kind === 'reroute' ? 'both' : zoneForRatio(ratioWithin(event), null);
     st.lit = false;
@@ -1801,7 +1847,7 @@ export function GraphEditorInner() {
 
   const onHoverNodeMove = useCallback((event: React.MouseEvent, node: Node) => {
     const st = hoverStateRef.current;
-    if (st.originId !== node.id) {
+    if (st.originId !== node.id || st.kind !== 'node') {
       // React Flow fires `mousemove` on a node we never got an enter for when
       // the gesture was stood down and the blocker is gone again (a node drag
       // that ended with the cursor still on the node).
@@ -1818,9 +1864,78 @@ export function GraphEditorInner() {
 
   const onHoverNodeLeave = useCallback(() => { clearHover(); }, [clearHover]);
 
+  // --- I2: hovering a WIRE -------------------------------------------------
+  // The whole reroute chain the wire belongs to lights, in both directions, and
+  // ends at the real producer upstream + every real consumer downstream. There
+  // are no thirds on a 2 px stroke, and no "self" half either: a wire IS the
+  // answer, so the ENTIRE set waits the one `HOVER_DWELL_MS` (a cursor crossing
+  // a bundle of wires on the way somewhere else must not strobe each of them).
+  const onHoverEdgeEnter = useCallback((_event: React.MouseEvent, edge: Edge) => {
+    if (!hoverAllowed()) return;
+    const index = hoverIndexNow();
+    // A wire React Flow is rendering but the index has not seen (mid-update)
+    // would light nothing; clearing is the honest answer.
+    if (!index.wireById.has(edge.id)) { clearHover(); return; }
+    const st = hoverStateRef.current;
+    if (st.dwell !== null) clearTimeout(st.dwell);
+    st.originId = edge.id;
+    st.kind = 'edge';
+    st.zone = null;
+    st.lit = false;
+    paintHover(false);
+    st.dwell = setTimeout(() => {
+      const s = hoverStateRef.current;
+      s.dwell = null;
+      if (!s.originId) return;
+      s.lit = true;
+      paintHover(true);
+    }, HOVER_DWELL_MS);
+  }, [clearHover, hoverAllowed, hoverIndexNow, paintHover]);
+
+  /** The wire twin of `onHoverNodeMove` — and it earns its keep for a reason the
+   *  node path does not have: a pointerdown on a wire (the link-splice
+   *  press-and-hold) clears the hover while the cursor is STILL on that wire, so
+   *  without a move-driven re-arm the wire would stay dark until the user left
+   *  it and came back. */
+  const onHoverEdgeMove = useCallback((event: React.MouseEvent, edge: Edge) => {
+    const st = hoverStateRef.current;
+    if (st.originId === edge.id && st.kind === 'edge') {
+      if (!hoverAllowed()) clearHover();
+      return;
+    }
+    if (hoverAllowed()) onHoverEdgeEnter(event, edge);
+  }, [clearHover, hoverAllowed, onHoverEdgeEnter]);
+
+  // --- I1: hovering a PORT -------------------------------------------------
+  // ONE subscription to the `hoveredPort` channel CaNode's handles publish on
+  // (see graphState.ts § HOVER HIGHLIGHT). Never React state: this fires on
+  // every handle the cursor crosses, and a `setState` here would re-render the
+  // node layer for a mark that is written imperatively anyway.
+  //
+  // The handle lives INSIDE the node wrapper, so React Flow's node-level enter
+  // has already fired by the time this does: the sequence is node-enter →
+  // port-enter → port-leave → node-move… → node-leave. That is why this only
+  // ever repaints — it never arms the dwell, and never becomes the subject on
+  // its own.
+  useEffect(() => {
+    const onPortChange = () => {
+      const st = hoverStateRef.current;
+      const p = hoveredPort;
+      st.port = p ? p.handleId : null;
+      st.portNode = p ? p.nodeId : null;
+      // Nothing to repaint unless the set is already on screen for THIS node.
+      if (!st.lit || st.kind !== 'node' || !st.originId) return;
+      if (p && p.nodeId !== st.originId) return;
+      if (!hoverAllowed()) { clearHover(); return; }
+      paintHover(true);
+    };
+    return subscribeHoveredPort(onPortChange);
+  }, [clearHover, hoverAllowed, paintHover]);
+
   // The composed seams. The trace tooltip and the hover highlight both live on
-  // `onNodeMouseEnter` / `onNodeMouseLeave`; neither can be dropped in favour of
-  // the other, and each keeps its own gate rather than sharing one.
+  // `onNodeMouseEnter` / `onNodeMouseLeave` (and on the two edge twins); neither
+  // can be dropped in favour of the other, and each keeps its own gate rather
+  // than sharing one.
   const onNodeMouseEnterCombined = useCallback((event: React.MouseEvent, node: Node) => {
     onTraceNodeEnter(event, node);
     onHoverNodeEnter(event, node);
@@ -1829,6 +1944,14 @@ export function GraphEditorInner() {
     onTraceHoverLeave();
     onHoverNodeLeave();
   }, [onHoverNodeLeave, onTraceHoverLeave]);
+  const onEdgeMouseEnterCombined = useCallback((event: React.MouseEvent, edge: Edge) => {
+    onTraceEdgeEnter(event, edge);
+    onHoverEdgeEnter(event, edge);
+  }, [onHoverEdgeEnter, onTraceEdgeEnter]);
+  const onEdgeMouseLeaveCombined = useCallback(() => {
+    onTraceHoverLeave();
+    clearHover();
+  }, [clearHover, onTraceHoverLeave]);
   const onSelectionStartCombined = useCallback(() => {
     boxSelectingRef.current = true;
     clearHover();
@@ -1845,12 +1968,16 @@ export function GraphEditorInner() {
   }, [contextMenu]);
 
   // The hovered node can vanish under the cursor (Delete with no `mouseleave`),
-  // and a wire can be drawn or cut while the set is lit. Deliberately NOT keyed
+  // and a wire can be drawn or cut while the set is lit — including the HOVERED
+  // wire itself (the link splice replaces it with two). Deliberately NOT keyed
   // on the node array identity — that is replaced on every drag tick.
   useEffect(() => {
     const st = hoverStateRef.current;
     if (!st.originId) return;
-    if (!nodesRef.current.some(n => n.id === st.originId)) { clearHoverRef.current(); return; }
+    const alive = st.kind === 'edge'
+      ? edgesRef.current.some(e => e.id === st.originId)
+      : nodesRef.current.some(n => n.id === st.originId);
+    if (!alive) { clearHoverRef.current(); return; }
     if (st.lit) paintHover(true);
   }, [nodes.length, edges, paintHover]);
 
@@ -1871,7 +1998,10 @@ export function GraphEditorInner() {
     };
     w.__hoverMarks = () => ({
       origin: hoverStateRef.current.originId,
+      kind: hoverStateRef.current.kind,
       zone: hoverStateRef.current.zone,
+      port: hoverStateRef.current.portNode === hoverStateRef.current.originId
+        ? hoverStateRef.current.port : null,
       lit: hoverStateRef.current.lit,
       nodes: [...hoverMarkedRef.current.nodes].map(id => readBack(id, 'node')),
       edges: [...hoverMarkedRef.current.edges].map(id => readBack(id, 'edge')),
@@ -1882,17 +2012,38 @@ export function GraphEditorInner() {
       if (reset) { p.n = 0; p.total = 0; p.max = 0; }
       return out;
     };
-    w.__hoverSet = (nodeId: string | null, zone?: HoverZone) => {
+    w.__hoverSet = (nodeId: string | null, zone?: HoverZone, handleId?: string) => {
       if (!nodeId) { clearHoverRef.current(); return null; }
       const st = hoverStateRef.current;
       if (st.dwell !== null) { clearTimeout(st.dwell); st.dwell = null; }
       st.originId = nodeId;
+      st.kind = 'node';
       st.zone = zone ?? 'self';
+      // The port override, for a probe that wants I1 without a real handle
+      // crossing. `undefined` leaves whatever the channel published alone.
+      if (handleId !== undefined) {
+        st.port = handleId || null;
+        st.portNode = handleId ? nodeId : null;
+      }
       st.lit = true;
       paintHover(true);
       return (w.__hoverMarks as () => unknown)();
     };
-    return () => { delete w.__hoverMarks; delete w.__hoverPerf; delete w.__hoverSet; };
+    w.__hoverSetEdge = (edgeId: string | null) => {
+      if (!edgeId) { clearHoverRef.current(); return null; }
+      const st = hoverStateRef.current;
+      if (st.dwell !== null) { clearTimeout(st.dwell); st.dwell = null; }
+      st.originId = edgeId;
+      st.kind = 'edge';
+      st.zone = null;
+      st.lit = true;
+      paintHover(true);
+      return (w.__hoverMarks as () => unknown)();
+    };
+    return () => {
+      delete w.__hoverMarks; delete w.__hoverPerf; delete w.__hoverSet;
+      delete w.__hoverSetEdge;
+    };
   }, [markElFor, paintHover]);
 
   // --- Browser "back" exits the macro view instead of leaving the site ---
@@ -2491,8 +2642,11 @@ export function GraphEditorInner() {
     setControlPick(null);
     // HOVER HIGHLIGHT (R6) — a scope change, a Cells/Agents swap and a model
     // load all re-mount the node set, so a mark written for the old one would be
-    // stranded on a reused element.
+    // stranded on a reused element. The hovered-PORT channel is a module global
+    // and must be dropped with it: it would otherwise name a handle of a node
+    // that is no longer on the canvas.
     clearHoverRef.current();
+    setHoveredPort(null);
     // EXPLICIT CONTROLS (R7) — mirror the open scope so a CLOSED INSTANCE of a
     // def that is open for editing renders its controls DISABLED instead of
     // letting an instance-side write be clobbered by the next debounce tick.
@@ -4215,6 +4369,11 @@ export function GraphEditorInner() {
       if (!edgeEl) return;
       const edgeId = edgeEl.getAttribute('data-id');
       if (!edgeId) return;
+      // HOVER HIGHLIGHT stand-down: the press either selects the wire (whose red
+      // stroke outranks the hover by `:not(.selected)`) or opens the splice menu
+      // over it, and `mouseleave` may never come. The wire is re-lit by
+      // `onHoverEdgeMove` as soon as the pointer moves on it again.
+      clearHoverRef.current();
       g = {
         edgeId,
         startX: e.clientX,
@@ -6679,15 +6838,18 @@ export function GraphEditorInner() {
         onNodeDragStart={onNodeDragStart}
         onNodeDragStop={onNodeDragStop}
         onNodeDoubleClick={onNodeDoubleClick}
-        // TWO features share these four seams — the Rule Trace tooltip and the
+        // TWO features share these six seams — the Rule Trace tooltip and the
         // HOVER HIGHLIGHT — so each prop is ONE composed callback and each
         // feature keeps its own gate (risk R14). `onNodeMouseMove` was an unused
-        // React Flow seam until the hover's thirds needed it.
+        // React Flow seam until the hover's thirds needed it, and
+        // `onEdgeMouseMove` until the wire hover needed a re-arm after the
+        // link-splice press cleared it.
         onNodeMouseEnter={onNodeMouseEnterCombined}
         onNodeMouseMove={onHoverNodeMove}
         onNodeMouseLeave={onNodeMouseLeaveCombined}
-        onEdgeMouseEnter={onTraceEdgeEnter}
-        onEdgeMouseLeave={onTraceHoverLeave}
+        onEdgeMouseEnter={onEdgeMouseEnterCombined}
+        onEdgeMouseMove={onHoverEdgeMove}
+        onEdgeMouseLeave={onEdgeMouseLeaveCombined}
         // A rubber band owns the pointer, but React Flow keeps firing
         // `onNodeMouseEnter` as it crosses a node.
         onSelectionStart={onSelectionStartCombined}

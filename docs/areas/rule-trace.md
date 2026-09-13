@@ -634,6 +634,17 @@ without the set changing.
 three arrive on `subscribeTrace`), and the scope / graph kind the editor is showing (React deps). On
 unmount every mark is removed — the editor unmounts on every Modeler ↔ Simulator tab switch.
 
+⚠ **The element cache is now SHARED with the hover highlighter.** `markElFor` (renamed from
+`traceElFor`, 2026-09-13) is about the DOM, not about either feature, so the graph-canvas hover
+highlight — which writes `data-hover` plus two inline custom properties by exactly this contract — looks
+elements up through the same map. Each feature keeps its **OWN marked-set**, so neither can ever clear
+the other's attribute, and the unmount cleanup walks the shared cache once, dropping `data-trace`,
+`data-hover`, `--hover-c` and `--hover-c-soft` together. One consequence to know: the hover's CSS block
+is declared **after** this one at the same specificity, so **a wire that is both trace-lit and hovered
+shows the hover colour while the cursor is on it** and returns to the trace violet on leave — deliberate
+precedence (the hover answers a question the user is asking right now), pinned by
+`verify-hover-highlight.mjs` B2. Details: [`modeler-ui.md`](modeler-ui.md) § *Hover highlight*.
+
 ### Cursor semantics
 
 With **no cursor**, everything with a record in this scope is lit — the whole trace. With the cursor at

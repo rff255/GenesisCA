@@ -380,6 +380,89 @@ export function setConnectingFrom(val: typeof connectingFrom) {
 }
 
 // ---------------------------------------------------------------------------
+// HOVER HIGHLIGHT — the hovered PORT (I1). See `hoverHighlight.ts`,
+// `GraphEditor.tsx` § HOVER HIGHLIGHT and docs/PLAN_HOVER_HIGHLIGHT.md §4.4.
+//
+// The cursor resting on ONE handle narrows the hover set from the node's coarse
+// third to exactly that port's wire(s). The handle lives in CaNode; the gesture
+// and every DOM write live in GraphEditor — so this is the `connectingFrom`
+// pattern above (a module-level `let`, a listener Set, an equality-guarded
+// setter that notifies) rather than prop-drilling through React Flow.
+//
+// ⚠ CaNode PUBLISHES AND NEVER SUBSCRIBES. It renders nothing for a hovered
+// port, so a `useSyncExternalStore` here would re-render a memoised node on
+// every handle crossing for no visual reason — and a mouse crosses handles far
+// more often than a connection drag starts. The single subscriber is
+// GraphEditor, which writes the marks imperatively; the handle callbacks are
+// module-level functions (not closures over the node's props), so CaNode's memo
+// keeps skipping exactly as it did before.
+// ---------------------------------------------------------------------------
+
+export type HoveredPort = { nodeId: string; handleId: string } | null;
+
+/** The handle under the cursor, or null. `handleId` is `handleId()`'s encoding
+ *  (`input_value_p0` / `output_flow_next`), so its prefix carries the side. */
+export let hoveredPort: HoveredPort = null;
+
+const hoveredPortListeners = new Set<() => void>();
+
+export function subscribeHoveredPort(fn: () => void): () => void {
+  hoveredPortListeners.add(fn);
+  return () => { hoveredPortListeners.delete(fn); };
+}
+
+export function setHoveredPort(val: HoveredPort): void {
+  const a = hoveredPort;
+  if (a === val) return;
+  // Compare FIELDS, not identity: the publisher builds a fresh object per
+  // `mouseenter`, and re-notifying for an identical one would repaint the same
+  // set (the `setControlPick` precedent).
+  if (a && val && a.nodeId === val.nodeId && a.handleId === val.handleId) return;
+  hoveredPort = val;
+  hoveredPortListeners.forEach(fn => fn());
+}
+
+/** The bits of a React `MouseEvent` the two publishers need — declared
+ *  structurally so `graphState` stays React-import-free (the `ScopeDragPointer`
+ *  precedent; this module is imported BY CaNode). */
+export interface HandleHoverEvent {
+  currentTarget: { getAttribute?: (name: string) => string | null } | null;
+}
+
+/**
+ * `onMouseEnter` for EVERY `<Handle>` the editor renders (CaNode's four sites —
+ * the collapsed strip, the header's main flow pins, and the two body port maps —
+ * plus the reroute dot's two).
+ *
+ * ⚠ MODULE-LEVEL, NOT A PER-NODE CLOSURE. Both publishers read everything they
+ * need off the handle's OWN dataset — React Flow renders `data-nodeid` +
+ * `data-handleid` on every handle div and spreads unknown props onto it — so one
+ * shared pair of function references serves every handle in the graph. That is
+ * what keeps I1 out of CaNode's render cost completely: no state, no
+ * subscription, and no new callback identity per render for `memo` to notice.
+ */
+export function onHandleHoverEnter(event: HandleHoverEvent): void {
+  const el = event.currentTarget;
+  const nodeId = el?.getAttribute?.('data-nodeid');
+  const handleId = el?.getAttribute?.('data-handleid');
+  if (nodeId && handleId) setHoveredPort({ nodeId, handleId });
+}
+
+/** `onMouseLeave` for every handle.
+ *
+ *  ⚠ THE CLEAR IS CONDITIONAL. If a browser ever delivered the next handle's
+ *  `mouseenter` before this one's `mouseleave`, an unconditional clear would
+ *  erase the port that had just been published; clearing only when the channel
+ *  still names THIS handle makes the delivery order irrelevant. */
+export function onHandleHoverLeave(event: HandleHoverEvent): void {
+  const el = event.currentTarget;
+  const nodeId = el?.getAttribute?.('data-nodeid');
+  const handleId = el?.getAttribute?.('data-handleid');
+  const cur = hoveredPort;
+  if (cur && cur.nodeId === nodeId && cur.handleId === handleId) setHoveredPort(null);
+}
+
+// ---------------------------------------------------------------------------
 // Connected handles per node — INPUT (target) and OUTPUT (source) handle ids
 // share one set; handle ids encode their kind (`input_…` / `output_…`) so
 // consumers never confuse the two. (Perf: single pub/sub instead of per-node

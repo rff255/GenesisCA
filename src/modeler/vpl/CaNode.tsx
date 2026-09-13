@@ -95,6 +95,8 @@ import {
   getScopeDrag,
   subscribeScopeDrag,
   scopeMoveApi,
+  onHandleHoverEnter,
+  onHandleHoverLeave,
 } from './graphState';
 import { hasBreakpoint, subscribeTraceSession } from '../../trace/traceState';
 
@@ -1976,6 +1978,8 @@ function CaNodeComponent({ id, data, selected }: NodeProps) {
                   className={portHandleClass(port)}
                   style={{ top: ci !== undefined ? spreadTop(ci, connectedPorts.length) : '50%' }}
                   title={port.label}
+                  onMouseEnter={onHandleHoverEnter}
+                  onMouseLeave={onHandleHoverLeave}
                 />
               );
             });
@@ -2030,6 +2034,8 @@ function CaNodeComponent({ id, data, selected }: NodeProps) {
           className={handleClass}
           style={{ top: '50%' }}
           title={port.label}
+          onMouseEnter={onHandleHoverEnter}
+          onMouseLeave={onHandleHoverLeave}
         />
         {showPortLabels && (
           <div
@@ -4857,6 +4863,8 @@ function CaNodeComponent({ id, data, selected }: NodeProps) {
               className={handleClass}
               style={{ top: `${topPx}px` }}
               title={port.label}
+              onMouseEnter={onHandleHoverEnter}
+              onMouseLeave={onHandleHoverLeave}
             />
             {showWidget && (
               // EXPLICIT CONTROLS — the class-A pick-mode marker. Classes A/B/C
@@ -4947,6 +4955,8 @@ function CaNodeComponent({ id, data, selected }: NodeProps) {
               className={handleClass}
               style={{ top: `${topPx}px` }}
               title={port.label}
+              onMouseEnter={onHandleHoverEnter}
+              onMouseLeave={onHandleHoverLeave}
             />
             {showPortLabels && (
               <div className={styles.portLabelRight} style={{ top: `${topPx}px` }}>

@@ -26,6 +26,7 @@
 - LIVE mode — the graph pane’s INPUT OWNERSHIP (Phase 4, 2026-09-07)
 - RULE TRACE — what the editor owns (2026-09-12) → [`rule-trace.md`](rule-trace.md)
 - Auto-layout (Organize) — the context-menu re-layout (2026-09-13)
+- Hover highlight — the node, its wires, its neighbours (2026-09-13)
 
 ---
 
@@ -555,6 +556,8 @@ the `className` of those elements** — it rebuilds it from `cc([…, { selected
 render — so a class added imperatively is silently wiped the next time any of those flags flips.
 Selecting a lit node would drop its glow until the next trace, and **while the simulation is PAUSED it
 would never come back**. React writes no unknown attribute, so `data-trace` survives every re-render.
+**The hover highlight follows the identical rule with `data-hover`** (plus two inline custom properties)
+and shares this file's element cache — see *Hover highlight* below.
 
 Tokens: `hit` · `hit current` · `dark` (written, deliberately unstyled — *the trace adds light, it never
 greys the graph*) on nodes; `flow` · `value` on edges. The lit-wire CSS needs `!important` because
@@ -717,3 +720,163 @@ reach a better ordering from the layout's own output than from the user's arrang
 nodes on the second run of Elementary CA 1D — and the comment wrap iterates to a fixed point. Every sort
 carries an explicit final tie-break on the node id; there is no `Math.random` and no `Date.now` anywhere
 that reaches a coordinate.
+
+---
+
+## Hover highlight — the node, its wires, its neighbours (branch `hover-highlight`, 2026-09-13)
+
+**Resting the cursor on the graph answers "what is this connected to?" without a click.** Plan +
+illustrated mockups: [docs/PLAN_HOVER_HIGHLIGHT.md](docs/PLAN_HOVER_HIGHLIGHT.md) (+ `.html`). The
+decidable half is DOM-free in [hoverHighlight.ts](src/modeler/vpl/hoverHighlight.ts) and harnessed by
+[scripts/verify-hover-highlight.mjs](scripts/verify-hover-highlight.mjs); the editor owns only the DOM
+writes and the gesture (`GraphEditor.tsx` § *HOVER HIGHLIGHT*, `GraphEditor.module.css` § *HOVER
+HIGHLIGHT*, the `hoveredPort` channel in [graphState.ts](src/modeler/vpl/graphState.ts)).
+
+### The subjects
+
+| Cursor on | Lights |
+|---|---|
+| a node, **left third** | the node + every wire INTO it (through any reroute chain, dots included) + the real producer at the far end of each |
+| a node, **middle third** | the node only — the "just looking" zone |
+| a node, **right third** | the node + every wire OUT + every real consumer |
+| a **reroute dot** | both sides — a 16 px dot has no thirds |
+| one **PORT** (I1) | the node + only THAT handle's wire(s), their chains and their real endpoint(s). An unwired handle lights the node alone, which is how the user learns it is unwired |
+| one **WIRE** (I2) | the whole reroute chain the wire belongs to, both ways: upstream to the real producer, downstream to every real consumer. A sibling branch of a fan-out the wire is not on stays dark |
+
+Constants, one definition each in `hoverHighlight.ts` and pinned by harness H9: `HOVER_DWELL_MS = 90`
+(the node's own ring is immediate, its NEIGHBOURHOOD waits the dwell so crossing a dense graph does not
+strobe; a **wire** hover waits the same dwell for its WHOLE set, because a wire has no "self" half that
+could light early and still be the answer; a **port** hover inherits the node gesture's dwell and never
+re-arms it) and the hysteresis ladder `HOVER_ENTER_LEFT .30` / `HOVER_LEAVE_LEFT .36` /
+`HOVER_ENTER_RIGHT .70` / `HOVER_LEAVE_RIGHT .64`, so a cursor resting on a zone boundary cannot flap.
+The zone comes from ONE `getBoundingClientRect` per `mousemove` and the DOM is written **only when the
+zone changes**, after the read — a hover can never force a layout in the frame it read one.
+
+### Colour: every element glows in its OWN colour (user decision D1)
+
+D1 **overrode the plan's §3.2** "one hue per gesture". So the colour cannot live in the stylesheet: it is
+written per element as an inline custom property `--hover-c` (+ `--hover-c-soft`, the translucent halo,
+computed in TS rather than with `color-mix` so the derived value is visible in the DOM and the feature
+has no `color-mix` dependency). A node glows in its lightened `def.color`, a wire and a reroute dot in
+their wire's category colour.
+
+**The lift is required, not decorative — this is the one real finding of the investigation.** The
+`def.color` fills are deliberately dark (`conditional #1b5e20`, `getCellAttribute #b71c1c`,
+`setAttribute #4a148c`) **and the node's border is already painted in `def.color`**, so a 2 px ring in
+the raw hue reads as *no change at all*; the live prototype's first pass was invisible at 1x.
+`hoverGlowColor` is an **HSL LIGHTNESS LIFT** (hue + saturation kept) to `HOVER_GLOW_L = .62` for a node
+and `HOVER_WIRE_GLOW_L = .72` for a stroke on the canvas — not a mix towards white, which desaturates. A
+fill already at or above the target is returned unchanged, which is what keeps the white event roots
+white. H11 pins the outputs (`#1b5e20` -> `#68d470`, `#b71c1c` -> `#e55757`, `#4a148c` -> `#9755e7`,
+`#ffffff` -> `#ffffff`).
+
+### The mechanism, and why it is the Rule Trace's
+
+Same contract as `data-trace` (above), for a **stronger** reason: a trace lands 30x/s at most, a mouse
+moves 60-120x/s. So no React state, `setNodes` / `setEdges` are never called, **`CaNode` never re-renders
+because of a hover**, and the mark is a `data-hover` ATTRIBUTE — never a class, which React Flow would
+rebuild away. `markElFor` (the `data-id` -> element cache, revalidated with `isConnected`) is **SHARED**
+with the trace highlighter, because it is about the DOM and not about either feature; each keeps its
+**own marked-set**, so neither can clear the other's attribute, and the unmount cleanup drops both plus
+the two custom properties.
+
+Tokens: `self` / `peer` / `relay` on nodes; `in` / `out` / `wire` on edges (`wire` needs no rule of its
+own — the edge rule matches the attribute's PRESENCE, so every edge token styles identically and only
+`--hover-c` varies).
+
+**The node ring is on the INNER element** (`[data-hover~="self"] > *` = CaNode's `.node` root, or the
+`.reroute` dot), never on the `.react-flow__node` wrapper. The wrapper already carries two box-shadow
+languages — the red `.selected` ring and the violet `data-trace` halo — with PAIRED rules so they
+compose; a third there would need eight combination rules. Inside, the hover ring simply sits within
+both and composes with them for free.
+
+**The hover CSS block is declared AFTER the trace block on purpose.** Same specificity, so source order
+decides: a wire that is both trace-lit and hovered shows the HOVER colour while the cursor is on it and
+returns to the trace violet on leave. Harness B2 pins that ordering. A **selected** wire stays red
+(`:not(.selected)`), and the wire rules need `!important` because `toRFEdges` puts the stroke in an
+inline style on the path.
+
+### Port-precise (I1) — the `hoveredPort` channel
+
+Every `<Handle>` the editor renders (CaNode's four sites — the collapsed strip, the header's main flow
+pins, the two body port maps — plus the reroute dot's two) carries `onMouseEnter={onHandleHoverEnter}` /
+`onMouseLeave={onHandleHoverLeave}`. Those are **module-level functions in `graphState.ts`**, not
+per-node closures: they read `data-nodeid` / `data-handleid` off React Flow's own handle div, so one
+shared pair of references serves the whole graph and CaNode gains no state, no subscription and no new
+callback identity per render. **CaNode publishes and never subscribes** — it renders nothing for a
+hovered port, so a `useSyncExternalStore` there would re-render a memoised node on every handle crossing
+for nothing. The single subscriber is GraphEditor, into `hoverStateRef`. (The leave is CONDITIONAL —
+it clears only while the channel still names that handle — so the delivery order of a leave/enter pair
+across two adjacent handles cannot strand a null.)
+
+Three rules that are easy to get wrong:
+
+- **The port is a zone OVERRIDE, not a subject.** The handle sits inside the node wrapper, so React
+  Flow's node enter has already fired: the sequence is node-enter -> port-enter -> port-leave ->
+  node-move... -> node-leave. `st.zone` keeps being tracked from the ratio all along, so **leaving the
+  handle resumes the correct third** with no dwell re-arm.
+- **A handle on a DOT is the dot.** Its two handles COVER the 16 px dot, so making them directional would
+  make P1's verified "a dot lights both sides" unreachable with a real mouse. Control 10 pins it.
+- **The channel is a module global and outlives the editor**, so it is dropped (`setHoveredPort(null)`)
+  on unmount AND in the scope effect; a stale entry is additionally inert because the override applies
+  only while its `nodeId` equals the live gesture's origin.
+
+### Wire hover (I2) — and the link splice
+
+`onEdgeMouseEnter` / `onEdgeMouseLeave` are ONE composed callback each, exactly like the node seams (the
+Rule Trace tooltip and the hover each keep their own gate). `onEdgeMouseMove` was an unused React Flow
+seam and earns its keep for a reason the node path does not have: **a pointerdown on a wire clears the
+hover while the cursor is still on that wire** (the press either selects it — red outranks the hover — or
+opens the link-splice menu over it, and `mouseleave` may never come), so without a move-driven re-arm the
+wire would stay dark until the user left it and came back. The clear itself lives inside the
+press-and-hold gesture's own `onDown`, next to where it resolves the edge id.
+
+### The stand-down list, and the two edge cases
+
+`hoverAllowed()` is one predicate: **a wire drag** (`isConnectingGlobal` — the magenta compatibility glow
+owns the canvas), **a node drag** (the stand-down sits BEFORE `onNodeDragStart`'s group-only early
+return, so it covers every node drag), **a box select** (`onSelectionStart` / `End` — React Flow keeps
+firing `onNodeMouseEnter` as the band crosses a node), and **any context menu** (ONE effect on
+`contextMenu` rather than a line at every `setContextMenu` site). Plus: the scope effect (scope change /
+Cells-Agents swap / model load), unmount, and the subject vanishing under the cursor with no
+`mouseleave` — Delete, or a wire replaced by a splice — re-validated on `[nodes.length, edges]`,
+**checking the EDGE array when the subject is an edge**.
+
+- **A `mousemove` on a node that never got an `enter` re-arms the gesture.** React Flow fires it when a
+  stand-down lifted with the cursor still on the node (a node drag that ended there).
+- **Groups and comments are skipped BY TYPE** (`hoverNodeKind` -> `other`, so `computeHoverMarks` returns
+  `null`), so a group-header hover does nothing and no call site needs a special case.
+
+### Verifying it (the recipe that works)
+
+DEV hooks: `window.__hoverMarks()` (origin, kind, zone, port, lit, and every marked element's token +
+`--hover-c` + `--hover-c-soft` read back from the DOM), `__hoverPerf()`, `__hoverSet(nodeId, zone,
+handleId?)`, `__hoverSetEdge(edgeId)`.
+
+**Drive the gesture with a REAL hover** — React Flow ignores synthetic mouse events (the standing Key
+Patterns gotcha) — and use the hooks only to READ what it produced. Find a handle's or a wire's screen
+point with a JS probe (`getBoundingClientRect`, or `getPointAtLength` + `getScreenCTM()` for an edge
+path), then hover it.
+
+**The 90 ms dwell fires LATE in a background tab.** `document.hidden` is true in a hidden preview pane and
+Chrome throttles `setTimeout` to 1 s or more, so a read taken 200 ms after the hover finds nothing marked
+and looks exactly like a broken feature. **Wait 1.5 s or more before reading `__hoverMarks()`.** Measured
+cost of the writer itself: `__hoverPerf` max 0.7-1.0 ms on Game of Life and Accretor.
+
+### What will bite you
+
+- Adding a new `<Handle>` site to CaNode and forgetting the two publishers — the port narrowing silently
+  stops working for that port. Harness B6 counts `<Handle` occurrences against
+  `onMouseEnter={onHandleHoverEnter}` occurrences, so it fails instead.
+- Renaming the handle-id encoding. `handleDirection()` reads the `input_` / `output_` PREFIX, which is
+  only legitimate because `handleId()` builds `<kind>_<category>_<portId>`; B5 pins that against
+  `types.ts`.
+- **One `seen` set PER DIRECTION.** `seen` means "this dot's wires on THIS side are expanded"; sharing one
+  set between the up- and down-walk truncated the downstream half of a chain, but only when a dot was
+  reachable both ways — i.e. only on a hand-edited cyclic dot pair. Control 11 exists for it.
+- Re-deriving the wire colours. `EDGE_FLOW_COLOR` / `EDGE_VALUE_COLOR` MIRROR `toRFEdges`' own inline
+  literals (B1 pins them); a drift glows the wrong hue with nothing failing.
+- The harness's negative controls patch the SHIPPED module by anchored source text, and `core.autocrlf`
+  checks these sources out as CRLF while the harness is written with `\n` — every anchor is translated to
+  the working tree's EOL before matching. A control whose anchor no longer exists reports itself as
+  "anchor GONE" rather than passing quietly.

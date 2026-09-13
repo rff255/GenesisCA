@@ -1,7 +1,9 @@
 import { memo, useSyncExternalStore } from 'react';
 import { Handle, Position } from '@xyflow/react';
 import type { NodeProps } from '@xyflow/react';
-import { connectingFrom, subscribeConnectingFrom } from './graphState';
+import {
+  connectingFrom, subscribeConnectingFrom, onHandleHoverEnter, onHandleHoverLeave,
+} from './graphState';
 import { handleId } from './types';
 import type { PortCategory } from './types';
 import caStyles from './CaNode.module.css';
@@ -76,12 +78,16 @@ function RerouteNodeInner({ id, data, selected }: NodeProps) {
         position={Position.Left}
         id={handleId({ kind: 'input', category, id: 'in' })}
         className={inClass}
+        onMouseEnter={onHandleHoverEnter}
+        onMouseLeave={onHandleHoverLeave}
       />
       <Handle
         type="source"
         position={Position.Right}
         id={handleId({ kind: 'output', category, id: 'out' })}
         className={outClass}
+        onMouseEnter={onHandleHoverEnter}
+        onMouseLeave={onHandleHoverLeave}
       />
     </div>
   );
