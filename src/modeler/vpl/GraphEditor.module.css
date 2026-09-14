@@ -521,13 +521,17 @@
    violet `data-trace` halo — with PAIRED rules so they compose; a third shadow
    there would need 2³ combination rules. Inside, the hover ring simply sits
    within both and composes with them for free.
+   NO TRANSITION, ON PURPOSE (user feedback 2026-09-14): the ring and the halo appear
+   at full strength the instant the attribute lands. A 120 ms box-shadow fade shipped
+   first and read as a lag between pointing at a node and the answer showing; the
+   snap is the feedback. (No transition also means no reduced-motion override is
+   needed — there is nothing left to reduce.) The harness pins the absence.
 */
 
 :global(.react-flow__node[data-hover~="self"] > *) {
   box-shadow:
     0 0 0 2px var(--hover-c),
     0 0 16px 3px var(--hover-c-soft);
-  transition: box-shadow var(--duration-base);
 }
 
 /* Fainter, so the ORIGIN of the gesture stays obvious in a lit set. */
@@ -535,13 +539,11 @@
   box-shadow:
     0 0 0 1.5px var(--hover-c),
     0 0 10px 1px var(--hover-c-soft);
-  transition: box-shadow var(--duration-base);
 }
 
 /* A 16px dot: a ring only — a halo that size is a blob. */
 :global(.react-flow__node[data-hover~="relay"] > *) {
   box-shadow: 0 0 0 2px var(--hover-c);
-  transition: box-shadow var(--duration-base);
 }
 
 /* The lit WIRES. `!important` is required for the same reason the trace's rule
@@ -554,8 +556,3 @@
   stroke-width: 3.2 !important;
 }
 
-@media (prefers-reduced-motion: reduce) {
-  :global(.react-flow__node[data-hover] > *) {
-    transition: none;
-  }
-}

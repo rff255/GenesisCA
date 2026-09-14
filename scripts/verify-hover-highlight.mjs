@@ -530,8 +530,14 @@ const hoverSrc = readFileSync(SRC('modeler/vpl/hoverHighlight.ts'), 'utf8');
     'B3: the wire stroke uses !important (toRFEdges puts the colour in an INLINE style)');
   ok(/\.react-flow__edge:not\(\.selected\)\[data-hover\]/.test(editorCss),
     'B3: a SELECTED wire stays red (`:not(.selected)`)');
-  ok(/prefers-reduced-motion[\s\S]*data-hover/.test(editorCss),
-    'B3: prefers-reduced-motion drops the hover transition');
+  // The glow SNAPS in (user feedback 2026-09-14): no transition on any hover rule.
+  // Isolate the HOVER HIGHLIGHT block so the editor's other transitions (the
+  // toggle buttons, the scope notice) cannot mask a regression here.
+  {
+    const hoverBlock = editorCss.slice(editorCss.indexOf('HOVER HIGHLIGHT'));
+    ok(hoverBlock.length > 0 && !/transition\s*:/.test(hoverBlock),
+      'B3: the hover rules carry NO transition — the ring and halo appear at full strength at once');
+  }
   ok(editorSrc.includes("setAttribute('data-hover'"), 'B3: the editor writes the data-hover ATTRIBUTE');
   ok(editorSrc.includes("removeAttribute('data-hover')"), 'B3: ...and removes it on clear');
   ok(editorSrc.includes("setProperty('--hover-c'"), 'B3: the per-element colour is an inline custom property');

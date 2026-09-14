@@ -744,7 +744,7 @@ HIGHLIGHT*, the `hoveredPort` channel in [graphState.ts](src/modeler/vpl/graphSt
 | one **WIRE** (I2) | the whole reroute chain the wire belongs to, both ways: upstream to the real producer, downstream to every real consumer. A sibling branch of a fan-out the wire is not on stays dark |
 
 Constants, one definition each in `hoverHighlight.ts` and pinned by harness H9: `HOVER_DWELL_MS = 90`
-(the node's own ring is immediate, its NEIGHBOURHOOD waits the dwell so crossing a dense graph does not
+(the node's own ring is immediate — and it SNAPS in: **no CSS transition on any hover rule**, per user feedback 2026-09-14 a 120 ms box-shadow fade read as lag between pointing and the answer showing, so the harness pins the absence — its NEIGHBOURHOOD waits the dwell so crossing a dense graph does not
 strobe; a **wire** hover waits the same dwell for its WHOLE set, because a wire has no "self" half that
 could light early and still be the answer; a **port** hover inherits the node gesture's dwell and never
 re-arms it) and the hysteresis ladder `HOVER_ENTER_LEFT .30` / `HOVER_LEAVE_LEFT .36` /
