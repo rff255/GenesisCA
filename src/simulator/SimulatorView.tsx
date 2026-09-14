@@ -66,6 +66,7 @@ import type { AgentRenderView, AgentRenderView3D } from './engine/agentWebgpuRun
 import { AGENT_SPRITE_ATLAS_CELL, AGENT_SPRITE_MAX_LAYERS, type AgentSpriteAtlasPayload, type AgentSpriteSlot } from './engine/agentSpriteAtlas';
 import { SpriteRegistry, type DecodedSprite } from './spriteRegistry';
 import { glowEncodeScale, glowTransferTable } from './glowTone';
+import { GlowGlHalo, GLOW_GL_FLOATS } from './glowGl';
 import { ImageMappingDialog, type ImageMappingConfig } from './ImageMappingDialog';
 import { CsvImportDialog, type CsvImportResult } from './CsvImportDialog';
 import { CsvExportDialog, type CsvExportResult } from './CsvExportDialog';
@@ -319,14 +320,22 @@ function paintGlowSprite(c2: CanvasRenderingContext2D, R: number, r: number, g: 
   c2.fillRect(0, 0, R * 2, R * 2);
 }
 
-/** A 2R×2R halo sprite for a quantised colour. Null only when the
- *  radius is degenerate. `unit` is the profile's peak (= the intensity).
- *  `size`/`core`/`enc` ride the cache SIGNATURE (they are per-frame globals) and
- *  together with R fix the core fraction, so the key stays (quantised colour, R). */
-function glowSpriteFor(r: number, g: number, b: number, R: number, unit: number, steepness: number, size: number, core: number, enc: number): HTMLCanvasElement | null {
-  if (R < 1) return null;
+/** Drop the sprite cache when any of the per-pass profile parameters moved
+ *  (a slider). Called ONCE per glow pass, before the per-agent loop — building
+ *  the signature string per agent per frame was a measurable share of the
+ *  loop at the ~10k-agent scale (a string alloc + compare per sprite lookup). */
+function syncGlowSpriteCache(unit: number, steepness: number, size: number, core: number, enc: number): void {
   const sig = `${unit}|${steepness}|${size}|${core}|${enc}`;
   if (sig !== glowSpriteSig) { GLOW_SPRITES.clear(); glowSpriteSig = sig; }
+}
+
+/** A 2R×2R halo sprite for a quantised colour. Null only when the
+ *  radius is degenerate. `unit` is the profile's peak (= the intensity).
+ *  `size`/`core`/`enc` ride the cache SIGNATURE (they are per-pass globals —
+ *  see syncGlowSpriteCache, which the caller runs first) and together with R
+ *  fix the core fraction, so the key stays (quantised colour, R). */
+function glowSpriteFor(r: number, g: number, b: number, R: number, unit: number, steepness: number, size: number, core: number, enc: number): HTMLCanvasElement | null {
+  if (R < 1) return null;
   const qr = r >> 3, qg = g >> 3, qb = b >> 3;
   const key = ((qr << 10) | (qg << 5) | qb) * 1024 + R;
   const cached = R <= GLOW_MAX_CACHED_R ? GLOW_SPRITES.get(key) : undefined;
@@ -348,21 +357,48 @@ function glowSpriteFor(r: number, g: number, b: number, R: number, unit: number,
   return cv;
 }
 
-/** The accumulation scratch. Two entries so the DISPLAY draw and a
- *  simulation-scope capture (renderSimulationFrame, a different size) can
- *  alternate every frame without reallocating. NOT `willReadFrequently` — it is
- *  never read back (that is the whole design; see glowTransferTable). */
-const GLOW_SCRATCH: { cv: HTMLCanvasElement; ctx: CanvasRenderingContext2D }[] = [];
+// --- The WebGL2 halo accumulator (glowGl.ts) — the PRIMARY 2D overlay path -----
+// One instanced draw for the whole population into an RGBA16F target + one
+// tonemap pass: the GPU pipeline's exact math on the overlay, at a cost that no
+// longer scales with N Canvas2D draw calls (see glowGl.ts for the measurements).
+// The Canvas2D sprite path below is the FALLBACK — no WebGL2, no renderable
+// float target, a lost context, or a per-frame render failure.
+let GLOW_GL: GlowGlHalo | null | undefined;   // undefined = not tried yet; null = unavailable this session
+let GLOW_GL_INST = new Float32Array(2048 * GLOW_GL_FLOATS);
+/** DEV/verification: force the Canvas2D fallback so the two paths can be
+ *  compared on the same frame (window.__glowForceCanvas). */
+let glowForceCanvas = false;
+/** DEV/verification: which path drew the last halo pass (window.__glowPath). */
+let glowLastPath: 'gl' | 'canvas' | 'none' = 'none';
+function glowGlHalo(): GlowGlHalo | null {
+  if (GLOW_GL === undefined) GLOW_GL = GlowGlHalo.create();
+  // A lost context stays lost for the session: fall back rather than re-create
+  // contexts in a loss loop (the sprite path is always available).
+  if (GLOW_GL && !GLOW_GL.alive) { GLOW_GL.destroy(); GLOW_GL = null; }
+  return GLOW_GL;
+}
+
+/** The accumulation scratch — ONE canvas, GROW-ONLY. It is sized from the
+ *  agents' screen bbox, and that bbox changes on almost every frame the agents
+ *  move (a one-pixel change in the extent is a new size), so the old exact-size
+ *  match policy meant a FRESH canvas — a new GPU-backed backing store, plus the
+ *  previous one left for the GC — on nearly every frame of a running model. Now
+ *  the scratch only ever grows to the largest extent it has been asked for (the
+ *  display bbox and a simulation-scope capture share it), and the pass clears,
+ *  draws and blits ONLY the bbox-sized region at its origin — pixels beyond it
+ *  are stale from an earlier, larger bbox and are never read. NOT
+ *  `willReadFrequently` — it is never read back (that is the whole design; see
+ *  glowTransferTable). */
+let GLOW_SCRATCH: { cv: HTMLCanvasElement; ctx: CanvasRenderingContext2D } | null = null;
 function glowScratchFor(w: number, h: number): { cv: HTMLCanvasElement; ctx: CanvasRenderingContext2D } | null {
-  for (const e of GLOW_SCRATCH) if (e.cv.width === w && e.cv.height === h) return e;
+  const cur = GLOW_SCRATCH;
+  if (cur && cur.cv.width >= w && cur.cv.height >= h) return cur;
   const cv = document.createElement('canvas');
-  cv.width = w; cv.height = h;
+  cv.width = Math.max(w, cur?.cv.width ?? 0); cv.height = Math.max(h, cur?.cv.height ?? 0);
   const ctx = cv.getContext('2d') as CanvasRenderingContext2D | null;
   if (!ctx) return null;
-  const e = { cv, ctx };
-  GLOW_SCRATCH.push(e);
-  while (GLOW_SCRATCH.length > 2) GLOW_SCRATCH.shift();
-  return e;
+  GLOW_SCRATCH = { cv, ctx };
+  return GLOW_SCRATCH;
 }
 
 /** The decode+tonemap transfer function, as an SVG filter applied on the BLIT of
@@ -439,16 +475,17 @@ function drawAgentGlow(
   ctx.save();
   if (haloOn) {
     const enc = glowEncodeScale(unit);
-    // Pass 0 — the agents' screen bounding box. The accumulation scratch and the
-    // tonemap loop are both sized from it, so a sparse or zoomed-in model pays
-    // only for the region its halos actually cover.
+    // Pass 0 — the agents' screen bounding box. The accumulation target (GL or
+    // scratch) and the blit are both sized from it, so a sparse or zoomed-in
+    // model pays only for the region its halos actually cover. One pixel of
+    // margin covers the GL quad's anti-aliasing pad and the sprite's rounding.
     let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
     for (const [tileOx, tileOy] of tiles) {
       for (let i = 0; i < hw; i++) {
         if (!aal[i]) continue;
         const c = i * 4;
         if ((acol[c + 3] ?? 255) <= 0) continue;
-        const R = Math.round(Math.max(1.2, ar[i]! * scale) + glow.size);
+        const R = Math.ceil(Math.max(1.2, ar[i]! * scale) + glow.size) + 1;
         if (R < 1) continue;
         const cx = tileOx + ax[i]! * scale, cy = tileOy + ay[i]! * scale;
         if (cx + R < 0 || cx - R > clipW || cy + R < 0 || cy - R > clipH) continue;
@@ -460,10 +497,60 @@ function drawAgentGlow(
     }
     const bx = Math.max(0, Math.floor(minX)), by = Math.max(0, Math.floor(minY));
     const boxW = Math.min(clipW, Math.ceil(maxX)) - bx, boxH = Math.min(clipH, Math.ceil(maxY)) - by;
-    const filter = boxW > 0 && boxH > 0 ? ensureGlowFilter(enc) : null;
+    let drawn = !(boxW > 0 && boxH > 0);   // nothing on screen ⇒ nothing to draw
+    if (!drawn) glowLastPath = 'none';
+    // Pass 1 (PRIMARY) — the WebGL2 accumulator: pack one instance per visible
+    // agent per tile (x, y relative to the bbox, exact outer radius, core
+    // fraction, colour, alpha) and let glowGl.ts do accumulate + tonemap in two
+    // draws. The blit onto the display is the SAME screen composite the sprite
+    // path uses. Any failure leaves `drawn` false and the sprite path runs.
+    if (!drawn && !glowForceCanvas) {
+      const glh = glowGlHalo();
+      if (glh) {
+        let n = 0; let buf = GLOW_GL_INST;
+        for (const [tileOx, tileOy] of tiles) {
+          for (let i = 0; i < hw; i++) {
+            if (!aal[i]) continue;
+            const c = i * 4;
+            const a = acol[c + 3] ?? 255;
+            if (a <= 0) continue;
+            const radPx = Math.max(1.2, ar[i]! * scale);
+            const R = radPx + glow.size;
+            const cx = tileOx + ax[i]! * scale;
+            const cy = tileOy + ay[i]! * scale;
+            if (cx + R < 0 || cx - R > clipW || cy + R < 0 || cy - R > clipH) continue;
+            if ((n + 1) * GLOW_GL_FLOATS > buf.length) {
+              const nb = new Float32Array(buf.length * 2); nb.set(buf); buf = GLOW_GL_INST = nb;
+            }
+            const o = n * GLOW_GL_FLOATS;
+            buf[o] = cx - bx; buf[o + 1] = cy - by;
+            buf[o + 2] = R; buf[o + 3] = glowCoreFrac(R, glow.size, core);
+            buf[o + 4] = acol[c]! / 255; buf[o + 5] = acol[c + 1]! / 255; buf[o + 6] = acol[c + 2]! / 255;
+            buf[o + 7] = a / 255;
+            n++;
+          }
+        }
+        if (n === 0) drawn = true;
+        else {
+          const res = glh.render(buf, n, boxW, boxH, unit, glow.steepness);
+          if (res) {
+            ctx.globalCompositeOperation = 'screen';
+            ctx.globalAlpha = 1;
+            ctx.drawImage(res.canvas, res.srcX, res.srcY, res.srcW, res.srcH, bx, by, boxW, boxH);
+            drawn = true;
+            glowLastPath = 'gl';
+          }
+        }
+      }
+    }
+    // Pass 1 (FALLBACK) — the Canvas2D sprite accumulator: the log-encoded
+    // screen accumulation + the transfer-filter tonemap (glowTone.ts).
+    const filter = !drawn ? ensureGlowFilter(enc) : null;
     if (filter) {
+      syncGlowSpriteCache(unit, glow.steepness, glow.size, core, enc);
       const scratch = glowScratchFor(boxW, boxH);
       if (scratch) {
+        glowLastPath = 'canvas';
         const s2 = scratch.ctx;
         // Pass 1 — accumulate, and NEVER read it back. 'screen' on premultiplied
         // colours is `c ← s + c - s·c` for the colour AND the alpha, so a sprite
@@ -471,10 +558,11 @@ function drawAgentGlow(
         // the hue in its (un-premultiplied) colour and the EXACT log-encoded halo
         // sum in its alpha. See glowTone.ts.
         s2.save();
-        s2.globalCompositeOperation = 'copy';   // clear + first write in one op
+        // The scratch is GROW-ONLY (glowScratchFor): clear exactly the bbox region
+        // this pass touches, and blit exactly that region below.
+        s2.globalCompositeOperation = 'source-over';
         s2.globalAlpha = 1;
-        s2.fillStyle = 'rgba(0,0,0,0)';
-        s2.fillRect(0, 0, boxW, boxH);
+        s2.clearRect(0, 0, boxW, boxH);
         s2.globalCompositeOperation = 'screen';
         let curAlpha = 1;
         for (const [tileOx, tileOy] of tiles) {
@@ -511,7 +599,7 @@ function drawAgentGlow(
         ctx.globalAlpha = 1;
         const prevFilter = ctx.filter;
         ctx.filter = filter;
-        ctx.drawImage(scratch.cv, bx, by);
+        ctx.drawImage(scratch.cv, 0, 0, boxW, boxH, bx, by, boxW, boxH);
         ctx.filter = prevFilter;
       }
     }
@@ -11161,6 +11249,10 @@ export function SimulatorView({ visible = true, activeTab = true, live = false, 
     // Bond-Graph Agents (PR5): the renderer's visible agent instance count, and a
     // headless agent pick (CSS px → engine slot id via instanceToSlot).
     W.__sim3dAgentCount = () => gl3dRef.current?.agentInstanceCount ?? -1;
+    // Agent glow (2D overlay): which halo path drew last, and a switch to force
+    // the Canvas2D fallback so both can be compared on one frame.
+    W.__glowPath = () => glowLastPath;
+    W.__glowForceCanvas = (v: boolean) => { glowForceCanvas = !!v; };
     W.__sim3dPickAgent = (px: number, py: number) => {
       const glc = glCanvasRef.current, snap = agentsRef.current;
       if (!gl3dRef.current || !glc || !snap) return -2;

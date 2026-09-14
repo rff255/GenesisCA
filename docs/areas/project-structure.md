@@ -120,6 +120,8 @@ genesis-ca/
 │   │   └── LiveViewportBar.module.css
 │   ├── simulator/
 │   │   ├── SimulatorView.tsx         # Canvas rendering, zoom/pan, brush tool
+│   │   ├── glowGl.ts                 # WebGL2 halo accumulator for the 2D agent glow on the CPU-overlay path (ONE instanced draw into RGBA16F + one tonemap pass; the Canvas2D sprite path in SimulatorView is its fallback)
+│   │   ├── glowTone.ts               # The ONE definition of the glow tonemap (GLOW_TONE_EXPOSURE, the CPU log-encoding scale + transfer table) imported by every glow path
 │   │   ├── simLayoutState.ts         # The `simLayoutApi` seam ({scheduleLayoutDraw, drawNow}) SimulatorView registers on mount — how the Live splitter, which lives outside its React tree, re-sizes the canvases without hitting the ResizeObserver-only path
 │   │   ├── simTransportState.ts      # The `simTransportApi` seam (stepGeneration / play / pause / stopTrace — the transport bar's OWN handlers, never copies) + the published `playing` mirror the Trace panel's one Resume/Pause button reads. Born with Rule Trace: `App` binds `]` / `[` and cannot reach a closure inside SimulatorView
 │   │   ├── ExperimentsPanel.tsx      # Overseer: the "Overseer Experiments" right-panel TAB (Run/Abort, Journal, Series table, CSV/JSON export) — one of the shared right panel's tabs (Controls | Overseer Experiments)

@@ -931,7 +931,7 @@ check('runtime: uploadAgentSoA seeds the agent colour buffer [invisible-agents b
   check('the CPU overlay tonemaps via the transfer filter, then blits with screen [glow-arch]',
     /ctx\.filter = filter;/.test(glow)
     && /ctx\.globalCompositeOperation = 'screen';/.test(glow)
-    && /ctx\.drawImage\(scratch\.cv, bx, by\);/.test(glow));
+    && /ctx\.drawImage\(scratch\.cv, 0, 0, boxW, boxH, bx, by, boxW, boxH\);/.test(glow));
   // The filter MUST declare sRGB: SVG filters default to linearRGB, which would
   // round-trip (and shift) every colour channel on the way through.
   check('the transfer filter pins sRGB interpolation [glow-arch]',
@@ -972,6 +972,67 @@ check('runtime: uploadAgentSoA seeds the agent colour buffer [invisible-agents b
   // would saturate the 8-bit buffer after two overlaps.
   check('the CPU encoding scale adapts to the intensity [glow-arch]',
     /return 0\.2 \/ Math\.max\(1e-3, Math\.max\(1, intensity\)\);/.test(readSrc('simulator/glowTone.ts')));
+}
+
+// ---------------------------------------------------------------------------
+// [glow-gl] THE WEBGL2 HALO ACCUMULATOR — the overlay's PRIMARY halo path
+// (src/simulator/glowGl.ts). User-reported: "the glow option ... might be slower
+// than necessary ... taking a big toll on performance". The sprite path above was
+// N Canvas2D drawImage calls per frame, each ~3-6 µs of dispatch regardless of
+// blend mode or sprite size: MEASURED 69.8 ms per redraw at 10 090 agents against
+// 1.8 ms with glow off. The accumulator draws the whole population as ONE
+// instanced draw into an RGBA16F target and tonemaps it once: 3.7 ms on the same
+// frame. It is the GPU pipeline's math on the overlay (additive, unclamped, into
+// float; Reinhard on the magnitude with the hue exact; the SAME exposure), and it
+// was verified against that formula at the pixel level (alpha within 1/255 along
+// the whole profile at three parameter sets). The sprite path is the FALLBACK
+// (no WebGL2 / no float target / lost context) and must survive verbatim — every
+// [glow-arch] anchor above still binds it.
+{
+  const gg = readSrc('simulator/glowGl.ts');
+  const sv = readSrc('simulator/SimulatorView.tsx');
+  const glow = blockAfter(sv, /function drawAgentGlow\([\s\S]{0,800}?\): void /);
+  check('the GL halo accumulates ADDITIVELY into an RGBA16F target [glow-gl]',
+    /gl\.blendFunc\(gl\.ONE, gl\.ONE\);/.test(gg)
+    && /gl\.texImage2D\(gl\.TEXTURE_2D, 0, gl\.RGBA16F, /.test(gg)
+    && /gl\.getExtension\('EXT_color_buffer_float'\)/.test(gg));
+  check('the GL halo FS is fsGlow (band remap, pow falloff, UNCLAMPED) [glow-gl]',
+    /float band = max\(1\.0e-4, 1\.0 - vCore\);/.test(gg)
+    && /float t = clamp\(\(1\.0 - d\) \/ band, 0\.0, 1\.0\);/.test(gg)
+    && /uIntensity \* pow\(t, max\(0\.01, uSteepness\)\)/.test(gg)
+    && /outColor = vec4\(vCol\.rgb \* g, g\);/.test(gg)
+    && !/clamp\(g,/.test(gg));
+  check('the GL tonemap is Reinhard on the MAGNITUDE, hue exact, at the SHARED exposure [glow-gl]',
+    /import \{ GLOW_TONE_EXPOSURE \} from '\.\/glowTone';/.test(gg)
+    && /vec3 hue = hdr\.rgb \/ mag;/.test(gg)
+    && /float t = x \/ \(1\.0 \+ x\);/.test(gg)
+    && /outColor = vec4\(clamp\(hue, 0\.0, 1\.0\) \* t, t\);/.test(gg)
+    && /gl\.uniform1f\(this\.uExposure, GLOW_TONE_EXPOSURE\);/.test(gg));
+  check('the GL path never reads back [glow-gl]',
+    !/readPixels/.test(gg) && !/getImageData/.test(gg));
+  check('the overlay tries the GL path FIRST and blits its region with SCREEN [glow-gl]',
+    /const glh = glowGlHalo\(\);/.test(glow)
+    && /ctx\.drawImage\(res\.canvas, res\.srcX, res\.srcY, res\.srcW, res\.srcH, bx, by, boxW, boxH\);/.test(glow)
+    && glow.indexOf("ctx.globalCompositeOperation = 'screen';") < glow.indexOf('ctx.drawImage(res.canvas'));
+  check('the Canvas2D sprite path survives as the FALLBACK, gated on the GL path not drawing [glow-gl]',
+    /const filter = !drawn \? ensureGlowFilter\(enc\) : null;/.test(glow)
+    && /if \(res\) \{[\s\S]{0,300}?drawn = true;/.test(glow));
+  check('a lost GL context falls back for the session instead of re-creating contexts [glow-gl]',
+    /if \(GLOW_GL && !GLOW_GL\.alive\) \{ GLOW_GL\.destroy\(\); GLOW_GL = null; \}/.test(sv)
+    && /webglcontextlost/.test(gg));
+  check('the GL instance stream carries the core fraction and the per-agent alpha [glow-gl]',
+    /buf\[o \+ 3\] = glowCoreFrac\(R, glow\.size, core\);/.test(glow)
+    && /buf\[o \+ 7\] = a \/ 255;/.test(glow)
+    && /\* vCol\.a;/.test(gg));
+  // The GL canvas + HDR target are grow-only with a slow decay: a per-frame
+  // re-creation would put a full backing-store allocation back on every frame
+  // (the very churn the Canvas2D scratch used to pay — see glowScratchFor).
+  check('the GL canvas is grow-only with a decay, never re-created per frame [glow-gl]',
+    /const SHRINK_EVERY = 240;/.test(gg)
+    && !/createElement\('canvas'\)/.test(blockAfter(gg, /render\(inst: Float32Array/))
+    // (NB glowScratchFor's RETURN TYPE is an object literal, so a bare blockAfter
+    // anchor would return that type instead of the body — test the file.)
+    && /if \(cur && cur\.cv\.width >= w && cur\.cv\.height >= h\) return cur;/.test(sv));
 }
 
 // ---------------------------------------------------------------------------

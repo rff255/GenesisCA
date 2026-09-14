@@ -4011,10 +4011,11 @@ export function HelpView() {
               halo and the core as two passes, and everywhere else (bonded graphs and
               tissues, metaballs, field-coupled models) the regular agent overlay
               draws the halo under the discs and bonds for the same result &mdash; both
-              accumulate and compress the same way, so the two paths look the same. It is a
-              per-agent drawing cost, so on very large populations expect a slower display
-              (measured ~30&nbsp;ms per frame at 10&nbsp;000 agents on the overlay path); the
-              simulation itself is unaffected.</li>
+              accumulate and compress the same way, so the two paths look the same. The overlay
+              accumulates every halo in a single GPU draw, so it stays cheap even on very large
+              populations (measured ~2&nbsp;ms extra per frame at 10&nbsp;000 agents); only a
+              browser without WebGL2 falls back to drawing each halo separately, which is
+              noticeably slower at that size. The simulation itself is unaffected either way.</li>
             <li><strong>Glow in 3D.</strong> The same option works in 3D, by a
               <em>different technique</em>: instead of a halo drawn around each agent it is a
               <strong>bloom</strong> &mdash; the agent layer is blurred and its light added back

@@ -1495,6 +1495,18 @@ export class Gl3DRenderer {
   private bloomDepth: WebGLRenderbuffer | null = null;   // level-0 depth (agent self-occlusion)
   private bloomW = 0; private bloomH = 0; private bloomLevels = 0;
   private bloomUnsupported = false;   // an incomplete FBO → glow quietly off
+  /** Uniform locations of the three bloom programs, resolved ONCE at compile —
+   *  the chain used to look every one of them up by name on every frame. */
+  private bloomU: {
+    dTex: WebGLUniformLocation | null; dHalf: WebGLUniformLocation | null;
+    uTex: WebGLUniformLocation | null; uPrev: WebGLUniformLocation | null; uHalf: WebGLUniformLocation | null; uSpread: WebGLUniformLocation | null;
+    cBloom: WebGLUniformLocation | null; cSrc: WebGLUniformLocation | null; cInt: WebGLUniformLocation | null; cCore: WebGLUniformLocation | null; cExp: WebGLUniformLocation | null;
+  } | null = null;
+  /** True once sortAgentsBackToFront has ordered the instance buffer for THIS
+   *  frame's camera; cleared at the top of render(). The bloom source pass
+   *  re-draws the agents with the SAME view, so under alpha blend it must not
+   *  sort (and re-upload) the whole buffer a second time. */
+  private agentsSortedThisFrame = false;
   private dpr = 1;                    // stashed by resize(), so Size is in CSS px like 2D
   private static readonly BLOOM_TEX_UNIT_A = 4;   // 0 atlas, 1 shadow, 2 field, 3 alpha field
   private static readonly BLOOM_TEX_UNIT_B = 5;
@@ -2086,6 +2098,15 @@ export class Gl3DRenderer {
         this.bloomUnsupported = true;
         return false;
       }
+      const d = this.bloomProgDown, u = this.bloomProgUp, c = this.bloomProgComposite;
+      this.bloomU = {
+        dTex: gl.getUniformLocation(d, 'uTex'), dHalf: gl.getUniformLocation(d, 'uHalfPixel'),
+        uTex: gl.getUniformLocation(u, 'uTex'), uPrev: gl.getUniformLocation(u, 'uPrev'),
+        uHalf: gl.getUniformLocation(u, 'uHalfPixel'), uSpread: gl.getUniformLocation(u, 'uSpread'),
+        cBloom: gl.getUniformLocation(c, 'uBloom'), cSrc: gl.getUniformLocation(c, 'uSrc'),
+        cInt: gl.getUniformLocation(c, 'uIntensity'), cCore: gl.getUniformLocation(c, 'uCore'),
+        cExp: gl.getUniformLocation(c, 'uExposure'),
+      };
       this.bloomVao = gl.createVertexArray()!;
       gl.bindVertexArray(this.bloomVao);
       gl.bindBuffer(gl.ARRAY_BUFFER, this.quadBuf);
@@ -2167,7 +2188,8 @@ export class Gl3DRenderer {
     // The sub-level offset makes the slider continuous between the power-of-two
     // level steps (the chain's reach is ~offset·2^levels px).
     const offset = Math.max(0.5, Math.min(1.5, reach / (1 << levels)));
-    if (!this.ensureBloomChain(w, h, levels)) return;
+    if (!this.ensureBloomChain(w, h, levels) || !this.bloomU) return;
+    const U = this.bloomU;
     // Falloff → the wide/tight mix of the upsample chain. Higher steepness =
     // less of the coarse (wide) content = a tighter halo. Matches the slider's
     // documented meaning ("higher = tighter, lower = softer spread").
@@ -2210,30 +2232,30 @@ export class Gl3DRenderer {
     const A = Gl3DRenderer.BLOOM_TEX_UNIT_A, B = Gl3DRenderer.BLOOM_TEX_UNIT_B;
     // down: level i-1 → level i
     gl.useProgram(this.bloomProgDown!);
-    gl.uniform1i(gl.getUniformLocation(this.bloomProgDown!, 'uTex'), A);
+    gl.uniform1i(U.dTex, A);
     for (let i = 1; i <= levels; i++) {
       const sw = Math.max(1, w >> (i - 1)), sh = Math.max(1, h >> (i - 1));
       gl.bindFramebuffer(gl.FRAMEBUFFER, this.bloomFbos[i]!);
       gl.viewport(0, 0, Math.max(1, w >> i), Math.max(1, h >> i));
       gl.activeTexture(gl.TEXTURE0 + A);
       gl.bindTexture(gl.TEXTURE_2D, this.bloomTexs[i - 1]!);
-      gl.uniform2f(gl.getUniformLocation(this.bloomProgDown!, 'uHalfPixel'), (0.5 / sw) * offset, (0.5 / sh) * offset);
+      gl.uniform2f(U.dHalf, (0.5 / sw) * offset, (0.5 / sh) * offset);
       gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
     }
     // up: level i+1 → level i, blended with the down level of that size
     let srcTex = this.bloomTexs[levels]!;
     if (levels > 1) {
       gl.useProgram(this.bloomProgUp!);
-      gl.uniform1i(gl.getUniformLocation(this.bloomProgUp!, 'uTex'), A);
-      gl.uniform1i(gl.getUniformLocation(this.bloomProgUp!, 'uPrev'), B);
-      gl.uniform1f(gl.getUniformLocation(this.bloomProgUp!, 'uSpread'), spread);
+      gl.uniform1i(U.uTex, A);
+      gl.uniform1i(U.uPrev, B);
+      gl.uniform1f(U.uSpread, spread);
       for (let i = levels - 1; i >= 1; i--) {
         const dw = Math.max(1, w >> i), dh = Math.max(1, h >> i);
         gl.bindFramebuffer(gl.FRAMEBUFFER, this.bloomUpFbos[i]!);
         gl.viewport(0, 0, dw, dh);
         gl.activeTexture(gl.TEXTURE0 + A); gl.bindTexture(gl.TEXTURE_2D, srcTex);
         gl.activeTexture(gl.TEXTURE0 + B); gl.bindTexture(gl.TEXTURE_2D, this.bloomTexs[i]!);
-        gl.uniform2f(gl.getUniformLocation(this.bloomProgUp!, 'uHalfPixel'), (0.5 / dw) * offset, (0.5 / dh) * offset);
+        gl.uniform2f(U.uHalf, (0.5 / dw) * offset, (0.5 / dh) * offset);
         gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
         srcTex = this.bloomUpTexs[i]!;
       }
@@ -2245,11 +2267,11 @@ export class Gl3DRenderer {
     gl.useProgram(this.bloomProgComposite!);
     gl.activeTexture(gl.TEXTURE0 + A); gl.bindTexture(gl.TEXTURE_2D, srcTex);
     gl.activeTexture(gl.TEXTURE0 + B); gl.bindTexture(gl.TEXTURE_2D, this.bloomTexs[0]!);
-    gl.uniform1i(gl.getUniformLocation(this.bloomProgComposite!, 'uBloom'), A);
-    gl.uniform1i(gl.getUniformLocation(this.bloomProgComposite!, 'uSrc'), B);
-    gl.uniform1f(gl.getUniformLocation(this.bloomProgComposite!, 'uIntensity'), this.glow.intensity);
-    gl.uniform1f(gl.getUniformLocation(this.bloomProgComposite!, 'uCore'), Math.max(0, Math.min(1, this.glow.core)));
-    gl.uniform1f(gl.getUniformLocation(this.bloomProgComposite!, 'uExposure'), GLOW_TONE_EXPOSURE);
+    gl.uniform1i(U.cBloom, A);
+    gl.uniform1i(U.cSrc, B);
+    gl.uniform1f(U.cInt, this.glow.intensity);
+    gl.uniform1f(U.cCore, Math.max(0, Math.min(1, this.glow.core)));
+    gl.uniform1f(U.cExp, GLOW_TONE_EXPOSURE);
     gl.enable(gl.BLEND);
     gl.blendFunc(gl.ONE, gl.ONE);   // add light; nothing below can get darker
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
@@ -2592,7 +2614,9 @@ export class Gl3DRenderer {
     gl.bindVertexArray(this.sphereVao);
     this.setSphereUniforms(gl, this.sphereProg);
     if (this.agentAlphaBlend) {
-      this.sortAgentsBackToFront();
+      // Once per frame: the bloom source pass (renderAgentBloom) re-draws the
+      // agents with the same camera, and the buffer is already in order.
+      if (!this.agentsSortedThisFrame) { this.sortAgentsBackToFront(); this.agentsSortedThisFrame = true; }
       gl.enable(gl.BLEND);
       gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
       gl.depthMask(false);
@@ -2971,6 +2995,7 @@ export class Gl3DRenderer {
 
   render(): void {
     const gl = this.gl;
+    this.agentsSortedThisFrame = false;   // a new frame may carry a new camera
     // Phase C: agent 3D free-mode direct render — the worker's WGSL sphere pass
     // draws the agents into a sibling canvas UNDER this one, so gl3d renders ONLY
     // the overlays over a TRANSPARENT clear (no voxels/agents/bonds/metaballs/

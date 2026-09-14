@@ -1824,6 +1824,7 @@ export interface AgentRenderSurface {
   bloom3dUpTexs?: (GPUTexture | null)[];
   bloom3dUpViews?: (GPUTextureView | null)[];
   bloom3dSrcDepthTex?: GPUTexture | null;
+  bloom3dSrcDepthView?: GPUTextureView | null;   // created with the texture, not per present
   bloom3dDownBGs?: (GPUBindGroup | null)[];
   bloom3dUpBGs?: (GPUBindGroup | null)[];
   bloom3dCompositeBG?: GPUBindGroup | null;
@@ -2833,12 +2834,14 @@ function encodeGlowHdrPass(rt: AgentRenderSurface, enc: GPUCommandEncoder, w: nu
  *  it dissolves the solid DISC — per-agent geometry a screen-space bloom mask has no
  *  analogue for, so a negative behaves as 0 (bodies bloom fully), exactly as gl3d's
  *  uCore does. The panel's slider stops at 0 in 3D so no half of it is inert. */
+const BLOOM3D_PARAMS_SCRATCH = new Float32Array(BLOOM3D_PARAMS_BYTES / 4);
 function writeBloom3DParams(rt: AgentRenderSurface, offset: number, spread: number, intensity: number, core: number): void {
   if (!rt.bloom3dParamBuf) return;
-  const ab = new ArrayBuffer(BLOOM3D_PARAMS_BYTES);
-  const f = new Float32Array(ab);
+  // One module-level scratch: writeBuffer copies synchronously, so it is safe to
+  // reuse across presents (no per-present ArrayBuffer).
+  const f = BLOOM3D_PARAMS_SCRATCH;
   f[0] = offset; f[1] = spread; f[2] = intensity; f[3] = core;
-  rt.device.queue.writeBuffer(rt.bloom3dParamBuf, 0, ab);
+  rt.device.queue.writeBuffer(rt.bloom3dParamBuf, 0, f.buffer, 0, BLOOM3D_PARAMS_BYTES);
 }
 
 /** Free the canvas-sized bloom level chain (textures + their bind groups). The
@@ -2851,7 +2854,7 @@ function destroyBloom3DChain(rt: AgentRenderSurface): void {
   if (rt.bloom3dSrcDepthTex) { try { rt.bloom3dSrcDepthTex.destroy(); } catch { /* non-fatal */ } }
   rt.bloom3dTexs = []; rt.bloom3dViews = [];
   rt.bloom3dUpTexs = []; rt.bloom3dUpViews = [];
-  rt.bloom3dSrcDepthTex = null;
+  rt.bloom3dSrcDepthTex = null; rt.bloom3dSrcDepthView = null;
   rt.bloom3dDownBGs = []; rt.bloom3dUpBGs = []; rt.bloom3dCompositeBG = null;
   rt.bloom3dW = 0; rt.bloom3dH = 0; rt.bloom3dLevels = 0;
 }
@@ -2931,7 +2934,7 @@ function ensureBloom3DChain(rt: AgentRenderSurface, w: number, h: number, levels
     const compositeBG = bg(finalView, views[0]!);
     rt.bloom3dTexs = texs; rt.bloom3dViews = views;
     rt.bloom3dUpTexs = upTexs; rt.bloom3dUpViews = upViews;
-    rt.bloom3dSrcDepthTex = depth;
+    rt.bloom3dSrcDepthTex = depth; rt.bloom3dSrcDepthView = depth.createView();
     rt.bloom3dDownBGs = downBGs; rt.bloom3dUpBGs = upBGs; rt.bloom3dCompositeBG = compositeBG;
     rt.bloom3dW = w; rt.bloom3dH = h; rt.bloom3dLevels = levels;
     return true;
@@ -2978,7 +2981,7 @@ function encodeBloom3DChain(rt: AgentRenderSurface, enc: GPUCommandEncoder, w: n
     const p = enc.beginRenderPass({
       label: 'agent-bloom3d-source',
       colorAttachments: [{ view: rt.bloom3dViews![0]!, loadOp: 'clear', storeOp: 'store', clearValue: { r: 0, g: 0, b: 0, a: 0 } }],
-      depthStencilAttachment: { view: rt.bloom3dSrcDepthTex!.createView(), depthClearValue: 1.0, depthLoadOp: 'clear', depthStoreOp: 'discard' },
+      depthStencilAttachment: { view: rt.bloom3dSrcDepthView!, depthClearValue: 1.0, depthLoadOp: 'clear', depthStoreOp: 'discard' },
     });
     p.setPipeline(rt.bloom3dSpherePipeline!);
     p.setBindGroup(0, rt.renderSphereBindGroup!);
