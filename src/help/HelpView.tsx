@@ -1054,7 +1054,7 @@ export function HelpView() {
 
           <h3 className={styles.h3}>Canvas Controls</h3>
           <ul className={styles.list}>
-            <li><strong>Right-click drag</strong> &mdash; Pan the canvas (works anywhere, including over edges, nodes, and group bodies).</li>
+            <li><strong>Right-click drag</strong> &mdash; Pan the canvas (works anywhere, including over edges, nodes, and group bodies &mdash; and <strong>while you are dragging a wire</strong>: keep the left button held, zoom out with the wheel, right-drag to the far node, then release on its port; no menu opens for that right button).</li>
             <li><strong>Scroll wheel</strong> &mdash; Zoom in/out.</li>
             <li><strong>Left-click drag</strong> (on empty area) &mdash; Box select nodes.</li>
             <li><strong>Left-click drag</strong> (on node) &mdash; Move node.</li>

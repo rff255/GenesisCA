@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Connection-drag pan — right-drag while a wire is held</title>
+<style>
+  :root{ --bg:#0c0d10; --panel:#14161b; --line:#2a2f3a; --ink:#e6e9ef; --dim:#8f9bb0; --accent:#e8a13a; --val:#4cc9f0; --flow:#66bb6a; --bad:#e05252; --ok:#4caf50; }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif}
+  .wrap{max-width:1080px;margin:0 auto;padding:40px 28px 80px}
+  h1{font-size:1.7rem;margin:0 0 6px} h2{font-size:1.05rem;margin:44px 0 14px;padding-bottom:7px;border-bottom:1px solid var(--line);color:var(--accent);text-transform:uppercase;letter-spacing:.02em}
+  .sub{color:var(--dim);margin:0 0 8px}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:18px 20px;margin:16px 0}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:16px} @media (max-width:820px){.grid2{grid-template-columns:1fr}}
+  .tag{display:inline-block;font-size:.68rem;letter-spacing:.06em;text-transform:uppercase;padding:2px 8px;border-radius:999px;border:1px solid var(--line);color:var(--dim);margin-bottom:10px}
+  .tag.before{border-color:#4a3a3a;color:#c98a8a} .tag.after{border-color:#3a4a3a;color:#8ac98a}
+  code{background:#0a0b0e;border:1px solid var(--line);border-radius:4px;padding:1px 5px;font-size:.86em}
+  table{border-collapse:collapse;width:100%;font-size:.9rem} th,td{border:1px solid var(--line);padding:7px 10px;text-align:left;vertical-align:top} th{color:var(--dim);font-weight:600}
+  svg text{font:12px -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;fill:var(--ink)}
+  .step{display:flex;gap:12px;align-items:flex-start;margin:8px 0} .n{flex:0 0 26px;height:26px;border-radius:50%;background:var(--accent);color:#000;font-weight:700;display:flex;align-items:center;justify-content:center}
+</style>
+</head>
+<body><div class="wrap">
+<h1>Right-drag to pan <em>while</em> a wire is held</h1>
+<p class="sub">Connect two nodes that are far apart without letting go of the wire. Editor layer only; the compilers are untouched.</p>
+
+<h2>1 · The gesture, step by step</h2>
+<div class="card">
+  <div class="step"><div class="n">1</div><div><strong>LMB-press an output port</strong> — the wire follows the cursor (unchanged).</div></div>
+  <div class="step"><div class="n">2</div><div><strong>Wheel</strong> — zoom out to see where you are going (unchanged; already worked).</div></div>
+  <div class="step"><div class="n">3</div><div><strong>RMB-press and drag</strong> — the canvas <strong>pans</strong> by the pointer delta. The wire keeps following the cursor. <span class="tag after">new</span></div></div>
+  <div class="step"><div class="n">4</div><div><strong>RMB-release</strong> — <strong>nothing happens</strong>: no context menu, the wire is still held. <span class="tag after">new</span></div></div>
+  <div class="step"><div class="n">5</div><div><strong>LMB-release on the consumer port</strong> — the connection is made (unchanged). On empty canvas instead → the connection-drop menu (Reroute / add-and-connect), unchanged.</div></div>
+</div>
+
+<h2>2 · Before / after</h2>
+<div class="grid2">
+  <div class="card"><span class="tag before">before</span>
+    <svg viewBox="0 0 460 210" width="100%" height="210" aria-label="before">
+      <rect x="10" y="60" width="120" height="50" rx="6" fill="#1a1d24" stroke="#b71c1c"/><text x="22" y="90">Get Attribute</text>
+      <circle cx="130" cy="85" r="5" fill="#4cc9f0" stroke="#0d47a1" stroke-width="2"/>
+      <path d="M130 85 C 200 85, 220 140, 250 140" fill="none" stroke="#4cc9f0" stroke-width="2" stroke-dasharray="6 4"/>
+      <text x="255" y="144" fill="#8f9bb0">cursor</text>
+      <rect x="300" y="120" width="150" height="70" rx="6" fill="#1a1d24" stroke="#e05252"/>
+      <text x="312" y="142">Paste</text><text x="312" y="160">Add Comment</text><text x="312" y="178">Add Group …</text>
+      <text x="20" y="30" fill="#c98a8a">RMB press: no pan — a menu opens and the wire is DROPPED</text>
+    </svg>
+  </div>
+  <div class="card"><span class="tag after">after</span>
+    <svg viewBox="0 0 460 210" width="100%" height="210" aria-label="after">
+      <rect x="10" y="60" width="120" height="50" rx="6" fill="#1a1d24" stroke="#b71c1c" opacity=".55"/><text x="22" y="90" opacity=".55">Get Attribute</text>
+      <circle cx="130" cy="85" r="5" fill="#4cc9f0" stroke="#0d47a1" stroke-width="2"/>
+      <path d="M130 85 C 240 85, 260 120, 330 120" fill="none" stroke="#4cc9f0" stroke-width="2" stroke-dasharray="6 4"/>
+      <rect x="330" y="95" width="120" height="50" rx="6" fill="#1a1d24" stroke="#4a148c"/><text x="342" y="125">Set Attribute</text>
+      <circle cx="330" cy="120" r="5" fill="#4cc9f0" stroke="#0d47a1" stroke-width="2"/>
+      <path d="M60 170 l 120 0" stroke="#e8a13a" stroke-width="2" marker-end="url(#a)"/><text x="60" y="192" fill="#8f9bb0">RMB-drag: the canvas slides under the held wire</text>
+      <defs><marker id="a" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M0 0 L10 5 L0 10 z" fill="#e8a13a"/></marker></defs>
+      <text x="20" y="30" fill="#8ac98a">RMB press: pans — no menu — the wire survives the release</text>
+    </svg>
+  </div>
+</div>
+
+<h2>3 · Why React Flow could not do it, and where the fix sits</h2>
+<div class="card">
+  <svg viewBox="0 0 900 250" width="100%" height="250" aria-label="event flow">
+    <rect x="10" y="20" width="200" height="44" rx="6" fill="#1a1d24" stroke="#2a2f3a"/><text x="22" y="47">RMB mousedown (a CHORD)</text>
+    <rect x="260" y="20" width="240" height="44" rx="6" fill="#1a1d24" stroke="#e8a13a"/><text x="272" y="47">editor wrapper · capture</text>
+    <rect x="560" y="20" width="320" height="44" rx="6" fill="#1a1d24" stroke="#4a3a3a"/><text x="572" y="47" fill="#c98a8a">d3-zoom: filter says NO while connecting</text>
+    <path d="M210 42 L258 42" stroke="#8f9bb0" marker-end="url(#b)"/><path d="M500 42 L558 42" stroke="#8f9bb0" stroke-dasharray="4 3" marker-end="url(#b)"/><text x="505" y="36" fill="#8f9bb0" font-size="11">stopped</text>
+    <rect x="260" y="100" width="240" height="44" rx="6" fill="#1a1d24" stroke="#e8a13a"/><text x="272" y="127">document mousemove · panBy(Δ)</text>
+    <rect x="560" y="100" width="320" height="44" rx="6" fill="#1a1d24" stroke="#4caf50"/><text x="572" y="127" fill="#8ac98a">XYHandle mousemove: wire follows</text>
+    <path d="M380 64 L380 98" stroke="#8f9bb0" marker-end="url(#b)"/><path d="M500 122 L558 122" stroke="#8f9bb0" marker-end="url(#b)"/><text x="505" y="116" fill="#8f9bb0" font-size="11">both run</text>
+    <rect x="260" y="180" width="240" height="44" rx="6" fill="#1a1d24" stroke="#e8a13a"/><text x="272" y="207">RMB mouseup · capture · stop</text>
+    <rect x="560" y="180" width="320" height="44" rx="6" fill="#1a1d24" stroke="#4a3a3a"/><text x="572" y="207" fill="#c98a8a">XYHandle mouseup (ANY button ends the wire)</text>
+    <path d="M380 144 L380 178" stroke="#8f9bb0" marker-end="url(#b)"/><path d="M500 202 L558 202" stroke="#8f9bb0" stroke-dasharray="4 3" marker-end="url(#b)"/><text x="505" y="196" fill="#8f9bb0" font-size="11">never reached</text>
+    <text x="10" y="240" fill="#8f9bb0">contextmenu → wrapper capture → preventDefault + stopPropagation while a wire is held (or armed by the press).</text>
+    <defs><marker id="b" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0 L10 5 L0 10 z" fill="#8f9bb0"/></marker></defs>
+  </svg>
+  <p>Mouse events, not pointer events: a second button pressed while the first is held fires <strong>no</strong> <code>pointerdown</code> / <code>pointerup</code> (only a <code>pointermove</code> whose <code>button</code> names it), while the compatibility <code>mousedown</code> / <code>mouseup</code> fire per button — which is also what XYHandle listens to.</p>
+</div>
+
+<h2>4 · What does not change</h2>
+<table>
+  <tr><th>gesture</th><th>before</th><th>after</th></tr>
+  <tr><td>RMB-drag with no wire held</td><td>pans (d3)</td><td>pans (d3) — the wrapper handler returns early</td></tr>
+  <tr><td>RMB-click with no wire held</td><td>context menu</td><td>context menu</td></tr>
+  <tr><td>LMB-release on a port</td><td>connects</td><td>connects</td></tr>
+  <tr><td>LMB-release on the canvas</td><td>connection-drop menu</td><td>connection-drop menu</td></tr>
+  <tr><td>wheel while a wire is held</td><td>zooms</td><td>zooms</td></tr>
+  <tr><td>edge auto-pan near the canvas edge while a wire is held</td><td>pans</td><td>pans — and composes with the right-drag (both are deltas)</td></tr>
+</table>
+</div></body></html>

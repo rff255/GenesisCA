@@ -2427,6 +2427,80 @@ export function GraphEditorInner() {
   // anywhere outside the menu, without preventDefault/stopPropagation so the
   // press still starts the drag/selection normally. The inside-menu guard
   // lets a menu item's own onClick run before the menu unmounts.
+  // CONNECTION-DRAG PAN — while a wire is being dragged (LMB held from a port),
+  // a RIGHT-button drag pans the canvas, and the right button opens NO context
+  // menu. The user's case: connect two nodes that are far apart — start the
+  // wire, zoom out (already possible: the wheel is let through), right-drag to
+  // the consumer, release LMB on its port.
+  //
+  // Why React Flow does not do this itself: its pan/zoom FILTER refuses every
+  // non-wheel event while `connectionInProgress` (a d3-zoom gesture never
+  // starts), so the RMB press fell through to `contextmenu` and opened our menu
+  // instead — and the menu is pointless there, the connection-drop menu already
+  // offers Reroute / add-and-connect on a canvas release.
+  //
+  // ⚠ MOUSE events, not pointer events. A second button pressed while the first
+  // is held is a CHORD: the Pointer Events spec fires NO `pointerdown` /
+  // `pointerup` for it (only a `pointermove` with `button` set), while the
+  // compatibility `mousedown` / `mouseup` DO fire per button. XYHandle itself
+  // tracks the wire on `document` `mousemove` / `mouseup` for the same reason.
+  //
+  // ⚠ XYHandle ends the connection on ANY document `mouseup` — it never looks at
+  // `event.button` — so the right button's release is swallowed at document
+  // CAPTURE while a wire is held (stopPropagation there keeps the event from
+  // ever reaching XYHandle's bubble-phase listener); the left button's release
+  // is untouched and completes the connection exactly as before. The pan is
+  // `panBy` per move (a delta), so React Flow's own edge auto-pan composes with
+  // it instead of fighting a re-based viewport.
+  useEffect(() => {
+    const wrapper = editorWrapperRef.current;
+    if (!wrapper) return;
+    const store = rfStore;
+    let pan: { x: number; y: number } | null = null;
+    // Set on the right button's press during a wire drag, consumed by the
+    // `contextmenu` that follows its release (Windows fires it on mouseup). A
+    // stale flag — the release happened outside the wrapper — is cleared by the
+    // next press, so it can never swallow an unrelated menu later.
+    let suppressMenu = false;
+    const onMouseDown = (e: MouseEvent) => {
+      if (e.button !== 2) { return; }
+      if (!isConnectingGlobal) { suppressMenu = false; return; }
+      pan = { x: e.clientX, y: e.clientY };
+      suppressMenu = true;
+      e.stopPropagation();
+    };
+    const onMouseMove = (e: MouseEvent) => {
+      if (!pan) return;
+      const dx = e.clientX - pan.x;
+      const dy = e.clientY - pan.y;
+      pan = { x: e.clientX, y: e.clientY };
+      if (dx !== 0 || dy !== 0) store.getState().panBy({ x: dx, y: dy });
+    };
+    const onMouseUp = (e: MouseEvent) => {
+      if (e.button !== 2) return;
+      const wasPanning = pan !== null;
+      pan = null;
+      // While the wire is still held, XYHandle must not see this release.
+      if (wasPanning || isConnectingGlobal) e.stopPropagation();
+    };
+    const onContextMenu = (e: MouseEvent) => {
+      if (!suppressMenu && !isConnectingGlobal) return;
+      suppressMenu = false;
+      e.preventDefault();
+      e.stopPropagation();
+    };
+    wrapper.addEventListener('mousedown', onMouseDown, true);
+    wrapper.addEventListener('contextmenu', onContextMenu, true);
+    document.addEventListener('mousemove', onMouseMove, true);
+    document.addEventListener('mouseup', onMouseUp, true);
+    return () => {
+      wrapper.removeEventListener('mousedown', onMouseDown, true);
+      wrapper.removeEventListener('contextmenu', onContextMenu, true);
+      document.removeEventListener('mousemove', onMouseMove, true);
+      document.removeEventListener('mouseup', onMouseUp, true);
+    };
+  }, [rfStore]);
+
   useEffect(() => {
     const onDown = (e: PointerEvent) => {
       if (!contextMenuRef.current) return;
