@@ -27,6 +27,7 @@
 - RULE TRACE — what the editor owns (2026-09-12) → [`rule-trace.md`](rule-trace.md)
 - Auto-layout (Organize) — the context-menu re-layout (2026-09-13)
 - Hover highlight — the node, its wires, its neighbours (2026-09-13)
+- Canvas performance — what keeps a large graph responsive (2026-09-14)
 
 ---
 
@@ -880,3 +881,103 @@ cost of the writer itself: `__hoverPerf` max 0.7-1.0 ms on Game of Life and Accr
   checks these sources out as CRLF while the harness is written with `\n` — every anchor is translated to
   the working tree's EOL before matching. A control whose anchor no longer exists reports itself as
   "anchor GONE" rather than passing quietly.
+
+---
+
+## Canvas performance — what keeps a large graph responsive (2026-09-14)
+
+A systematic review of the graph canvas on a large rule, prompted by the user's report that *larger
+rules with many nodes and links* feel sluggish. Measured on a synthetic 455-node / 445-edge graph
+(Amphiphile's step graph tiled 5×) and on the real 91-node Amphiphile, in the dev build and in a
+production build. Regression net: [scripts/verify-canvas-perf.mjs](scripts/verify-canvas-perf.mjs).
+
+### The finding: one inline literal on `<ReactFlow>` re-rendered every wire on every tick
+
+`GraphEditorInner` re-renders on **every** drag tick, selection change and write-back — `nodes` /
+`edges` are its state, and that is how a controlled React Flow works. Two things turned each of those
+renders into a full re-render of all N `EdgeWrapper`s:
+
+- **React Flow copies a fixed list of props into its zustand store by IDENTITY** (`reactFlowFieldsToTrack`
+  in `@xyflow/react`: `defaultEdgeOptions`, `snapGrid`, `onMove`, `onNodeDragStart`, `isValidConnection`,
+  …). `StoreUpdater` runs `store.setState({ field })` for each prop whose reference changed, and **every
+  `EdgeWrapper` subscribes to `defaultEdgeOptions`** (`useStore(s => s.defaultEdgeOptions)`), so an inline
+  `defaultEdgeOptions={{ … }}` literal re-rendered all 445 edges on every GraphEditorInner render.
+- **`EdgeRenderer` is `memo`'d on its callback props**, so an inline `onEdgeDoubleClick={(…) => …}` arrow
+  missed that memo and every `EdgeWrapper` below it a second time.
+
+Measured with a render counter patched into the pre-bundled dependency: **4 EdgeWrapper renders per
+edge per drag tick** (2 real × StrictMode's double invoke) = 1780 per tick, ~65–75 ms of React work per
+pass in dev. Every other cost on the tick was small (the moved node's own wrapper, the two edges that
+touch it, the MiniMap, the connected-handles/hazards `useLayoutEffect` at ~1.2 ms, the align-guide
+overlay). CaNodes did **not** re-render on a tick (the `memo` comparator holds; `__caNodeRenders` = 0).
+
+**The fix is identity, nothing else**: the five `RF_*` module constants (`RF_DEFAULT_EDGE_OPTIONS`,
+`RF_SNAP_GRID`, `RF_PAN_ON_DRAG`, `RF_DELETE_KEY_CODES`, `RF_PRO_OPTIONS`) and four `useCallback`s
+(`onRfInit`, `onRfMouseMove`, `onRfMove`, `onEdgeDoubleClick`) replaced the inline literals and arrows.
+No behaviour changed — same values, same handlers. Alongside it, `setConnectedHandlesFromEdges`
+(graphState.ts) now notifies its N subscribers only when some node's set actually changed (a drag tick
+produces an equal set; the per-node Set identity was already reused, so the notify was pure overhead).
+
+| 455 nodes / 445 edges | before | after |
+|---|---|---|
+| drag tick, React work, **prod** (p50 / p90) | 35 / 47 ms | **6.7 / 13 ms** |
+| select / deselect a node, **prod** | 27–37 ms | **6–7 ms** |
+| drag tick, dev (StrictMode) | 70–150 ms | 12–18 ms |
+| EdgeWrapper renders per tick, dev | 1780 | 6 (the moved node's wires) |
+
+### What is NOT changed, and why (read before "optimising" further)
+
+- **The write-back after an edit is unchanged** (~270 ms of work at 455 nodes in prod, ~50 ms at 91;
+  the 100 ms `SYNC_DEBOUNCE_MS` on top). It is two things, both by design: (1) **every CaNode re-renders
+  on a model change** — `useModel()` is a context, and CaNode's badge memo deliberately depends on
+  `model.graphNodes` because `resolveEngines` re-picks `Auto` as the graph is edited (the C4 rule) and
+  the macro link-count reads the graph too. A selective "model view" context that skips graph-only
+  changes would have to reproduce exactly those graph-derived facts (resolved engine, macro census,
+  agent-init cone) or badges go stale; judged not worth the risk. (2) **`SimulatorView`'s
+  `[model, compileModel]` effect compiles on the main thread on every model change even while the
+  Simulator is hidden** (JS ~100 ms + WASM ~100 ms at 455 nodes; ~20–40 ms at 91) — deferring that to
+  visibility is a simulator-lifecycle change (`appliedModelRef`, Live's on-demand policy), owned by
+  [`simulator-ui.md`](simulator-ui.md), and was left alone.
+- **`onlyRenderVisibleElements` was rejected.** It would leave off-screen nodes unmeasured: `nodeSize`'s
+  200×100 fallback would drive group membership and Organize's measurement gate, and the box-select
+  DOM-rect re-verification (`wrapper.querySelector(...)` returning null ⇒ `hit = false`) would DESELECT
+  any node the rubber band reached off-screen. Not a safe switch.
+- **Paint-side CSS was left as is** (the four `drop-shadow` filters on every flow-port triangle, the
+  port-label text-shadow halo, the per-node `box-shadow`). They are the node's visual identity and were
+  measured into place; an occluded Browser pane cannot measure paint at all (see the recipe), so no
+  claim about them is made here.
+- The hazards `useLayoutEffect([edges, nodes])` still runs on every tick (~1.2 ms at 445 edges). Its
+  `[nodes]` dep is load-bearing (a Morph changes a node's TYPE with the edges untouched); not worth a
+  type-signature cache.
+
+### Measuring it (the recipe that works — and the three traps)
+
+- **The React Flow store**: walk the fiber from `.react-flow` up to the zustand provider
+  (`memoizedProps.value.getState()`), then `triggerNodeChanges([{ type: 'position', id, position, dragging:
+  true }])` is a real drag tick through `handleNodesChange` (React Flow ignores synthetic pointer events;
+  this does not need them). `{ type: 'select' }` is a real selection change; `dragging: false` at a new
+  position is a real drag end → write-back.
+- **Cost of a tick** = poll a `MessageChannel` until the node's `style.transform` shows the new position
+  (React's scheduler yields through the same channel, so the poll interleaves); then one
+  `getBoundingClientRect()` forces style+layout and times it. `window.__caNodeRenders` (DEV, CaNode.tsx)
+  counts CaNode render passes; in dev the fiber tree's `actualDuration` names everything else.
+- ⚠ **An occluded Browser pane throttles `requestAnimationFrame` to ~1 Hz**, so frame-interval timing
+  is meaningless there, **Long Animation Frame durations are inflated** (a "frame" spans a whole second
+  of tasks — only `scripts[].duration` is trustworthy), and **a graph loaded in a background tab is never
+  measured** (React Flow's ResizeObserver does not fire ⇒ `measured` stays empty ⇒ **0 edges render**),
+  so front the tab and check `.react-flow__edge` count before trusting a number.
+- ⚠ Editing `GraphEditor.tsx` in two steps under HMR (the JSX first, the callback second) white-screens
+  the editor between the saves (`onRfInit is not defined`) and the app reloads to the Library — save the
+  callbacks first.
+
+### What will bite you
+
+- Any new `<ReactFlow>` prop written as `{{ … }}`, `{[ … ]}` or `{(…) => …}` re-introduces the storm; the
+  harness's section A fails on it. Put constants at module scope next to the `RF_*` block and handlers in
+  `useCallback` next to `onRfMove`.
+- A `useCallback` whose deps include `nodes` / `edges` and that is passed to `<ReactFlow>` is the same
+  bug wearing a different hat (a new identity per tick). `isValidConnection` depends on `model` on
+  purpose (a vector attribute pick changes port types) — that changes per write-back, not per tick.
+- A new graphState pub/sub must notify only on a real change and keep snapshot identity for unchanged
+  keys (`setConnectedHandlesFromEdges` / `setConnectionHazards` are the pattern); `useSyncExternalStore`
+  subscribers re-read on every notify.

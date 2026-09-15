@@ -502,6 +502,11 @@ export function setConnectedHandlesFromEdges(
     add(e.source, e.sourceHandle);
   }
   const next = new Map<string, ReadonlySet<string>>();
+  // CANVAS PERF — the caller runs on EVERY node/edge change (a drag tick
+  // included), so notify only when some node's set actually changed. A
+  // subscriber only ever re-reads its own snapshot on notify, so a no-change
+  // notify is pure overhead (N `getSnapshot` calls per tick, N = node count).
+  let changed = grouped.size !== connectedHandlesMap.size;
   for (const [nodeId, nextSet] of grouped) {
     const prevSet = connectedHandlesMap.get(nodeId);
     if (prevSet && prevSet.size === nextSet.size) {
@@ -511,10 +516,11 @@ export function setConnectedHandlesFromEdges(
       }
       if (same) { next.set(nodeId, prevSet); continue; }
     }
+    changed = true;
     next.set(nodeId, nextSet);
   }
   connectedHandlesMap = next;
-  connectedHandlesListeners.forEach(fn => fn());
+  if (changed) connectedHandlesListeners.forEach(fn => fn());
 }
 
 // ---------------------------------------------------------------------------

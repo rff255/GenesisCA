@@ -134,6 +134,33 @@ const nodeTypes: NodeTypes = {
 };
 
 // ---------------------------------------------------------------------------
+// CANVAS PERF — the `<ReactFlow>` props below MUST keep a STABLE identity.
+//
+// `GraphEditorInner` re-renders on every drag tick, every selection change and
+// every write-back (`nodes` / `edges` are its state). React Flow's
+// `StoreUpdater` copies a fixed list of props into its zustand store whenever
+// their IDENTITY changes (`defaultEdgeOptions`, `snapGrid`, `onMove`, …), and
+// EVERY `EdgeWrapper` subscribes to `defaultEdgeOptions` — so an inline object
+// literal here re-rendered all N edges on every tick. The `EdgeRenderer` is
+// likewise `memo`'d on its callback props, so an inline `onEdgeDoubleClick`
+// arrow made it (and every edge below it) miss the memo a second time. Measured
+// on a 455-node / 445-edge graph: 4 EdgeWrapper renders per edge per drag tick
+// (2 real × StrictMode), ~130 ms of React work per tick in dev, all avoidable.
+//
+// Keep these at module scope (or in `useCallback` with stable deps inside the
+// component); never re-introduce an inline literal on a `<ReactFlow>` prop.
+// ---------------------------------------------------------------------------
+const RF_DEFAULT_EDGE_OPTIONS = {
+  style: { stroke: '#4cc9f0', strokeWidth: 2 },
+  interactionWidth: 15,
+} as const;
+const RF_SNAP_GRID: [number, number] = [20, 20];
+/** RMB pans (LMB is box-select via `selectionOnDrag`). */
+const RF_PAN_ON_DRAG = [2];
+const RF_DELETE_KEY_CODES = ['Delete', 'Backspace'];
+const RF_PRO_OPTIONS = { hideAttribution: true } as const;
+
+// ---------------------------------------------------------------------------
 // MiniMap node colors — a FAINTER version of each node's real canvas color, so
 // the overview reads as a map of the graph (where the maths is, where the flow
 // control is, where the event roots are) instead of a flat grey mask.
@@ -6280,6 +6307,29 @@ export function GraphEditorInner() {
         be => be.target === exposedPort.internalNodeId && be.targetHandle === bridgeHandle,
       );
       return bridgingEdges.map((be, j) => ({
+  // CANVAS PERF — the remaining `<ReactFlow>` callback props, each a stable
+  // `useCallback` (see the RF_* constants block at module scope for why an
+  // inline arrow here is not free: `onMove` is a store-tracked field and
+  // `onEdgeDoubleClick` is a memo prop of the EdgeRenderer, so either one
+  // re-rendered every edge on every GraphEditorInner render).
+  const onRfInit = useCallback((instance: ReactFlowInstance) => { rfInstance.current = instance; }, []);
+  const onRfMouseMove = useCallback((e: React.MouseEvent) => {
+    const rf = rfInstance.current;
+    if (!rf) return;
+    lastClientMousePos.current = { x: e.clientX, y: e.clientY };
+    lastFlowMousePos.current = rf.screenToFlowPosition({ x: e.clientX, y: e.clientY });
+  }, []);
+  const onRfMove = useCallback((_e: unknown, viewport: { x: number; y: number; zoom: number }) => {
+    // Key the saved viewport by the scope the user is CURRENTLY in,
+    // so root vs each macro keep independent pan/zoom.
+    const scopeId = currentScope[currentScope.length - 1] ?? 'root';
+    setSavedGraphViewport(scopeId, viewport);
+  }, [currentScope]);
+  const onEdgeDoubleClick = useCallback((_event: React.MouseEvent, edge: Edge) => {
+    setEdges(eds => eds.filter(e => e.id !== edge.id));
+    scheduleSync();
+  }, [setEdges, scheduleSync]);
+
         ...e,
         id: j === 0 ? `restored_${e.id}` : `restored_${e.id}_${j}`,
         source: be.source,
@@ -6820,19 +6870,9 @@ export function GraphEditorInner() {
         onConnectStart={onConnectStart}
         onConnectEnd={onConnectEnd}
         isValidConnection={isValidConnection as IsValidConnection}
-        onInit={instance => { rfInstance.current = instance; }}
-        onMouseMove={(e: React.MouseEvent) => {
-          const rf = rfInstance.current;
-          if (!rf) return;
-          lastClientMousePos.current = { x: e.clientX, y: e.clientY };
-          lastFlowMousePos.current = rf.screenToFlowPosition({ x: e.clientX, y: e.clientY });
-        }}
-        onMove={(_e, viewport) => {
-          // Key the saved viewport by the scope the user is CURRENTLY in,
-          // so root vs each macro keep independent pan/zoom.
-          const scopeId = currentScope[currentScope.length - 1] ?? 'root';
-          setSavedGraphViewport(scopeId, viewport);
-        }}
+        onInit={onRfInit}
+        onMouseMove={onRfMouseMove}
+        onMove={onRfMove}
         onPaneContextMenu={onPaneContextMenu}
         onNodeContextMenu={onNodeContextMenu}
         onNodeDragStart={onNodeDragStart}
@@ -6854,7 +6894,7 @@ export function GraphEditorInner() {
         // `onNodeMouseEnter` as it crosses a node.
         onSelectionStart={onSelectionStartCombined}
         onSelectionEnd={onSelectionEndCombined}
-        onEdgeDoubleClick={(_event, edge) => { setEdges(eds => eds.filter(e => e.id !== edge.id)); scheduleSync(); }}
+        onEdgeDoubleClick={onEdgeDoubleClick}
         nodeTypes={nodeTypes}
         // Restore the user's last pan/zoom across ModelerView unmounts (tab
         // switches). Look up by the scope the editor is mounting into — root
@@ -6866,18 +6906,15 @@ export function GraphEditorInner() {
           const saved = getSavedGraphViewport(scopeId);
           return saved ? { defaultViewport: saved } : { fitView: true };
         })())}
-        deleteKeyCode={['Delete', 'Backspace']}
+        deleteKeyCode={RF_DELETE_KEY_CODES}
         snapToGrid={snapEnabled}
-        snapGrid={[20, 20]}
-        panOnDrag={[2]}
+        snapGrid={RF_SNAP_GRID}
+        panOnDrag={RF_PAN_ON_DRAG}
         selectionOnDrag
         selectionMode={'partial' as SelectionMode}
         multiSelectionKeyCode="Control"
-        defaultEdgeOptions={{
-          style: { stroke: '#4cc9f0', strokeWidth: 2 },
-          interactionWidth: 15,
-        }}
-        proOptions={{ hideAttribution: true }}
+        defaultEdgeOptions={RF_DEFAULT_EDGE_OPTIONS}
+        proOptions={RF_PRO_OPTIONS}
       >
         {showGrid && <Background color={gridColor} gap={20} variant={BackgroundVariant.Lines} />}
         <AlignmentGuidesOverlay guides={alignGuides} />

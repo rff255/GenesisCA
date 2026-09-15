@@ -253,7 +253,7 @@ is an area whose doc may now need a line. See *Documentation consistency* above.
 
 ## Verification gates
 
-This project's regression net is its 70 Node harnesses in `scripts/` — they run the SHIPPED modules, assert
+This project's regression net is its 71 Node harnesses in `scripts/` — they run the SHIPPED modules, assert
 **values** (not "it compiled"), and are **negative-controlled** (a deliberate source mutation must make them
 fail). Full index + house style: `docs/areas/testing-harnesses.md`.
 

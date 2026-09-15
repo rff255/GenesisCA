@@ -494,6 +494,13 @@ function VisionColorRow({ value, onChange }: { value?: string; onChange: (v: str
 }
 
 function CaNodeComponent({ id, data, selected }: NodeProps) {
+  // DEV hook: `window.__caNodeRenders` counts CaNode render passes so a canvas
+  // perf probe can prove a gesture did NOT re-render every node (the `memo`
+  // comparator below is the guarantee; this is how it is verified).
+  if (import.meta.env.DEV) {
+    const w = window as unknown as { __caNodeRenders?: number };
+    w.__caNodeRenders = (w.__caNodeRenders ?? 0) + 1;
+  }
   const nodeData = data as CaNodeData;
   const def = getNodeDef(nodeData.nodeType);
   const { model, updateMacro, importMacro } = useModel();
